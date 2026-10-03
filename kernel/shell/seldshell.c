@@ -27,6 +27,7 @@
 #include "elf.h"
 #include "net.h"
 #include "e1000.h"
+#include "panic.h"
 
 #define MAX_CMD_LEN 128
 #define MAX_ARGS 16
@@ -87,6 +88,9 @@ static void cmd_help(int argc, char* argv[]) {
     print_out("  ifconfig      Display network interface status and stats (Intel e1000)\n");
     print_out("  ping <ip>     Send ICMP ECHO_REQUEST packets to network host\n");
     print_out("  arp           Display kernel Address Resolution Protocol (ARP) cache\n");
+    print_out("  gpu drv off   Brutally disable GPU display driver (triggers kernel panic)\n");
+    print_out("  cpu drv off   Brutally disable CPU scheduler driver (triggers kernel panic)\n");
+    print_out("  ram drv off   Brutally disable RAM memory driver (triggers kernel panic)\n");
     print_out("  reboot        Perform hard system reset via 8042 keyboard controller\n");
 }
 
@@ -884,6 +888,40 @@ static void cmd_selftest(int argc, char* argv[]) {
     selftest_run_all();
 }
 
+static void cmd_drv_off(int argc, char* argv[]) {
+    const char* target = NULL;
+    if (argc >= 3 && strcmp(argv[1], "drv") == 0 && strcmp(argv[2], "off") == 0) {
+        target = argv[0];
+    } else if (argc >= 3 && strcmp(argv[0], "drv") == 0 && strcmp(argv[1], "off") == 0) {
+        target = argv[2];
+    } else if (argc >= 3 && strcmp(argv[0], "drv") == 0 && strcmp(argv[2], "off") == 0) {
+        target = argv[1];
+    } else {
+        print_out("Usage: <gpu|cpu|ram> drv off\n");
+        print_out("       drv off <gpu|cpu|ram>\n");
+        print_out("       Brutally shuts down hardware driver (causes kernel panic).\n");
+        return;
+    }
+
+    if (strcmp(target, "gpu") == 0) {
+        print_out("[!] Brutally disabling GPU display driver...\n");
+        vga_driver_disable();
+        print_out("[!] GPU driver terminated.\n");
+    } else if (strcmp(target, "cpu") == 0) {
+        print_out("[!] Brutally disabling CPU core scheduler driver...\n");
+        cpu_driver_disable();
+        print_out("[!] CPU driver terminated.\n");
+    } else if (strcmp(target, "ram") == 0) {
+        print_out("[!] Brutally disabling RAM memory manager and heap allocator...\n");
+        ram_driver_disable();
+        print_out("[!] RAM driver terminated.\n");
+    } else {
+        print_out("seldshell: drv: unknown subsystem: ");
+        print_out(target);
+        print_out("\n");
+    }
+}
+
 static const struct shell_command commands[] = {
     {"help",     cmd_help},
     {"clear",    cmd_clear},
@@ -917,6 +955,10 @@ static const struct shell_command commands[] = {
     {"ifconfig", cmd_ifconfig},
     {"ping",     cmd_ping},
     {"arp",      cmd_arp},
+    {"gpu",      cmd_drv_off},
+    {"cpu",      cmd_drv_off},
+    {"ram",      cmd_drv_off},
+    {"drv",      cmd_drv_off},
     {"reboot",   cmd_reboot},
     {NULL,       NULL}
 };
@@ -1013,5 +1055,11 @@ void seldshell_run(void) {
         }
 
         execute_command(cmd_buf);
+        if (cmd_idx > 0) {
+            char* hist_entry = (char*)kmalloc(cmd_idx + 1);
+            if (hist_entry) {
+                memcpy(hist_entry, cmd_buf, cmd_idx + 1);
+            }
+        }
     }
 }

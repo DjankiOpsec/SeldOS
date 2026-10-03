@@ -69,9 +69,9 @@ void ramdisk_init(uint64_t mb_magic, uint64_t mb_info_addr) {
     }
 
     if (s_ramdisk.is_present) {
-        serial_puts("[+] Ramdisk: Multiboot module detected at Phys 0x");
+        serial_puts("[+] Ramdisk: Multiboot module detected at Phys ");
         serial_print_hex(s_ramdisk.phys_start);
-        serial_puts(" - 0x");
+        serial_puts(" - ");
         serial_print_hex(s_ramdisk.phys_end);
         serial_puts(" (Size: ");
         serial_print_dec((uint32_t)(s_ramdisk.size / 1024));

@@ -20,7 +20,7 @@ static void print_banner(void) {
     printf("     _.-'''''-._\n");
     printf("   .'  _     _  '.        SNL (Seld Not Linux) Sovereign Shell v0.1\n");
     printf("  /   (o)   (o)   \\       Ring 3 Sovereign CLI Environment (GPLv3)\n");
-    printf(" |                 |      Humboldt Scale 680x334 | 39-Color Palette\n");
+    printf(" |                 |      Humboldt Framebuffer 680x334 | 39-Color Palette\n");
     printf(" |     <--V-->     |      x86_64 Long Mode Isolated Execution\n");
     printf("  \\               /\n");
     printf("   '.  '-----'  .'\n");
@@ -545,7 +545,7 @@ static void builtin_help(void) {
     printf("Autonomous Interactive Ring 3 Shell (GPLv3)\n\n");
     printf("Builtin Commands:\n");
     printf("  help            Display this help summary\n");
-    printf("  colors          Display 39 Humboldt colors palette (39 C thermal core)\n");
+    printf("  colors          Display 39 Humboldt colors palette\n");
     printf("  pc [on|off]     Toggle PC mode (disable mobile touch HUD & keyboard)\n");
     printf("  mobile          Enable mobile touch HUD and virtual keyboard\n");
     printf("  clear           Clear screen buffer\n");
@@ -570,15 +570,19 @@ static void builtin_help(void) {
     printf("  fm              Seld Sovereign Graphical File Manager (SNL-FM)\n");
     printf("  download <url>  Fetch binary/package over network into SeldFS\n");
     printf("  tor             Tor Browser (download via 'download tor')\n");
-    printf("  init            First userspace program (init system)\n");
+    printf("  init            First userspace program (init system)\n\n");
+    printf("Hardware Driver Control (Simulate Kernel Panic):\n");
+    printf("  gpu drv off     Brutally disable GPU display driver (triggers kernel panic)\n");
+    printf("  cpu drv off     Brutally disable CPU scheduler driver (triggers kernel panic)\n");
+    printf("  ram drv off     Brutally disable RAM memory driver (triggers kernel panic)\n");
 }
 
 static void builtin_colors(void) {
     printf("=======================================================================\n");
-    printf(" SeldOS Humboldt 39-Color Palette (Core Temperature: 39.0 C)\n");
-    printf(" Display Resolution: 680x334 (Scale: 680mm Adult x Algarrobo 33.4 S)\n");
+    printf(" SeldOS Humboldt 39-Color Palette\n");
+    printf(" Display Resolution: 680x334 (85x20 text raster + 14px guard band)\n");
     printf("=======================================================================\n");
-    printf(" 0..15: Standard VGA | 16..26: Penguin 39 C | 27..38: Pacific Ecosystem\n\n\n");
+    printf(" 0..15: Standard VGA | 16..26: Monochromatic UI | 27..38: Extended Accents\n\n\n");
 
     if (!s_fb_checked) {
         seld_get_framebuffer(&s_fb);
@@ -807,7 +811,11 @@ static void builtin_ping(int argc, char* argv[]) {
 
     char ip_str[16];
     format_ip_u(target_ip, ip_str, sizeof(ip_str));
-    printf("PING %s (%s) 56(84) bytes of data.\n", argv[1], ip_str);
+    if (strcmp(argv[1], ip_str) == 0) {
+        printf("PING %s 56(84) bytes of data.\n", ip_str);
+    } else {
+        printf("PING %s (%s) 56(84) bytes of data.\n", argv[1], ip_str);
+    }
 
     int received = 0;
     int transmitted = 4;
@@ -976,6 +984,46 @@ static void builtin_selftest(void) {
     printf("[Ring 3] ========================================================\n\n");
 }
 
+static void builtin_drv_off(int argc, char* argv[]) {
+    const char* target = NULL;
+
+    // Syntax 1: "gpu drv off", "cpu drv off", "ram drv off"
+    if (argc >= 3 && strcmp(argv[1], "drv") == 0 && strcmp(argv[2], "off") == 0) {
+        target = argv[0];
+    }
+    // Syntax 2: "drv off gpu", "drv off cpu", "drv off ram"
+    else if (argc >= 3 && strcmp(argv[0], "drv") == 0 && strcmp(argv[1], "off") == 0) {
+        target = argv[2];
+    }
+    // Syntax 3: "drv gpu off", "drv cpu off", "drv ram off"
+    else if (argc >= 3 && strcmp(argv[0], "drv") == 0 && strcmp(argv[2], "off") == 0) {
+        target = argv[1];
+    }
+    else {
+        printf("Usage: <gpu|cpu|ram> drv off\n");
+        printf("       drv off <gpu|cpu|ram>\n");
+        printf("       Brutally shuts down hardware driver, triggering Kernel Panic\n");
+        printf("       when the subsystem is next needed.\n");
+        return;
+    }
+
+    if (strcmp(target, "gpu") == 0) {
+        printf("[!] Brutally disabling GPU display driver...\n");
+        seld_drv_off("gpu");
+        printf("[!] GPU driver terminated.\n");
+    } else if (strcmp(target, "cpu") == 0) {
+        printf("[!] Brutally disabling CPU core scheduler driver...\n");
+        seld_drv_off("cpu");
+        printf("[!] CPU driver terminated.\n");
+    } else if (strcmp(target, "ram") == 0) {
+        printf("[!] Brutally disabling RAM memory manager and heap allocator...\n");
+        seld_drv_off("ram");
+        printf("[!] RAM driver terminated.\n");
+    } else {
+        printf("snl: drv: unknown subsystem '%s'. Available: gpu, cpu, ram\n", target);
+    }
+}
+
 int main(int argc, char* argv[]) {
     (void)argc;
     (void)argv;
@@ -1051,6 +1099,8 @@ int main(int argc, char* argv[]) {
             builtin_dns(cmd_argc, cmd_argv);
         } else if (strcmp(cmd, "selftest") == 0) {
             builtin_selftest();
+        } else if (strcmp(cmd, "gpu") == 0 || strcmp(cmd, "cpu") == 0 || strcmp(cmd, "ram") == 0 || strcmp(cmd, "drv") == 0) {
+            builtin_drv_off(cmd_argc, cmd_argv);
         } else {
             // External command execution from SeldFS (/bin/<cmd>)
             int res = spawnv(cmd, cmd_argv);
@@ -1061,6 +1111,13 @@ int main(int argc, char* argv[]) {
                 } else {
                     printf("snl: %s: command not found\n", cmd);
                 }
+            }
+        }
+
+        if (len > 0) {
+            char* hist_entry = (char*)malloc(len + 1);
+            if (hist_entry) {
+                strcpy(hist_entry, line_buf);
             }
         }
     }

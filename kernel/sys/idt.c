@@ -6,6 +6,7 @@
 #include "mouse.h"
 #include "pit.h"
 #include "sched.h"
+#include "panic.h"
 
 static struct idt_entry idt[256];
 static struct idt_ptr idtp;
@@ -138,54 +139,7 @@ extern void syscall_dispatch(struct interrupt_frame* frame);
 
 void isr_handler(struct interrupt_frame* frame) {
     if (frame->int_no < 32) {
-        vga_set_color(VGA_LIGHT_RED, VGA_BLACK);
-        vga_puts("\n[SELD EXCEPTION] Vector: ");
-        vga_print_dec(frame->int_no);
-        vga_puts(" Err: ");
-        vga_print_hex(frame->err_code);
-        vga_puts(" RIP: ");
-        vga_print_hex(frame->rip);
-        vga_puts(" RSP: ");
-        vga_print_hex(frame->rsp);
-        vga_puts("\n  RDI: ");
-        vga_print_hex(frame->rdi);
-        vga_puts(" RSI: ");
-        vga_print_hex(frame->rsi);
-        vga_puts(" RDX: ");
-        vga_print_hex(frame->rdx);
-        vga_puts(" RAX: ");
-        vga_print_hex(frame->rax);
-        vga_puts("\n  CS: ");
-        vga_print_hex(frame->cs);
-        vga_puts(" SS: ");
-        vga_print_hex(frame->ss);
-        vga_puts(" SeldOS halts!\n");
-
-        serial_puts("\n[SELD EXCEPTION] Vector: ");
-        serial_print_dec(frame->int_no);
-        serial_puts(" Err: ");
-        serial_print_hex(frame->err_code);
-        serial_puts(" RIP: ");
-        serial_print_hex(frame->rip);
-        serial_puts(" RSP: ");
-        serial_print_hex(frame->rsp);
-        serial_puts("\n  RDI: ");
-        serial_print_hex(frame->rdi);
-        serial_puts(" RSI: ");
-        serial_print_hex(frame->rsi);
-        serial_puts(" RDX: ");
-        serial_print_hex(frame->rdx);
-        serial_puts(" RAX: ");
-        serial_print_hex(frame->rax);
-        serial_puts(" CS: ");
-        serial_print_hex(frame->cs);
-        serial_puts(" SS: ");
-        serial_print_hex(frame->ss);
-        serial_puts("\n");
-
-        while (1) {
-            __asm__ volatile ("hlt");
-        }
+        kernel_panic_exception((uint8_t)frame->int_no, frame->err_code, frame);
     } else if (frame->int_no == 32) {
         // Timer IRQ0
         pit_handle_interrupt();

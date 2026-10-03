@@ -100,7 +100,7 @@ def start_test_repo(port=8080):
         "<ul>"
         "<li>Streaming TCP Socket: CONNECT -> SEND -> RECV -> CLOSE</li>"
         "<li>Zero JavaScript Engine: Immune to RCE & DOM tracking</li>"
-        "<li>Remote DNS Resolution: 0 DNS Leaks</li>"
+        "<li>Remote DNS Resolution: SOCKS5 ATYP=0x03 Framing</li>"
         "</ul>"
         "<hr>"
         "<p><a href=\"home\">[ Return to Tor Sovereign Portal ]</a></p>"

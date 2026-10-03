@@ -27,34 +27,34 @@ enum vga_color {
     VGA_LIGHT_BROWN = 14,
     VGA_WHITE = 15,
 
-    // 16..26: Humboldt Penguin Anatomy & Thermal Biology (39°C Metabolic Core)
-    COLOR_PENGUIN_TUXEDO = 16, // Deep dorsal black plumage
-    COLOR_SLATE_BACK     = 17, // Wet back feather slate
-    COLOR_CHEST_WHITE    = 18, // Pure chest plumage
-    COLOR_CREAM_BELLY    = 19, // Warm belly down
-    COLOR_FLESH_PINK     = 20, // Bare skin around bill and eyes
-    COLOR_BEAK_CORAL     = 21, // Rose-coral beak margin
-    COLOR_BILL_OBSIDIAN  = 22, // Heavy hooked beak black
-    COLOR_FEATHER_SILVER = 23, // Juvenile silver chest band
-    COLOR_WEBBED_FOOT    = 24, // Scaly webbed foot charcoal
-    COLOR_PENGUIN_IRIS   = 25, // Distinctive reddish-brown iris
-    COLOR_THERMAL_CORE   = 26, // 39.0°C Core body metabolic crimson
+    // 16..26: Monochromatic & High-Contrast Ergonomic UI Tokens
+    COLOR_PENGUIN_TUXEDO = 16, // Charcoal Dark (Terminal / Main BG)
+    COLOR_SLATE_BACK     = 17, // Slate Grey (Panel & Header BG)
+    COLOR_CHEST_WHITE    = 18, // Pure White (High-contrast Primary Text)
+    COLOR_CREAM_BELLY    = 19, // Warm Sand (Secondary Text / Muted Labels)
+    COLOR_FLESH_PINK     = 20, // Rose Pink (Active Links / Highlights)
+    COLOR_BEAK_CORAL     = 21, // Coral Red (Error Indicators)
+    COLOR_BILL_OBSIDIAN  = 22, // Obsidian Dark (Frame Borders / Separators)
+    COLOR_FEATHER_SILVER = 23, // Silver Metallic (Inactive Elements / Shortcuts)
+    COLOR_WEBBED_FOOT    = 24, // Footprint Charcoal (Table Row Inactive)
+    COLOR_PENGUIN_IRIS   = 25, // Amber Crimson (Warning Banner / Diagnostic)
+    COLOR_THERMAL_CORE   = 26, // Core Alert Red (Kernel Panic / Fault Indicator)
 
-    // 27..34: Humboldt Marine Ecosystem & Pacific Ocean Currents
-    COLOR_HUMBOLDT_NAVY  = 27, // Humboldt Trench abyssal navy
-    COLOR_PACIFIC_PELAGIC= 28, // South Pacific ocean blue
-    COLOR_UPWELLING_TEAL = 29, // Nutrient-rich subantarctic upwelling teal
-    COLOR_ANTARCTIC_MIST = 30, // Camanchaca marine fog mist
-    COLOR_KELP_FOREST    = 31, // Macrocystis giant kelp canopy
-    COLOR_SEAWEED_GREEN  = 32, // Intertidal seaweed emerald
-    COLOR_OCEAN_CYAN     = 33, // Shallow cove turquoise water
-    COLOR_FOAM_CREST     = 34, // Wave breaker crest seafoam
+    // 27..34: Extended UI & Oceanic Accent Tokens
+    COLOR_HUMBOLDT_NAVY  = 27, // Abyssal Navy (Header Background)
+    COLOR_PACIFIC_PELAGIC= 28, // Pelagic Blue (Selected Tabs & Frames)
+    COLOR_UPWELLING_TEAL = 29, // Upwelling Teal (TCP Socket / Stream Indicator)
+    COLOR_ANTARCTIC_MIST = 30, // Mist Cyan (Network Diagnostic Text)
+    COLOR_KELP_FOREST    = 31, // Canopy Green (NIC Link Up / Success)
+    COLOR_SEAWEED_GREEN  = 32, // Seaweed Green (SeldFS Mounted Volume)
+    COLOR_OCEAN_CYAN     = 33, // Turquoise Ocean (URL / Search Entry Accent)
+    COLOR_FOAM_CREST     = 34, // Seafoam White (Scrollbar Thumb & Pointer)
 
-    // 35..38: Chilean Breeding Colonies & Reserve Coordinates
-    COLOR_ATACAMA_OCHRE  = 35, // Coastal Atacama desert bluffs
-    COLOR_CHANARAL_CLIFF = 36, // Chañaral Island sea cliffs (29°01' S)
-    COLOR_DAMAS_SHORE    = 37, // Isla Damas nesting sand beach (29°14' S)
-    COLOR_ALGARROBO_ROCK = 38, // Algarrobo Colony southern nesting border (33.4° S / 334)
+    // 35..38: Coastal Earth & Structural Boundary Tokens
+    COLOR_ATACAMA_OCHRE  = 35, // Ochre Gold (Heap / Numerical Metrics)
+    COLOR_CHANARAL_CLIFF = 36, // Earth Brown (Binary & Package Inodes)
+    COLOR_DAMAS_SHORE    = 37, // Sand Khaki (Text File & Document Inodes)
+    COLOR_ALGARROBO_ROCK = 38, // Granite Slate (Bottom Status Guard & Baseline)
 };
 
 struct fb_info {
@@ -81,5 +81,14 @@ void vga_print_hex(uint64_t val);
 void vga_print_dec(uint64_t val);
 void vga_set_console_rows(size_t rows);
 size_t vga_get_console_rows(void);
+void vga_set_scroll_window(size_t top_row, size_t bottom_row);
+void vga_draw_pixel(size_t x, size_t y, uint32_t color);
+void vga_draw_bitmap(size_t x, size_t y, size_t w, size_t h, const uint8_t* indices, size_t stride);
+void vga_draw_string_at(size_t col, size_t row, const char* str, uint8_t color);
+void vga_fill_rect(size_t x, size_t y, size_t w, size_t h, uint32_t color);
+int vga_driver_disable(void);
+int vga_is_gpu_enabled(void);
+uint32_t* vga_get_fb_ptr(void);
+void vga_emergency_text_write(int col, int row, const char* text, uint8_t color_attr);
 
 #endif

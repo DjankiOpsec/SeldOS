@@ -227,6 +227,10 @@ def main():
     ).encode("utf-8")
     files_to_write.append(("opsec.txt", sample_opsec))
 
+    if os.path.exists("seldos_logo.svgz"):
+        with open("seldos_logo.svgz", "rb") as f:
+            files_to_write.append(("seldos_logo.svgz", f.read()))
+
     create_seldfs_image(output_disk, files_to_write)
 
 if __name__ == "__main__":

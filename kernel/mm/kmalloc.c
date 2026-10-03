@@ -12,6 +12,7 @@
 #include "vmm.h"
 #include "string.h"
 #include "serial.h"
+#include "panic.h"
 
 #define HEAP_INITIAL_PAGES 256  // 1 MiB initial heap
 
@@ -84,6 +85,12 @@ static void merge_blocks(struct block_header* block) {
 }
 
 void* kmalloc(size_t size) {
+    if (!ram_is_driver_enabled()) {
+        if (!kernel_panic_in_progress()) {
+            kernel_panic("kernel heap allocation failed: physical memory manager exhausted (out of memory)");
+        }
+        return NULL;
+    }
     if (size == 0) return NULL;
 
     // Align size to 16 bytes

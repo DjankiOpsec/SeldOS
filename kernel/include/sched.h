@@ -41,5 +41,7 @@ void sched_sleep(uint64_t ms);
 void sched_exit(void);
 struct task* sched_get_current(void);
 int sched_get_tasks(struct task out_tasks[MAX_TASKS]);
+int cpu_driver_disable(void);
+int cpu_is_driver_enabled(void);
 
 #endif /* SELD_SCHED_H */

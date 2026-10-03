@@ -95,7 +95,7 @@ def start_http_repo(port=8080):
             fdst.write(fsrc.read())
 
     with open(os.path.join(REPO_DIR, "sample.txt"), "w") as f:
-        f.write("SeldOS Live Network HTTP Connection Verified (0 Leaks)\n")
+        f.write("SeldOS Live Network HTTP Connection Verified\n")
 
     class CustomHandler(SimpleHTTPRequestHandler):
         def __init__(self, *args, **kwargs):

@@ -46,7 +46,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    printf("[*] SNL Sovereign Downloader v0.1 (OpSec Hardened Network Client)\n");
+    printf("[*] SNL Downloader v0.1 (Hardened Network Client)\n");
     printf("[*] Fetch Target   : %s\n", target);
     printf("[*] SeldFS Target  : %s\n", dest);
     printf("[*] Connecting via Intel e1000 Gigabit controller...\n");
@@ -69,7 +69,7 @@ int main(int argc, char* argv[]) {
         printf("\n");
         printf("[+] SeldFS: %s successfully installed and integrity verified.\n", dest);
         if (strcmp(dest, "/bin/tor") == 0) {
-            printf("[*] Type 'tor' to launch Tor Browser (OpSec Sovereign Edition).\n");
+            printf("[*] Type 'tor' to launch Tor Browser.\n");
         }
     } else {
         printf("[-] Warning: Failed to query file status after download.\n");

@@ -888,7 +888,7 @@ int net_ping(uint32_t target_ip, uint16_t seq, uint32_t* rtt_ms) {
     s_ping_state.reply_id = 0;
     s_ping_state.reply_seq = 0;
 
-    const char* ping_payload = "SeldOS Humboldt OpSec Ping";
+    const char* ping_payload = "SeldOS Humboldt Echo Request";
     size_t payload_len = strlen(ping_payload);
 
     uint8_t icmp_buf[sizeof(struct icmp_header) + 64];

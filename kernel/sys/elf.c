@@ -194,9 +194,9 @@ int elf_load_binary(const void* elf_data, size_t data_len, uint64_t** out_pml4_v
     *out_entry     = ehdr->e_entry;
     *out_pml4_phys = user_pml4_phys;
 
-    serial_puts("[+] ELF: Process loaded successfully. Entry: 0x");
+    serial_puts("[+] ELF: Process loaded successfully. Entry: ");
     serial_print_hex(ehdr->e_entry);
-    serial_puts(", PML4: 0x");
+    serial_puts(", PML4: ");
     serial_print_hex(user_pml4_phys);
     serial_puts("\n");
 

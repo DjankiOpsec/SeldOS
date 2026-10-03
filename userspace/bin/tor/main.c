@@ -84,7 +84,7 @@ static const char* s_home_html =
     "<head><title>Tor Sovereign Onion Portal</title></head>"
     "<body>"
     "<h1>Tor Sovereign Web Browser</h1>"
-    "<p><b>OpSec Verification:</b> TLS 1.3 / System CA, 0 DNS leaks, RAM Sandbox.</p>"
+    "<p><b>Security Architecture:</b> RFC 1928 SOCKS5 Remote Resolution, Ephemeral RAM Sandbox, No JS Engine.</p>"
     "<hr>"
     "<h2>Real Internet & Sovereign HTTPS Gateways</h2>"
     "<p>Click any link below or click the address bar above to browse any URL:</p>"
@@ -383,7 +383,7 @@ static void load_url(const char* url) {
     // Check if target is DuckDuckGo Search Engine Results Page
     if (is_ddg_url(target_url, s_ddg_query, sizeof(s_ddg_query))) {
         s_is_ddg = 1;
-        s_used_tor = 1; // Tor Onion Circuit (0 DNS leaks)
+        s_used_tor = 1; // Tor Onion Circuit (Remote DNS resolution)
         strncpy(s_current_url, target_url, sizeof(s_current_url) - 1);
         strncpy(s_edit_url, target_url, sizeof(s_edit_url) - 1);
         s_scroll_y = 0;
@@ -478,7 +478,7 @@ static void load_url(const char* url) {
                  "<hr>"
                  "<h3>OpSec Network Diagnostics:</h3>"
                  "<p>* Clearnet: Native UDP DNS (10.0.2.3:53) + Direct TCP socket.</p>"
-                 "<p>* Onion: SOCKS5 (10.0.2.2:9050) with 0 DNS leaks.</p>"
+                 "<p>* Onion: SOCKS5 (10.0.2.2:9050) with remote ATYP=0x03 DNS resolution.</p>"
                  "<p>* Hardware: Intel PRO/1000 MT (82540EM) or AMD PCnet-FAST III (Am79C973).</p>"
                  "<p>* Verify interface status with 'ifconfig' and 'ping 10.0.2.2'.</p>"
                  "<hr>"
@@ -573,12 +573,12 @@ static void render_page(void) {
 
     if (s_is_ddg) {
         draw_text_5x7(10, 60, "CIRCUIT:", COL_GOLD_ACCENT);
-        draw_text_5x7(60, 60, "[Me] -> [Guard: CH] -> [Middle: IS] -> [Exit: SE] -> [duckduckgo.onion]", COL_TEXT_WHITE);
-        draw_text_5x7(470, 60, "TOR SOCKS5 (AES-256-GCM / 0 LEAKS)", COL_GREEN_SECURE);
+        draw_text_5x7(60, 60, "[SeldOS] -> [SOCKS5: 10.0.2.2:9050] -> [Tor Network] -> [duckduckgo.onion]", COL_TEXT_WHITE);
+        draw_text_5x7(470, 60, "TOR SOCKS5 (REMOTE RESOLUTION)", COL_GREEN_SECURE);
     } else if (s_used_tor == 1) {
         draw_text_5x7(10, 60, "CIRCUIT:", COL_GOLD_ACCENT);
-        draw_text_5x7(60, 60, "[Me] -> [Guard: CH] -> [Middle: IS] -> [Exit: SE] -> [Onion / Web]", COL_TEXT_WHITE);
-        draw_text_5x7(470, 60, "TOR SOCKS5 (AES-256-GCM / 0 LEAKS)", COL_GREEN_SECURE);
+        draw_text_5x7(60, 60, "[SeldOS] -> [SOCKS5: 10.0.2.2:9050] -> [Tor Network] -> [Target Host]", COL_TEXT_WHITE);
+        draw_text_5x7(470, 60, "TOR SOCKS5 (REMOTE RESOLUTION)", COL_GREEN_SECURE);
     } else if (s_used_tor == 2) {
         draw_text_5x7(10, 60, "GATEWAY:", COL_GOLD_ACCENT);
         draw_text_5x7(60, 60, "[Me] -> [OpSec Gateway: 10.0.2.2:8080] -> [TLS 1.3 / Modern HTTPS]", COL_TEXT_WHITE);

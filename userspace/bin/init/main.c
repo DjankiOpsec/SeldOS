@@ -16,7 +16,7 @@ static void print_banner(void) {
     printf("\n");
     printf("=======================================================================\n");
     printf(" [init]   SNL (Seld Not Linux) Sovereign Init System (PID 1, Ring 3)\n");
-    printf(" [init]   Humboldt Kernel Project - OpSec Security Model (GNU GPLv3)\n");
+    printf(" [init]   Humboldt Kernel Project - x86_64 Hardened Architecture (GNU GPLv3)\n");
     printf("=======================================================================\n");
 }
 

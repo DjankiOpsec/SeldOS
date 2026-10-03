@@ -30,5 +30,7 @@ void pmm_free_frame(void* ptr);
 void pmm_free_frames(void* ptr, size_t count);
 int pmm_is_frame_allocated(void* ptr);
 struct pmm_stats pmm_get_stats(void);
+int ram_driver_disable(void);
+int ram_is_driver_enabled(void);
 
 #endif /* SELD_PMM_H */

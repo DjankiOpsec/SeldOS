@@ -2,7 +2,7 @@
  * SeldOS - Humboldt Kernel Project
  * Tor Browser (OpSec Sovereign Edition)
  * SOCKS5 Onion Protocol Client (RFC 1928 + Tor Extensions)
- * Zero DNS Leaks via ATYP=0x03 Domain Name Framing
+ * RFC 1928 ATYP=0x03 Domain Name Framing
  * GPLv3 Licensed.
  */
 

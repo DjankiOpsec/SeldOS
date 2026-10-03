@@ -62,9 +62,8 @@ void syscall_dispatch(struct interrupt_frame* frame) {
             break;
         }
         case SYS_SELD: {
-            vga_puts("\n[SELD-SYS] Humboldt Penguin approves this syscall! (seld_level=11)\n");
-            serial_puts("[SELD-SYS] Humboldt Penguin approves this syscall! (seld_level=11)\n");
-            frame->rax = 0x5E1D; // "SELD" hex-ish code
+            serial_puts("[SELD-SYS] Kernel ABI handshake verification (SYS_SELD)\n");
+            frame->rax = 0x5E1D; // "SELD" identification code
             break;
         }
         case SYS_EXIT: {

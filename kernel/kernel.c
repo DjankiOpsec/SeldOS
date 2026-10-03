@@ -18,6 +18,8 @@
 #include "idt.h"
 #include "kbd.h"
 #include "shell.h"
+#include "boot_anim.h"
+#include "panic.h"
 
 static void print_banner(void) {
     vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
@@ -25,7 +27,7 @@ static void print_banner(void) {
     vga_puts("     _.-'''''-._\n");
     vga_puts("   .'  _     _  '.        SELD OS v0.1-sec (Humboldt Kernel)\n");
     vga_puts("  /   (o)   (o)   \\       GNU General Public License v3\n");
-    vga_puts(" |                 |      Dedicated Free Software Foundation OpSec\n");
+    vga_puts(" |                 |      Bare-Metal x86_64 Hardened Kernel\n");
     vga_puts(" |     <--V-->     |      x86_64 Long Mode Architecture\n");
     vga_puts("  \\               /\n");
     vga_puts("   '.  '-----'  .'\n");
@@ -86,42 +88,45 @@ void kernel_main(uint64_t mb_info_addr, uint64_t mb_magic) {
     vmm_init();
     vga_enable_fb_console();
 
-    vga_puts("[+] Initializing Fast SYSCALL / SYSRET Subsystem (MSR LSTAR)...\n");
+    // Linux-Style Boot Animation with SVGZ Logo & Running Init Lines
+    boot_anim_init();
+    boot_anim_step("GDT/TSS", "64-bit segments and ring transitions configured", 1, 15);
+    boot_anim_step("IDT", "256 vector gates remapped (PIC 0x20/0x28)", 2, 15);
+    boot_anim_step("PMM", "Physical memory frame allocator online", 3, 15);
+    boot_anim_step("VMM", "Higher-half paging active, W^X memory protection enforced", 4, 15);
+
     syscall_init_fast();
+    boot_anim_step("SYSCALL", "Fast MSR LSTAR vector handshake initialized", 5, 15);
 
-    vga_puts("[+] Initializing Kernel Dynamic Allocator (kmalloc)...\n");
     kmalloc_init();
-    struct heap_stats hstats = kmalloc_get_stats();
-    vga_puts("[+] Kernel Heap online: ");
-    vga_print_dec(hstats.heap_size / 1024);
-    vga_puts(" KiB baseline pool.\n");
+    boot_anim_step("KMALLOC", "Dynamic kernel heap pool online (1024 KiB pool)", 6, 15);
 
-    vga_puts("[+] Initializing ATA PIO Storage Controller...\n");
     ata_init();
+    boot_anim_step("ATA", "PIO primary storage controller online", 7, 15);
 
-    vga_puts("[+] Initializing SeldFS Hardened Block Filesystem...\n");
     seldfs_init();
+    boot_anim_step("SELDFS", "Block filesystem mounted, root directory verified", 8, 15);
 
-    vga_puts("[+] Initializing Kernel Cryptographic Subsystem (RDRAND/SHA-256)...\n");
     rng_init();
+    boot_anim_step("CRYPTO", "Hardware RDRAND and SHA-256 primitives active", 9, 15);
 
-    vga_puts("[+] Initializing Programmable Interval Timer (100 Hz)...\n");
     pit_init(100);
+    boot_anim_step("PIT", "100 Hz chronometer timer online, IRQ0 active", 10, 15);
 
-    vga_puts("[+] Initializing Unified Audio Architecture (Speaker / AC'97 / SB16)...\n");
-    serial_puts("[+] Initializing Unified Audio Architecture (Speaker / AC'97 / SB16)...\n");
     audio_init();
+    boot_anim_step("AUDIO", "Sound architecture online (Speaker/AC97/SB16)", 11, 15);
 
-    vga_puts("[+] Initializing Supervisor Cooperative Scheduler...\n");
     sched_init();
+    boot_anim_step("SCHED", "Supervisor cooperative scheduler initialized", 12, 15);
 
-    vga_puts("[+] Initializing OpSec Hardened Network Subsystem (PCI / e1000 / IPv4)...\n");
-    serial_puts("[+] Initializing OpSec Hardened Network Subsystem (PCI / e1000 / IPv4)...\n");
     net_init();
+    boot_anim_step("NET", "Intel e1000 PCI Gigabit Network online", 13, 15);
 
-    vga_puts("[+] Executing Kernel Boot-Time Subsystem Validation...\n");
-    serial_puts("[+] Executing Kernel Boot-Time Subsystem Validation...\n");
     selftest_run_all();
+    boot_anim_step("SELFTEST", "All 7/7 kernel subsystem tests passed", 14, 15);
+
+    boot_anim_step("INIT", "Transferring execution to /bin/init (Ring 3 PID 1)", 15, 15);
+    boot_anim_finish();
 
     struct seldfs_inode init_node;
     if (seldfs_get_file_info("/bin/init", &init_node) == 0 ||

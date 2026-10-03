@@ -177,7 +177,7 @@ int http_fetch(const char* url, uint32_t proxy_ip, uint16_t proxy_port, struct h
                 uint32_t gw_ip = proxy_ip ? proxy_ip : (10 | (0 << 8) | (2 << 16) | (2 << 24));
                 sock = seld_tcp_connect(gw_ip, 8080);
                 if (sock >= 0) {
-                    used_tor = 1; // Pure Tor Onion Circuit (0 DNS leaks)
+                    used_tor = 1; // Tor Onion via gateway proxy
                     is_gateway = 1;
                 } else {
                     return -14; // Onion host unreachable / Gateway offline

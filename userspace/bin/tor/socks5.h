@@ -13,7 +13,7 @@
 
 /*
  * Establishes a TCP stream to target_host:target_port through a Tor SOCKS5 proxy.
- * Uses ATYP=0x03 (Domain Name) to enforce 100% remote onion/exit DNS resolution (0 DNS leaks).
+ * Uses ATYP=0x03 (Domain Name) to delegate DNS resolution directly to the upstream proxy.
  * Returns connected socket fd on success, negative error code on failure.
  */
 int socks5_connect(uint32_t proxy_ip, uint16_t proxy_port, const char* target_host, uint16_t target_port);

@@ -4,6 +4,7 @@
 #include "vmm.h"
 #include "string.h"
 #include "font8x16.h"
+#include "panic.h"
 
 #define VGA_WIDTH 80
 #define VGA_HEIGHT 25
@@ -33,6 +34,17 @@ static struct fb_info primary_fb = {0};
 static uint32_t* fb_base = NULL;
 static int fb_console_active = 0;
 static size_t fb_console_rows = FB_ROWS;
+static size_t fb_scroll_top_row = 0;
+static int s_gpu_drv_enabled = 1;
+
+void vga_set_scroll_window(size_t top_row, size_t bottom_row) {
+    if (bottom_row > FB_ROWS) bottom_row = FB_ROWS;
+    if (top_row >= bottom_row) top_row = 0;
+    fb_scroll_top_row = top_row;
+    fb_console_rows = bottom_row;
+    if (vga_row < top_row) vga_row = top_row;
+    if (vga_row >= fb_console_rows) vga_row = fb_console_rows - 1;
+}
 
 void vga_set_console_rows(size_t rows) {
     if (rows == 0 || rows > FB_ROWS) {
@@ -48,54 +60,54 @@ size_t vga_get_console_rows(void) {
     return fb_console_rows;
 }
 
-/* The Humboldt Penguin 39-Color Palette (Core Temperature: 39.0°C) */
+/* The Humboldt Penguin 39-Color Palette (VGA base + UI tokens & spectral accents) */
 static const uint32_t humboldt_palette[HUMBOLDT_PALETTE_SIZE] = {
-    // 0..15: Classic VGA Compatibility
-    0x00000000, // 0: Black (Spheniscus Tuxedo)
-    0x000000AA, // 1: Blue (Pacific Deep)
-    0x0000AA00, // 2: Green (Coastal Algae)
-    0x0000AAAA, // 3: Cyan (Upwelling Current)
-    0x00AA0000, // 4: Red (Colony Boundary)
-    0x00AA00AA, // 5: Magenta (Dusk Plumage)
-    0x00AA5500, // 6: Brown (Desert Rock)
-    0x00AAAAAA, // 7: Light Grey (Fog Marine)
-    0x00555555, // 8: Dark Grey (Molt Charcoal)
-    0x005555FF, // 9: Light Blue (Humboldt Wave)
-    0x0055FF55, // 10: Light Green (Plankton Bloom)
-    0x0055FFFF, // 11: Light Cyan (Glacial Melt)
-    0x00FF5555, // 12: Light Red (Penguin Fleshy Patch)
-    0x00FF55FF, // 13: Light Magenta (Coral Rose)
-    0x00FFFF55, // 14: Yellow (Beak Streak)
-    0x00FFFFFF, // 15: White (Antarctic Snow)
+    // 0..15: Classic IBM VGA ANSI Compatibility
+    0x00000000, // 0: Black
+    0x000000AA, // 1: Blue
+    0x0000AA00, // 2: Green
+    0x0000AAAA, // 3: Cyan
+    0x00AA0000, // 4: Red
+    0x00AA00AA, // 5: Magenta
+    0x00AA5500, // 6: Brown
+    0x00AAAAAA, // 7: Light Grey
+    0x00555555, // 8: Dark Grey
+    0x005555FF, // 9: Light Blue
+    0x0055FF55, // 10: Light Green
+    0x0055FFFF, // 11: Light Cyan
+    0x00FF5555, // 12: Light Red
+    0x00FF55FF, // 13: Light Magenta
+    0x00FFFF55, // 14: Yellow
+    0x00FFFFFF, // 15: White
 
-    // 16..26: Humboldt Penguin Anatomy & Thermal Biology (39°C Core)
-    0x0018181A, // 16: Penguin Tuxedo Black
-    0x002A2D34, // 17: Slate Back Plumage
-    0x00F2F4F8, // 18: Chest White
-    0x00E5D9C5, // 19: Cream Belly
-    0x00FF6B8B, // 20: Fleshy Pink (Beak/Eye Skin)
-    0x00E84A5F, // 21: Beak Coral
-    0x002C3539, // 22: Bill Obsidian
-    0x00848B98, // 23: Feather Silver
-    0x003D3635, // 24: Webbed Foot Charcoal
-    0x009E2A2B, // 25: Reddish-Brown Iris
-    0x00E0533C, // 26: 39.0°C Core Metabolic Crimson
+    // 16..26: Monochromatic & High-Contrast Ergonomic UI Tokens
+    0x0018181A, // 16: Charcoal Dark (Terminal / Main BG)
+    0x002A2D34, // 17: Slate Grey (Panel & Header BG)
+    0x00F2F4F8, // 18: Pure White (High-contrast Primary Text)
+    0x00E5D9C5, // 19: Warm Sand (Secondary Text / Muted Labels)
+    0x00FF6B8B, // 20: Rose Pink (Active Links / Highlights)
+    0x00E84A5F, // 21: Coral Red (Error Indicators)
+    0x002C3539, // 22: Obsidian Dark (Frame Borders / Separators)
+    0x00848B98, // 23: Silver Metallic (Inactive Elements / Shortcuts)
+    0x003D3635, // 24: Footprint Charcoal (Table Row Inactive)
+    0x009E2A2B, // 25: Amber Crimson (Warning Banner / Diagnostic)
+    0x00E0533C, // 26: Core Alert Red (Kernel Panic / Fault Indicator)
 
-    // 27..34: Humboldt Marine Ecosystem & Pacific Ocean Currents
-    0x00001F3F, // 27: Humboldt Deep Navy
-    0x00005B96, // 28: Pacific Pelagic Blue
-    0x00018E9A, // 29: Cold Upwelling Teal
-    0x006497B1, // 30: Antarctic Coastal Mist
-    0x000B6623, // 31: Kelp Canopy Green
-    0x002E8B57, // 32: Intertidal Seaweed
-    0x0040E0D0, // 33: Turquoise Ocean
-    0x00B0E0E6, // 34: Breaker Foam Crest
+    // 27..34: Extended UI & Oceanic Accent Tokens
+    0x00001F3F, // 27: Abyssal Navy (Header Background)
+    0x00005B96, // 28: Pelagic Blue (Selected Tabs & Frames)
+    0x00018E9A, // 29: Upwelling Teal (TCP Socket / Stream Indicator)
+    0x006497B1, // 30: Mist Cyan (Network Diagnostic Text)
+    0x000B6623, // 31: Canopy Green (NIC Link Up / Success)
+    0x002E8B57, // 32: Seaweed Green (SeldFS Mounted Volume)
+    0x0040E0D0, // 33: Turquoise Ocean (URL / Search Entry Accent)
+    0x00B0E0E6, // 34: Seafoam White (Scrollbar Thumb & Pointer)
 
-    // 35..38: Chilean Colony & Reserve Coordinates
-    0x00D27D2D, // 35: Atacama Desert Ochre
-    0x008B4513, // 36: Chañaral Island Cliff (29°01' S)
-    0x00C2B280, // 37: Isla Damas Shore Sand (29°14' S)
-    0x005C6B73  // 38: Algarrobo Colony Nesting Border (33.4° S / 334)
+    // 35..38: Coastal Earth & Structural Boundary Tokens
+    0x00D27D2D, // 35: Ochre Gold (Heap / Numerical Metrics)
+    0x008B4513, // 36: Earth Brown (Binary & Package Inodes)
+    0x00C2B280, // 37: Sand Khaki (Text File & Document Inodes)
+    0x005C6B73  // 38: Granite Slate (Bottom Status Guard & Baseline)
 };
 
 static const uint32_t* vga_to_rgb32 = humboldt_palette;
@@ -159,16 +171,20 @@ static void fb_scroll(void) {
     uint32_t pitch_pixels = primary_fb.pitch / 4;
     if (pitch_pixels == 0) pitch_pixels = primary_fb.width;
 
+    size_t top = fb_scroll_top_row;
     size_t rows = fb_console_rows;
-    if (rows <= 1) return;
+    if (rows <= top + 1) return;
 
-    size_t scanlines_to_copy = (rows - 1) * 16;
+    size_t start_y = top * 16;
+    size_t scanlines_to_copy = (rows - top - 1) * 16;
     size_t scanlines_to_clear = 16;
 
-    memmove(fb_base, fb_base + 16 * pitch_pixels, scanlines_to_copy * pitch_pixels * sizeof(uint32_t));
+    uint32_t* dst = fb_base + start_y * pitch_pixels;
+    uint32_t* src = dst + 16 * pitch_pixels;
+    memmove(dst, src, scanlines_to_copy * pitch_pixels * sizeof(uint32_t));
 
     uint32_t bg = humboldt_palette[s_bg_color % HUMBOLDT_PALETTE_SIZE];
-    uint32_t* last_row_start = fb_base + scanlines_to_copy * pitch_pixels;
+    uint32_t* last_row_start = dst + scanlines_to_copy * pitch_pixels;
     for (size_t i = 0; i < scanlines_to_clear * pitch_pixels; i++) {
         last_row_start[i] = bg;
     }
@@ -204,7 +220,7 @@ void vga_clear(void) {
 
 void vga_enable_fb_console(void) {
     // Check and program Bochs Graphics Adapter (QEMU / Bochs standard display)
-    // to strictly enforce Humboldt Anatomical Scale: 680x334x32
+    // to strictly configure raster layout: 680x334x32 (85x20 text raster + 14px guard)
     outw(VBE_DISPI_IOPORT_INDEX, VBE_DISPI_INDEX_ID);
     uint16_t bga_id = inw(VBE_DISPI_IOPORT_DATA);
     if (bga_id >= 0xB0C0 && bga_id <= 0xB0C6) {
@@ -225,7 +241,7 @@ void vga_enable_fb_console(void) {
         if (primary_fb.phys_addr == 0) {
             primary_fb.phys_addr = 0xFD000000;
         }
-        serial_puts("[+] Bochs/QEMU BGA configured: 680x334x32 (Humboldt Anatomical Scale)\n");
+        serial_puts("[+] Bochs/QEMU BGA configured: 680x334x32 (85x20 text raster + 14px guard)\n");
     }
 
     if (primary_fb.phys_addr != 0 && primary_fb.bpp == 32) {
@@ -256,6 +272,13 @@ static void vga_scroll(void) {
 }
 
 void vga_putchar(char c) {
+    if (!s_gpu_drv_enabled) {
+        if (!kernel_panic_in_progress()) {
+            kernel_panic("glyph render aborted: display controller unmapped");
+        }
+        return;
+    }
+
     if (c == '\n') {
         vga_col = 0;
         if (++vga_row >= (fb_console_active ? fb_console_rows : VGA_HEIGHT)) {
@@ -403,7 +426,7 @@ void vga_init_fb(uint64_t mb_magic, uint64_t mb_info_addr) {
                 primary_fb.height = fb->framebuffer_height;
                 primary_fb.bpp = fb->framebuffer_bpp;
                 primary_fb.type = fb->framebuffer_type;
-                serial_puts("[+] FB Tag found: addr=0x");
+                serial_puts("[+] FB Tag found: addr=");
                 serial_print_hex(primary_fb.phys_addr);
                 serial_puts(" w=");
                 serial_print_dec(primary_fb.width);
@@ -429,6 +452,85 @@ void vga_init_fb(uint64_t mb_magic, uint64_t mb_info_addr) {
             primary_fb.bpp = mb1->framebuffer_bpp;
             primary_fb.type = mb1->framebuffer_type;
         }
+    }
+}
+
+void vga_draw_pixel(size_t x, size_t y, uint32_t color) {
+    if (!s_gpu_drv_enabled || !fb_base) return;
+    if (x >= primary_fb.width || y >= primary_fb.height) return;
+    uint32_t pitch_pixels = primary_fb.pitch / 4;
+    if (pitch_pixels == 0) pitch_pixels = primary_fb.width;
+    fb_base[y * pitch_pixels + x] = color;
+}
+
+void vga_fill_rect(size_t x, size_t y, size_t w, size_t h, uint32_t color) {
+    if (!s_gpu_drv_enabled || !fb_base) return;
+    uint32_t pitch_pixels = primary_fb.pitch / 4;
+    if (pitch_pixels == 0) pitch_pixels = primary_fb.width;
+    size_t max_x = (x + w > primary_fb.width) ? primary_fb.width : (x + w);
+    size_t max_y = (y + h > primary_fb.height) ? primary_fb.height : (y + h);
+    for (size_t py = y; py < max_y; py++) {
+        for (size_t px = x; px < max_x; px++) {
+            fb_base[py * pitch_pixels + px] = color;
+        }
+    }
+}
+
+void vga_draw_bitmap(size_t x, size_t y, size_t w, size_t h, const uint8_t* indices, size_t stride) {
+    if (!s_gpu_drv_enabled || !fb_base || !indices) return;
+    uint32_t pitch_pixels = primary_fb.pitch / 4;
+    if (pitch_pixels == 0) pitch_pixels = primary_fb.width;
+    for (size_t r = 0; r < h; r++) {
+        size_t py = y + r;
+        if (py >= primary_fb.height) break;
+        for (size_t c = 0; c < w; c++) {
+            size_t px = x + c;
+            if (px >= primary_fb.width) break;
+            uint8_t pal_idx = indices[r * stride + c];
+            if (pal_idx != 0xFF) {
+                fb_base[py * pitch_pixels + px] = humboldt_palette[pal_idx % HUMBOLDT_PALETTE_SIZE];
+            }
+        }
+    }
+}
+
+void vga_draw_string_at(size_t col, size_t row, const char* str, uint8_t color) {
+    if (!s_gpu_drv_enabled || !fb_base || !str) return;
+    size_t c = col;
+    while (*str && c < FB_COLS) {
+        fb_draw_char(c++, row, *str++, color);
+    }
+}
+
+int vga_driver_disable(void) {
+    if (!s_gpu_drv_enabled) return -1;
+    s_gpu_drv_enabled = 0;
+    outw(VBE_DISPI_IOPORT_INDEX, VBE_DISPI_INDEX_ENABLE);
+    outw(VBE_DISPI_IOPORT_DATA, VBE_DISPI_DISABLED);
+    fb_base = NULL;
+    primary_fb.phys_addr = 0;
+    fb_console_active = 0;
+    serial_puts("[!] DRIVER: GPU video display controller brutally disabled!\n");
+    return 0;
+}
+
+int vga_is_gpu_enabled(void) {
+    return s_gpu_drv_enabled;
+}
+
+uint32_t* vga_get_fb_ptr(void) {
+    return fb_base;
+}
+
+void vga_emergency_text_write(int col, int row, const char* text, uint8_t color_attr) {
+    if (row < 0 || row >= VGA_HEIGHT) return;
+    volatile uint16_t* vga_mem = VGA_MEMORY;
+    while (*text && col < VGA_WIDTH) {
+        if (col >= 0) {
+            vga_mem[row * VGA_WIDTH + col] = ((uint16_t)color_attr << 8) | (uint8_t)*text;
+        }
+        text++;
+        col++;
     }
 }
 

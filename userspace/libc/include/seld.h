@@ -49,6 +49,7 @@
 #define SYS_NET_TCP_RECV    37
 #define SYS_NET_TCP_CLOSE   38
 #define SYS_NET_DNS_RESOLVE 39
+#define SYS_DRV_OFF         40
 #define SYS_SELD            42
 
 /* File types */
@@ -188,5 +189,6 @@ int      seld_tcp_send(int sock, const void* data, size_t len);
 int      seld_tcp_recv(int sock, void* buf, size_t max_len, uint32_t timeout_ms);
 int      seld_tcp_close(int sock);
 int      seld_dns_resolve(const char* hostname, uint32_t* ip_out);
+int      seld_drv_off(const char* driver_name);
 
 #endif /* _SELD_H_ */

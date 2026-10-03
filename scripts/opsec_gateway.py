@@ -385,7 +385,7 @@ class OpSecGatewayHandler(BaseHTTPRequestHandler):
             self.send_response(200, "OK")
             self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.send_header("Content-Length", str(len(packet)))
-            self.send_header("X-OpSec-Circuit", "TOR SOCKS5 (AES-256-GCM / 0 LEAKS)")
+            self.send_header("X-OpSec-Circuit", "TOR SOCKS5 (REMOTE RESOLUTION)")
             self.send_header("X-Tor-Onion", "1")
             self.send_header("Connection", "close")
             self.end_headers()

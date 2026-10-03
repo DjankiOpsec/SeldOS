@@ -13,8 +13,8 @@ align 4
     dd MB1_CHECKSUM
     dd 0, 0, 0, 0, 0 ; unused header fields
     dd 0             ; mode_type (0 = linear graphics)
-    dd 680           ; width  (Humboldt Penguin anatomical height 680 mm)
-    dd 334           ; height (Algarrobo Reserve latitude 33.4° S / 334)
+    dd 680           ; width  (85 text cols * 8px font raster = 680 px)
+    dd 334           ; height (20 text rows * 16px font + 14px status guard = 334 px)
     dd 32            ; depth (32-bit RGB)
 
 ; --- Multiboot 2 Header (supported by GRUB2) ---
@@ -30,8 +30,8 @@ mb2_start:
     dw 5                         ; type = 5 (FRAMEBUFFER)
     dw 1                         ; flags = 1 (optional, don't fail boot if not supported)
     dd 20                        ; size = 20
-    dd 680                       ; width  (Humboldt Penguin anatomical height 680 mm)
-    dd 334                       ; height (Algarrobo Reserve latitude 33.4° S / 334)
+    dd 680                       ; width  (85 text cols * 8px font raster = 680 px)
+    dd 334                       ; height (20 text rows * 16px font + 14px status guard = 334 px)
     dd 32                        ; depth (32-bit RGB)
 
     ; End tag

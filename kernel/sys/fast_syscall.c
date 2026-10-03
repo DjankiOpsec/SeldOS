@@ -26,6 +26,7 @@
 #include "audio.h"
 #include "net.h"
 #include "e1000.h"
+#include "panic.h"
 
 extern void syscall_entry_asm(void);
 extern int jump_to_userspace_asm(void (*user_func)(void), void* user_stack_top, uint64_t user_cr3, uint64_t argc, void* argv);
@@ -490,6 +491,9 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
             }
 
             if (a1 > user_current_brk) {
+                if (!ram_is_driver_enabled()) {
+                    kernel_panic("sys_brk failed: physical memory manager exhausted (out of memory)");
+                }
                 uint64_t cr3;
                 __asm__ volatile ("mov %%cr3, %0" : "=r"(cr3));
                 uint64_t* user_pml4 = (uint64_t*)phys_to_virt(cr3);
@@ -724,6 +728,9 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
         }
 
         case SYS_FRAMEBUFFER: {
+            if (!vga_is_gpu_enabled()) {
+                kernel_panic("sys_framebuffer failed: video controller unmapped (vga_is_gpu_enabled() == 0)");
+            }
             // a1 = struct seld_fb_info* user_fb
             struct fb_info* kfb = vga_get_fb_info();
             if (!kfb || kfb->phys_addr == 0) {
@@ -979,6 +986,30 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
                 return 0;
             }
             return (uint64_t)res;
+        }
+
+        case 40: /* SYS_DRV_OFF */ {
+            const char* drv = (const char*)a1;
+            if (!drv || !validate_user_buffer(drv, 1, 0)) return (uint64_t)-1;
+            char k_drv[16];
+            size_t di = 0;
+            while (di < sizeof(k_drv) - 1) {
+                if (!validate_user_buffer(drv + di, 1, 0)) return (uint64_t)-1;
+                char ch = drv[di];
+                k_drv[di] = ch;
+                if (ch == '\0') break;
+                di++;
+            }
+            k_drv[sizeof(k_drv) - 1] = '\0';
+
+            if (strcmp(k_drv, "gpu") == 0) {
+                return (uint64_t)vga_driver_disable();
+            } else if (strcmp(k_drv, "cpu") == 0) {
+                return (uint64_t)cpu_driver_disable();
+            } else if (strcmp(k_drv, "ram") == 0) {
+                return (uint64_t)ram_driver_disable();
+            }
+            return (uint64_t)-2;
         }
 
         case SYS_SELD: {

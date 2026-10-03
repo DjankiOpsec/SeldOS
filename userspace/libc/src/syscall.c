@@ -242,3 +242,8 @@ int seld_dns_resolve(const char* hostname, uint32_t* ip_out) {
     if (!hostname || !ip_out) return -1;
     return (int)seld_syscall(SYS_NET_DNS_RESOLVE, (long)hostname, (long)ip_out, 0);
 }
+
+int seld_drv_off(const char* driver_name) {
+    if (!driver_name) return -1;
+    return (int)seld_syscall(SYS_DRV_OFF, (long)driver_name, 0, 0);
+}

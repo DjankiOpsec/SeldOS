@@ -1,10 +1,10 @@
-CFLAGS = -m64 -ffreestanding -fno-stack-protector -fno-pie -fno-pic -mno-red-zone -mcmodel=kernel -mno-mmx -mno-sse -mno-sse2 -Wall -Wextra -Ikernel/include -O2
+CFLAGS = -m64 -ffreestanding -fno-stack-protector -fno-pie -fno-pic -mno-red-zone -mcmodel=kernel -mno-mmx -mno-sse -mno-sse2 -Wall -Wextra -Ikernel/include -O2 -fno-omit-frame-pointer
 LDFLAGS = -n -T kernel/arch/x86_64/linker.ld -nostdlib -no-pie
 
 USER_CFLAGS = -m64 -ffreestanding -fno-stack-protector -fno-pie -fno-pic -fno-asynchronous-unwind-tables -mno-red-zone -mcmodel=small -Wall -Wextra -Iuserspace/libc/include -O2
 
-ASM_SRCS = kernel/arch/x86_64/multiboot_header.asm kernel/arch/x86_64/boot.asm kernel/arch/x86_64/idt_asm.asm kernel/arch/x86_64/switch.asm kernel/arch/x86_64/syscall_entry.asm kernel/arch/x86_64/userspace_blob.asm kernel/arch/x86_64/pkg_tor.asm
-C_SRCS = kernel/kernel.c kernel/drivers/vga.c kernel/drivers/serial.c kernel/drivers/kbd.c kernel/drivers/mouse.c kernel/drivers/audio.c kernel/drivers/ramdisk.c kernel/drivers/ata.c kernel/drivers/pit.c kernel/drivers/pci.c kernel/drivers/e1000.c kernel/drivers/pcnet.c kernel/net/net.c kernel/sys/idt.c kernel/sys/syscall.c kernel/sys/string.c kernel/sys/gdt.c kernel/sys/fast_syscall.c kernel/sys/selftest.c kernel/sys/elf.c kernel/shell/seldshell.c kernel/mm/pmm.c kernel/mm/vmm.c kernel/mm/kmalloc.c kernel/fs/seldfs.c kernel/crypto/rand.c kernel/crypto/sha256.c kernel/sched/sched.c
+ASM_SRCS = kernel/arch/x86_64/multiboot_header.asm kernel/arch/x86_64/boot.asm kernel/arch/x86_64/idt_asm.asm kernel/arch/x86_64/switch.asm kernel/arch/x86_64/syscall_entry.asm kernel/arch/x86_64/userspace_blob.asm kernel/arch/x86_64/pkg_tor.asm kernel/arch/x86_64/logo_blob.asm
+C_SRCS = kernel/kernel.c kernel/drivers/vga.c kernel/drivers/serial.c kernel/drivers/kbd.c kernel/drivers/mouse.c kernel/drivers/audio.c kernel/drivers/ramdisk.c kernel/drivers/ata.c kernel/drivers/pit.c kernel/drivers/pci.c kernel/drivers/e1000.c kernel/drivers/pcnet.c kernel/net/net.c kernel/sys/idt.c kernel/sys/syscall.c kernel/sys/string.c kernel/sys/gdt.c kernel/sys/fast_syscall.c kernel/sys/selftest.c kernel/sys/elf.c kernel/sys/panic.c kernel/sys/ksyms.c kernel/sys/boot_anim.c kernel/shell/seldshell.c kernel/mm/pmm.c kernel/mm/vmm.c kernel/mm/kmalloc.c kernel/fs/seldfs.c kernel/crypto/rand.c kernel/crypto/sha256.c kernel/sched/sched.c
 
 ASM_OBJS = $(ASM_SRCS:.asm=.o)
 C_OBJS = $(C_SRCS:.c=.o)
@@ -102,6 +102,9 @@ kernel/arch/x86_64/userspace_blob.o: kernel/arch/x86_64/userspace_blob.asm $(USE
 	nasm -f elf64 $< -o $@
 
 kernel/arch/x86_64/pkg_tor.o: kernel/arch/x86_64/pkg_tor.asm $(TOR_BIN)
+	nasm -f elf64 $< -o $@
+
+kernel/arch/x86_64/logo_blob.o: kernel/arch/x86_64/logo_blob.asm seldos_logo.svgz
 	nasm -f elf64 $< -o $@
 
 $(KERNEL_BIN): $(USER_BIN) $(TOR_BIN) $(OBJS)

@@ -135,7 +135,7 @@ int e1000_init(void) {
         return -1;
     }
 
-    serial_puts("[+] e1000: Found Intel NIC (Device: 0x");
+    serial_puts("[+] e1000: Found Intel NIC (Device: ");
     serial_print_hex(s_pci_dev.device_id);
     serial_puts(", Bus: ");
     serial_print_dec(s_pci_dev.bus);
@@ -156,9 +156,9 @@ int e1000_init(void) {
     // Map BAR0 MMIO window into Higher-Half address space
     s_mmio_base = (uint8_t*)phys_to_virt(s_pci_dev.bar0);
 
-    serial_puts("[+] e1000: MMIO mapped at physical 0x");
+    serial_puts("[+] e1000: MMIO mapped at physical ");
     serial_print_hex(s_pci_dev.bar0);
-    serial_puts(" -> virtual 0x");
+    serial_puts(" -> virtual ");
     serial_print_hex((uint64_t)s_mmio_base);
     serial_puts("\n");
 
@@ -296,7 +296,7 @@ int e1000_init(void) {
 
     // Verify Link Status
     uint32_t status = e1000_read32(E1000_REG_STATUS);
-    serial_puts("[+] e1000: Status: 0x");
+    serial_puts("[+] e1000: Status: ");
     serial_print_hex(status);
     if (status & E1000_STATUS_LU) {
         serial_puts(" (Link UP - Carrier Active)\n");

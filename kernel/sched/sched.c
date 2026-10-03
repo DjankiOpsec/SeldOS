@@ -15,6 +15,7 @@
 #include "gdt.h"
 #include "fast_syscall.h"
 #include "spinlock.h"
+#include "panic.h"
 
 extern void task_switch_asm(uint64_t* old_rsp, uint64_t new_rsp);
 
@@ -23,6 +24,7 @@ static size_t current_task_idx = 0;
 static uint32_t next_pid = 1;
 static volatile int sched_active = 0;
 static spinlock_t sched_lock = SPINLOCK_INIT;
+static int s_cpu_drv_enabled = 1;
 
 static inline void sched_update_tss(const struct task* t) {
     if (t->stack_base) {
@@ -132,6 +134,12 @@ int sched_create_task(const char* name, void (*entry_fn)(void)) {
 }
 
 void sched_tick(void) {
+    if (!s_cpu_drv_enabled) {
+        if (!kernel_panic_in_progress()) {
+            kernel_panic("quantum preempt tick dropped: CPU scheduler pipeline inactive");
+        }
+        return;
+    }
     if (!sched_active) return;
 
     // Use spin_trylock in interrupt context to avoid deadlock with interruptible code
@@ -185,6 +193,12 @@ void sched_tick(void) {
 }
 
 void sched_yield(void) {
+    if (!s_cpu_drv_enabled) {
+        if (!kernel_panic_in_progress()) {
+            kernel_panic("context switch aborted: CPU scheduler inactive");
+        }
+        return;
+    }
     if (!sched_active) return;
 
     uint64_t rflags = spin_lock_irqsave(&sched_lock);
@@ -281,4 +295,16 @@ int sched_get_tasks(struct task out_tasks[MAX_TASKS]) {
 
     spin_unlock_irqrestore(&sched_lock, rflags);
     return count;
+}
+
+int cpu_driver_disable(void) {
+    if (!s_cpu_drv_enabled) return -1;
+    s_cpu_drv_enabled = 0;
+    sched_active = 0;
+    serial_puts("[!] DRIVER: CPU execution supervisor and core scheduler brutally disabled!\n");
+    return 0;
+}
+
+int cpu_is_driver_enabled(void) {
+    return s_cpu_drv_enabled;
 }

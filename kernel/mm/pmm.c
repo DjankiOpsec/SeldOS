@@ -13,6 +13,7 @@
 #include "ramdisk.h"
 #include "string.h"
 #include "serial.h"
+#include "panic.h"
 
 extern char kernel_start[];
 extern char kernel_end[];
@@ -24,6 +25,7 @@ static uint64_t* pmm_bitmap = NULL;
 static size_t total_frames = 0;
 static size_t used_frames = 0;
 static uint64_t total_physical_memory = 0;
+static int s_ram_drv_enabled = 1;
 
 static inline void bitmap_set(size_t frame) {
     pmm_bitmap[BITMAP_INDEX(frame)] |= (1ULL << BITMAP_OFFSET(frame));
@@ -186,6 +188,12 @@ void pmm_init(uint64_t mb_magic, uint64_t mb_info_addr) {
 }
 
 void* pmm_alloc_frame(void) {
+    if (!s_ram_drv_enabled) {
+        if (!kernel_panic_in_progress()) {
+            kernel_panic("physical frame allocation failed: physical memory manager exhausted");
+        }
+        return NULL;
+    }
     for (size_t i = 0; i < total_frames; i++) {
         if (!bitmap_test(i)) {
             bitmap_set(i);
@@ -197,6 +205,12 @@ void* pmm_alloc_frame(void) {
 }
 
 void* pmm_alloc_frames(size_t count) {
+    if (!s_ram_drv_enabled) {
+        if (!kernel_panic_in_progress()) {
+            kernel_panic("contiguous physical frames allocation failed: physical memory manager exhausted");
+        }
+        return NULL;
+    }
     if (count == 0) return NULL;
     size_t contiguous = 0;
     size_t start_frame = 0;
@@ -259,4 +273,15 @@ struct pmm_stats pmm_get_stats(void) {
     s.total_frames = total_frames;
     s.used_frames = used_frames;
     return s;
+}
+
+int ram_driver_disable(void) {
+    if (!s_ram_drv_enabled) return -1;
+    s_ram_drv_enabled = 0;
+    serial_puts("[!] DRIVER: RAM physical memory frame allocator brutally disabled!\n");
+    return 0;
+}
+
+int ram_is_driver_enabled(void) {
+    return s_ram_drv_enabled;
 }
