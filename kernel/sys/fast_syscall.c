@@ -24,6 +24,8 @@
 #include "kmalloc.h"
 #include "string.h"
 #include "audio.h"
+#include "net.h"
+#include "e1000.h"
 
 extern void syscall_entry_asm(void);
 extern int jump_to_userspace_asm(void (*user_func)(void), void* user_stack_top, uint64_t user_cr3, uint64_t argc, void* argv);
@@ -823,6 +825,160 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
             size_t rows = (size_t)a1;
             vga_set_console_rows(rows);
             return 0;
+        }
+
+        case SYS_NET_INFO: {
+            // a1 = struct seld_net_info*
+            struct seld_net_info* uinfo = (struct seld_net_info*)a1;
+            if (!validate_user_buffer(uinfo, sizeof(*uinfo), 1)) {
+                return (uint64_t)-1;
+            }
+
+            struct net_config cfg = net_get_config();
+            struct net_stats st = net_get_stats();
+
+            struct seld_net_info kinfo;
+            memset(&kinfo, 0, sizeof(kinfo));
+            kinfo.ip = cfg.ip;
+            kinfo.netmask = cfg.netmask;
+            kinfo.gateway = cfg.gateway;
+            kinfo.dns = cfg.dns;
+            memcpy(kinfo.mac, cfg.mac, 6);
+            kinfo.link_up = cfg.link_up;
+            kinfo.rx_frames = st.rx_frames;
+            kinfo.tx_frames = st.tx_frames;
+            kinfo.rx_bytes = st.rx_bytes;
+            kinfo.tx_bytes = st.tx_bytes;
+            kinfo.rx_dropped = st.rx_dropped;
+            kinfo.rx_checksum_errors = st.rx_checksum_errors;
+
+            memcpy(uinfo, &kinfo, sizeof(kinfo));
+            return 0;
+        }
+
+        case SYS_NET_PING: {
+            // a1 = target_ip, a2 = seq, a3 = uint32_t* rtt_ms
+            uint32_t target_ip = (uint32_t)a1;
+            uint16_t seq = (uint16_t)a2;
+            uint32_t* urtt = (uint32_t*)a3;
+
+            if (urtt && !validate_user_buffer(urtt, sizeof(uint32_t), 1)) {
+                return (uint64_t)-1;
+            }
+
+            uint32_t rtt = 0;
+            int res = net_ping(target_ip, seq, &rtt);
+            if (res == 0 && urtt) {
+                *urtt = rtt;
+            }
+            return (uint64_t)res;
+        }
+
+        case SYS_NET_ARP: {
+            // a1 = struct seld_arp_entry* entries, a2 = max_entries
+            struct seld_arp_entry* uentries = (struct seld_arp_entry*)a1;
+            size_t max_e = (size_t)a2;
+
+            if (!uentries || max_e == 0 ||
+                !validate_user_buffer(uentries, max_e * sizeof(struct seld_arp_entry), 1)) {
+                return (uint64_t)-1;
+            }
+
+            struct arp_entry ktable[ARP_TABLE_SIZE];
+            int count = net_get_arp_table(ktable, ARP_TABLE_SIZE);
+            if (count > (int)max_e) count = (int)max_e;
+
+            for (int i = 0; i < count; i++) {
+                uentries[i].ip = ktable[i].ip;
+                memcpy(uentries[i].mac, ktable[i].mac, 6);
+                uentries[i].valid = ktable[i].valid;
+                uentries[i].timestamp_ms = ktable[i].timestamp_ms;
+            }
+
+            return (uint64_t)count;
+        }
+
+        case SYS_NET_DOWNLOAD: {
+            uint32_t server_ip = (uint32_t)a1;
+            uint16_t port = (uint16_t)a2;
+            const char* url_path = (const char*)a3;
+            const char* local_path = (const char*)a4;
+
+            if (!url_path || !local_path ||
+                !validate_user_buffer(url_path, 1, 0) ||
+                !validate_user_buffer(local_path, 1, 0)) {
+                return (uint64_t)-1;
+            }
+
+            if (server_ip == 0) {
+                struct net_config cfg = net_get_config();
+                server_ip = cfg.gateway;
+            }
+            if (port == 0) {
+                port = 8080;
+            }
+
+            char resolved_path[SELDFS_MAX_FILENAME];
+            resolve_seldfs_path(local_path, resolved_path);
+
+            int res = net_download_to_fs(server_ip, port, url_path, resolved_path);
+            return (uint64_t)res;
+        }
+
+        case SYS_NET_TCP_CONNECT: {
+            uint32_t server_ip = (uint32_t)a1;
+            uint16_t port = (uint16_t)a2;
+            if (server_ip == 0) {
+                struct net_config cfg = net_get_config();
+                server_ip = cfg.gateway;
+            }
+            int sock = net_tcp_socket_connect(server_ip, port);
+            return (uint64_t)sock;
+        }
+
+        case SYS_NET_TCP_SEND: {
+            int sock_id = (int)a1;
+            const void* ubuf = (const void*)a2;
+            size_t len = (size_t)a3;
+            if (!ubuf || len == 0 || !validate_user_buffer(ubuf, len, 0)) {
+                return (uint64_t)-1;
+            }
+            int sent = net_tcp_socket_send(sock_id, ubuf, len);
+            return (uint64_t)sent;
+        }
+
+        case SYS_NET_TCP_RECV: {
+            int sock_id = (int)a1;
+            void* ubuf = (void*)a2;
+            size_t max_len = (size_t)a3;
+            uint32_t timeout_ms = (uint32_t)a4;
+            if (!ubuf || max_len == 0 || !validate_user_buffer(ubuf, max_len, 1)) {
+                return (uint64_t)-1;
+            }
+            int recvd = net_tcp_socket_recv(sock_id, ubuf, max_len, timeout_ms);
+            return (uint64_t)recvd;
+        }
+
+        case SYS_NET_TCP_CLOSE: {
+            int sock_id = (int)a1;
+            int res = net_tcp_socket_close(sock_id);
+            return (uint64_t)res;
+        }
+
+        case SYS_NET_DNS_RESOLVE: {
+            // a1 = const char* hostname, a2 = uint32_t* ip_out
+            const char* uhost = (const char*)a1;
+            uint32_t* uip = (uint32_t*)a2;
+            if (!uhost || !uip || !validate_user_buffer(uhost, 1, 0) || !validate_user_buffer(uip, sizeof(uint32_t), 1)) {
+                return (uint64_t)-1;
+            }
+            uint32_t resolved_ip = 0;
+            int res = net_dns_resolve(uhost, &resolved_ip);
+            if (res == 0) {
+                *uip = resolved_ip;
+                return 0;
+            }
+            return (uint64_t)res;
         }
 
         case SYS_SELD: {

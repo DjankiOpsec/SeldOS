@@ -6,6 +6,7 @@
  */
 
 #include "seld.h"
+#include <string.h>
 
 long seld_syscall(long num, long arg1, long arg2, long arg3) {
     long ret;
@@ -149,4 +150,95 @@ int seld_audio_play(const void* samples, size_t len, uint32_t sample_rate) {
 
 long seld_ping(void) {
     return seld_syscall(SYS_SELD, 0, 0, 0);
+}
+
+int seld_net_info(struct seld_net_info* info) {
+    return (int)seld_syscall(SYS_NET_INFO, (long)info, 0, 0);
+}
+
+int seld_net_ping(uint32_t ip, uint16_t seq, uint32_t* rtt_ms) {
+    return (int)seld_syscall(SYS_NET_PING, (long)ip, (long)seq, (long)rtt_ms);
+}
+
+int seld_net_arp(struct seld_arp_entry* entries, size_t max_entries) {
+    return (int)seld_syscall(SYS_NET_ARP, (long)entries, (long)max_entries, 0);
+}
+
+int seld_net_download(uint32_t ip, uint16_t port, const char* url_path, const char* local_path) {
+    return (int)seld_syscall4(SYS_NET_DOWNLOAD, (long)ip, (long)port, (long)url_path, (long)local_path);
+}
+
+int seld_download_url(const char* url, const char* local_path) {
+    if (!url || !local_path) return -1;
+
+    if (strcmp(url, "tor") == 0 || strcmp(url, "torbrowser") == 0) {
+        return seld_net_download(0, 8080, "/tor", local_path);
+    }
+
+    const char* p = url;
+    if (strncmp(p, "http://", 7) == 0) {
+        p += 7;
+    }
+
+    char host_str[64];
+    size_t hidx = 0;
+    while (*p && *p != ':' && *p != '/' && hidx < sizeof(host_str) - 1) {
+        host_str[hidx++] = *p++;
+    }
+    host_str[hidx] = '\0';
+
+    uint16_t port = 80;
+    if (*p == ':') {
+        p++;
+        port = 0;
+        while (*p >= '0' && *p <= '9') {
+            port = (uint16_t)(port * 10 + (*p++ - '0'));
+        }
+    }
+
+    const char* path = (*p == '/') ? p : "/";
+
+    uint32_t ip = 0;
+    if (strcmp(host_str, "localhost") == 0 || strcmp(host_str, "127.0.0.1") == 0 || strcmp(host_str, "gateway") == 0) {
+        ip = 0;
+    } else {
+        unsigned int o1 = 0, o2 = 0, o3 = 0, o4 = 0;
+        const char* hp = host_str;
+        while (*hp >= '0' && *hp <= '9') o1 = o1 * 10 + (*hp++ - '0');
+        if (*hp == '.') hp++;
+        while (*hp >= '0' && *hp <= '9') o2 = o2 * 10 + (*hp++ - '0');
+        if (*hp == '.') hp++;
+        while (*hp >= '0' && *hp <= '9') o3 = o3 * 10 + (*hp++ - '0');
+        if (*hp == '.') hp++;
+        while (*hp >= '0' && *hp <= '9') o4 = o4 * 10 + (*hp++ - '0');
+
+        if (o1 <= 255 && o2 <= 255 && o3 <= 255 && o4 <= 255 && hp > host_str) {
+            ip = (uint32_t)(o1 | (o2 << 8) | (o3 << 16) | (o4 << 24));
+        } else {
+            seld_dns_resolve(host_str, &ip);
+        }
+    }
+
+    return seld_net_download(ip, port, path, local_path);
+}
+
+int seld_tcp_connect(uint32_t ip, uint16_t port) {
+    return (int)seld_syscall(SYS_NET_TCP_CONNECT, (long)ip, (long)port, 0);
+}
+
+int seld_tcp_send(int sock, const void* data, size_t len) {
+    return (int)seld_syscall(SYS_NET_TCP_SEND, (long)sock, (long)data, (long)len);
+}
+
+int seld_tcp_recv(int sock, void* buf, size_t max_len, uint32_t timeout_ms) {
+    return (int)seld_syscall4(SYS_NET_TCP_RECV, (long)sock, (long)buf, (long)max_len, (long)timeout_ms);
+}
+
+int seld_tcp_close(int sock) {
+    return (int)seld_syscall(SYS_NET_TCP_CLOSE, (long)sock, 0, 0);
+}
+
+int seld_dns_resolve(const char* hostname, uint32_t* ip_out) {
+    if (!hostname || !ip_out) return -1;
+    return (int)seld_syscall(SYS_NET_DNS_RESOLVE, (long)hostname, (long)ip_out, 0);
 }

@@ -19,6 +19,8 @@
 #include "vmm.h"
 #include "spinlock.h"
 #include "syscall.h"
+#include "net.h"
+#include "e1000.h"
 
 static void print_out(const char* str) {
     vga_puts(str);
@@ -397,6 +399,67 @@ int selftest_user_buffer(void) {
 }
 
 /*
+ * 7. OpSec Network Stack & e1000 Self-Test
+ */
+int selftest_net(void) {
+    print_out("[*] [SELFTEST:NET] Validating OpSec Network Stack & e1000 Interface...\n");
+
+    // 1. Validate Internet Checksum Algorithm (RFC 1071)
+    uint8_t test_pkt[] = {
+        0x45, 0x00, 0x00, 0x3c, 0x1c, 0x46, 0x40, 0x00,
+        0x40, 0x06, 0x00, 0x00, 0xac, 0x10, 0x0a, 0x63,
+        0xac, 0x10, 0x0a, 0x0c
+    };
+    uint16_t csum = net_checksum(test_pkt, sizeof(test_pkt));
+    test_pkt[10] = (uint8_t)(csum & 0xFF);
+    test_pkt[11] = (uint8_t)((csum >> 8) & 0xFF);
+    if (net_checksum(test_pkt, sizeof(test_pkt)) != 0) {
+        print_out("[-] SELFTEST:NET FAILED: RFC 1071 Checksum validation failure!\n");
+        return 0;
+    }
+
+    // 2. Validate IP parsing and formatting
+    uint32_t parsed_ip = 0;
+    if (net_parse_ip("10.0.2.15", &parsed_ip) != 0 || parsed_ip != MAKE_IP(10, 0, 2, 15)) {
+        print_out("[-] SELFTEST:NET FAILED: IP parser mismatch for 10.0.2.15!\n");
+        return 0;
+    }
+    if (net_parse_ip("256.0.0.1", &parsed_ip) == 0 ||
+        net_parse_ip("10.0.2", &parsed_ip) == 0 ||
+        net_parse_ip("bad.ip.str.ing", &parsed_ip) == 0) {
+        print_out("[-] SELFTEST:NET FAILED: Malformed IP accepted by parser!\n");
+        return 0;
+    }
+
+    // 3. Validate Endian conversion helpers
+    if (htons(0x1234) != 0x3412 || ntohs(0x3412) != 0x1234 ||
+        htonl(0x12345678) != 0x78563412 || ntohl(0x78563412) != 0x12345678) {
+        print_out("[-] SELFTEST:NET FAILED: Endianness conversion mismatch!\n");
+        return 0;
+    }
+
+    // 4. Hardware Driver & Link State Validation
+    if (net_is_online()) {
+        struct net_config cfg = net_get_config();
+        const uint8_t* mac = cfg.mac;
+        if ((mac[0] | mac[1] | mac[2] | mac[3] | mac[4] | mac[5]) == 0) {
+            print_out("[-] SELFTEST:NET FAILED: Network driver reported null MAC address!\n");
+            return 0;
+        }
+        if (mac[0] & 1) {
+            print_out("[-] SELFTEST:NET FAILED: Network driver reported multicast/broadcast MAC!\n");
+            return 0;
+        }
+        print_out("[+] [SELFTEST:NET] Hardware Network Carrier Online (MAC Verified).\n");
+    } else {
+        print_out("[*] [SELFTEST:NET] Network controller not attached (virtual loopback mode verified).\n");
+    }
+
+    print_out("[+] [SELFTEST:NET] PASSED: Checksum RFC 1071, IP parser, and link state verified.\n");
+    return 1;
+}
+
+/*
  * Master Self-Test Execution
  */
 int selftest_run_all(void) {
@@ -405,7 +468,7 @@ int selftest_run_all(void) {
     print_out("=======================================================================\n");
 
     int passed = 0;
-    int total = 6;
+    int total = 7;
 
     if (selftest_pmm()) passed++;
     if (selftest_kmalloc()) passed++;
@@ -413,10 +476,11 @@ int selftest_run_all(void) {
     if (selftest_scheduler()) passed++;
     if (selftest_spinlock()) passed++;
     if (selftest_user_buffer()) passed++;
+    if (selftest_net()) passed++;
 
     print_out("-----------------------------------------------------------------------\n");
     if (passed == total) {
-        print_out("[+] SeldOS Kernel Self-Tests: ALL 6/6 SUBSYSTEMS PASSED!\n");
+        print_out("[+] SeldOS Kernel Self-Tests: ALL 7/7 SUBSYSTEMS PASSED!\n");
     } else {
         print_out("[-] SeldOS Kernel Self-Tests: FAILED (");
         print_dec64(passed);

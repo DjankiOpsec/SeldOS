@@ -169,7 +169,9 @@ def main():
         "rm",
         "sha256sum",
         "uname",
-        "ps"
+        "ps",
+        "fm",
+        "download"
     ]
 
     files_to_write = []

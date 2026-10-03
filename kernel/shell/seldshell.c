@@ -25,6 +25,8 @@
 #include "fast_syscall.h"
 #include "selftest.h"
 #include "elf.h"
+#include "net.h"
+#include "e1000.h"
 
 #define MAX_CMD_LEN 128
 #define MAX_ARGS 16
@@ -82,6 +84,9 @@ static void cmd_help(int argc, char* argv[]) {
     print_out("  run3 [file]   Launch isolated Ring 3 ELF binary or built-in payload\n");
     print_out("  snl <binary>  Execute ELF-64 binary directly from SeldFS (Seld not's Linux)\n");
     print_out("  echo [args..] Output arguments to standard system sinks\n");
+    print_out("  ifconfig      Display network interface status and stats (Intel e1000)\n");
+    print_out("  ping <ip>     Send ICMP ECHO_REQUEST packets to network host\n");
+    print_out("  arp           Display kernel Address Resolution Protocol (ARP) cache\n");
     print_out("  reboot        Perform hard system reset via 8042 keyboard controller\n");
 }
 
@@ -625,6 +630,121 @@ static void cmd_reboot(int argc, char* argv[]) {
     }
 }
 
+static void cmd_ifconfig(int argc, char* argv[]) {
+    (void)argc; (void)argv;
+    struct net_config cfg = net_get_config();
+    struct net_stats st = net_get_stats();
+    char ip_buf[16], mask_buf[16], gw_buf[16], mac_buf[18];
+
+    net_format_ip(cfg.ip, ip_buf, sizeof(ip_buf));
+    net_format_ip(cfg.netmask, mask_buf, sizeof(mask_buf));
+    net_format_ip(cfg.gateway, gw_buf, sizeof(gw_buf));
+    net_format_mac(cfg.mac, mac_buf, sizeof(mac_buf));
+
+    print_out("eth0: flags=UP,BROADCAST,MULTICAST mtu 1500\n");
+    print_out("      ether "); print_out(mac_buf); print_out(" (Intel e1000 PCI)\n");
+    print_out("      inet "); print_out(ip_buf);
+    print_out("  netmask "); print_out(mask_buf);
+    print_out("  gateway "); print_out(gw_buf); print_out("\n");
+    print_out("      RX packets "); print_dec64(st.rx_frames);
+    print_out("  bytes "); print_dec64(st.rx_bytes);
+    print_out("  dropped "); print_dec64(st.rx_dropped);
+    print_out("  errors "); print_dec64(st.rx_checksum_errors); print_out("\n");
+    print_out("      TX packets "); print_dec64(st.tx_frames);
+    print_out("  bytes "); print_dec64(st.tx_bytes);
+    print_out("  arp "); print_dec64(st.tx_arp);
+    print_out("  icmp "); print_dec64(st.tx_icmp); print_out("\n");
+}
+
+static void cmd_arp(int argc, char* argv[]) {
+    (void)argc; (void)argv;
+    struct arp_entry table[ARP_TABLE_SIZE];
+    int count = net_get_arp_table(table, ARP_TABLE_SIZE);
+
+    print_out("Address          HWaddress           Iface    State\n");
+    print_out("---------------  -----------------   -----    -------\n");
+
+    if (count == 0) {
+        print_out("(ARP cache is currently empty)\n");
+        return;
+    }
+
+    for (int i = 0; i < count; i++) {
+        char ip_str[16];
+        char mac_str[18];
+        net_format_ip(table[i].ip, ip_str, sizeof(ip_str));
+        net_format_mac(table[i].mac, mac_str, sizeof(mac_str));
+
+        print_out(ip_str);
+        for (size_t s = strlen(ip_str); s < 17; s++) print_char(' ');
+
+        print_out(mac_str);
+        print_out("   eth0     RESOLVED\n");
+    }
+}
+
+static void cmd_ping(int argc, char* argv[]) {
+    if (argc < 2) {
+        print_out("Usage: ping <target_ipv4_address>\n");
+        return;
+    }
+
+    uint32_t target_ip = 0;
+    if (net_parse_ip(argv[1], &target_ip) != 0) {
+        print_out("[-] ping: invalid IPv4 address format: ");
+        print_out(argv[1]);
+        print_out("\n");
+        return;
+    }
+
+    char ip_str[16];
+    net_format_ip(target_ip, ip_str, sizeof(ip_str));
+
+    print_out("PING ");
+    print_out(ip_str);
+    print_out(" 56(84) bytes of data.\n");
+
+    int received = 0;
+    int transmitted = 4;
+
+    for (int seq = 1; seq <= transmitted; seq++) {
+        uint32_t rtt = 0;
+        int res = net_ping(target_ip, (uint16_t)seq, &rtt);
+        if (res == 0) {
+            received++;
+            print_out("64 bytes from ");
+            print_out(ip_str);
+            print_out(": icmp_seq=");
+            print_dec64(seq);
+            print_out(" ttl=64 time=");
+            print_dec64(rtt);
+            print_out(" ms\n");
+        } else if (res == -2) {
+            print_out("[-] ping: send error or route unreachable\n");
+            break;
+        } else {
+            print_out("Request timeout for icmp_seq ");
+            print_dec64(seq);
+            print_out("\n");
+        }
+
+        if (seq < transmitted) {
+            pit_sleep_ms(500);
+        }
+    }
+
+    print_out("--- ");
+    print_out(ip_str);
+    print_out(" ping statistics ---\n");
+    print_dec64(transmitted);
+    print_out(" packets transmitted, ");
+    print_dec64(received);
+    print_out(" received, ");
+    int loss = ((transmitted - received) * 100) / transmitted;
+    print_dec64(loss);
+    print_out("% packet loss\n");
+}
+
 struct shell_command {
     const char* name;
     void (*handler)(int argc, char* argv[]);
@@ -794,6 +914,9 @@ static const struct shell_command commands[] = {
     {"run3",     cmd_run3},
     {"snl",      cmd_run3},
     {"echo",     cmd_echo},
+    {"ifconfig", cmd_ifconfig},
+    {"ping",     cmd_ping},
+    {"arp",      cmd_arp},
     {"reboot",   cmd_reboot},
     {NULL,       NULL}
 };

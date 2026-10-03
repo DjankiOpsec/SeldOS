@@ -40,7 +40,16 @@
 #define SYS_BEEP        28
 #define SYS_AUDIO_PLAY  29
 #define SYS_SET_CONSOLE_ROWS 30
-#define SYS_SELD        42
+#define SYS_NET_INFO    31
+#define SYS_NET_PING    32
+#define SYS_NET_ARP     33
+#define SYS_NET_DOWNLOAD    34
+#define SYS_NET_TCP_CONNECT 35
+#define SYS_NET_TCP_SEND    36
+#define SYS_NET_TCP_RECV    37
+#define SYS_NET_TCP_CLOSE   38
+#define SYS_NET_DNS_RESOLVE 39
+#define SYS_SELD            42
 
 /* File types */
 #define SELD_FILE_REGULAR 1
@@ -112,6 +121,29 @@ struct seld_mouse_event {
     uint8_t buttons;
 };
 
+/* Network Structures */
+struct seld_net_info {
+    uint32_t ip;
+    uint32_t netmask;
+    uint32_t gateway;
+    uint32_t dns;
+    uint8_t  mac[6];
+    uint8_t  link_up;
+    uint64_t rx_frames;
+    uint64_t tx_frames;
+    uint64_t rx_bytes;
+    uint64_t tx_bytes;
+    uint64_t rx_dropped;
+    uint64_t rx_checksum_errors;
+};
+
+struct seld_arp_entry {
+    uint32_t ip;
+    uint8_t  mac[6];
+    uint8_t  valid;
+    uint64_t timestamp_ms;
+};
+
 /* Fast syscall assembly invocation wrappers */
 long seld_syscall(long num, long arg1, long arg2, long arg3);
 long seld_syscall4(long num, long arg1, long arg2, long arg3, long arg4);
@@ -146,5 +178,15 @@ int      seld_poll_mouse(struct seld_mouse_event* ev);
 int      seld_beep(uint32_t freq_hz, uint32_t duration_ms);
 int      seld_audio_play(const void* samples, size_t len, uint32_t sample_rate);
 long     seld_ping(void);
+int      seld_net_info(struct seld_net_info* info);
+int      seld_net_ping(uint32_t ip, uint16_t seq, uint32_t* rtt_ms);
+int      seld_net_arp(struct seld_arp_entry* entries, size_t max_entries);
+int      seld_net_download(uint32_t ip, uint16_t port, const char* url_path, const char* local_path);
+int      seld_download_url(const char* url, const char* local_path);
+int      seld_tcp_connect(uint32_t ip, uint16_t port);
+int      seld_tcp_send(int sock, const void* data, size_t len);
+int      seld_tcp_recv(int sock, void* buf, size_t max_len, uint32_t timeout_ms);
+int      seld_tcp_close(int sock);
+int      seld_dns_resolve(const char* hostname, uint32_t* ip_out);
 
 #endif /* _SELD_H_ */

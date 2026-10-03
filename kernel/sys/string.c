@@ -82,6 +82,32 @@ char* strncpy(char* dest, const char* src, size_t n) {
     return dest;
 }
 
+char* strchr(const char* s, int c) {
+    while (*s) {
+        if (*s == (char)c) return (char*)s;
+        s++;
+    }
+    if ((char)c == '\0') return (char*)s;
+    return NULL;
+}
+
+char* strstr(const char* haystack, const char* needle) {
+    if (!haystack || !needle) return NULL;
+    if (!*needle) return (char*)haystack;
+    for (; *haystack; haystack++) {
+        if (*haystack == *needle) {
+            const char* h = haystack;
+            const char* n = needle;
+            while (*h && *n && *h == *n) {
+                h++;
+                n++;
+            }
+            if (!*n) return (char*)haystack;
+        }
+    }
+    return NULL;
+}
+
 uint64_t strtoull(const char* str, char** endptr, int base) {
     uint64_t result = 0;
     while (*str == ' ' || *str == '\t') str++;

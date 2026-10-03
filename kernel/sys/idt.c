@@ -98,6 +98,42 @@ static void remap_pic(void) {
     outb(0xA1, 0xEF);
 }
 
+static irq_handler_t s_irq_handlers[16] = {0};
+
+void irq_register_handler(uint8_t irq, irq_handler_t handler) {
+    if (irq < 16) {
+        s_irq_handlers[irq] = handler;
+    }
+}
+
+void pic_unmask_irq(uint8_t irq) {
+    uint16_t port;
+    uint8_t value;
+
+    if (irq < 8) {
+        port = 0x21;
+    } else {
+        port = 0xA1;
+        irq -= 8;
+    }
+    value = inb(port) & ~(1 << irq);
+    outb(port, value);
+}
+
+void pic_mask_irq(uint8_t irq) {
+    uint16_t port;
+    uint8_t value;
+
+    if (irq < 8) {
+        port = 0x21;
+    } else {
+        port = 0xA1;
+        irq -= 8;
+    }
+    value = inb(port) | (1 << irq);
+    outb(port, value);
+}
+
 extern void syscall_dispatch(struct interrupt_frame* frame);
 
 void isr_handler(struct interrupt_frame* frame) {
@@ -181,7 +217,10 @@ void isr_handler(struct interrupt_frame* frame) {
         outb(0xA0, 0x20); // Slave EOI
         outb(0x20, 0x20); // Master EOI
     } else if (frame->int_no >= 32 && frame->int_no < 48) {
-        // Other IRQs (spurious or cascade)
+        uint8_t irq = (uint8_t)(frame->int_no - 32);
+        if (s_irq_handlers[irq]) {
+            s_irq_handlers[irq](frame);
+        }
         if (frame->int_no >= 40) {
             outb(0xA0, 0x20);
         }

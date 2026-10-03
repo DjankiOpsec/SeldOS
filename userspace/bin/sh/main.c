@@ -187,6 +187,7 @@ static void init_vkeys(void) {
     s_vkeys[s_num_vkeys++] = (struct vkey){400, 204, 62, 24, 0, "CLEAR", 0xFFFF5555, "clear"};
     s_vkeys[s_num_vkeys++] = (struct vkey){468, 204, 48, 24, 0, "PC", 0xFFFF9933, "pc"};
     s_vkeys[s_num_vkeys++] = (struct vkey){522, 204, 56, 24, 0, "BEEP", 0xFFFF55FF, "beep"};
+    s_vkeys[s_num_vkeys++] = (struct vkey){584, 204, 50, 24, 0, "FM", 0xFF38BDF8, "fm"};
 
     if (!s_keyboard_enabled) return;
 
@@ -553,6 +554,9 @@ static void builtin_help(void) {
     printf("  uptime          Display system running time from PIT chronometer\n");
     printf("  beep [freq] [d] Test audio output with tone frequency and duration\n");
     printf("  mem             Display physical memory & kernel heap usage\n");
+    printf("  ifconfig        Display network interface details & statistics (e1000)\n");
+    printf("  ping <ip>       Send ICMP Echo requests to host\n");
+    printf("  arp             Display kernel ARP resolution cache\n");
     printf("  selftest        Execute userspace Ring 3 verification test suite\n\n");
     printf("External Utilities in /bin/:\n");
     printf("  ls              List files with size, blocks, and SHA-256 hash\n");
@@ -563,6 +567,9 @@ static void builtin_help(void) {
     printf("  uname           Display system identification\n");
     printf("  ps              Query and display active tasks / PID info\n");
     printf("  doom            Classic DOOM (doomgeneric with linear framebuffer)\n");
+    printf("  fm              Seld Sovereign Graphical File Manager (SNL-FM)\n");
+    printf("  download <url>  Fetch binary/package over network into SeldFS\n");
+    printf("  tor             Tor Browser (download via 'download tor')\n");
     printf("  init            First userspace program (init system)\n");
 }
 
@@ -687,6 +694,159 @@ static void builtin_mem(void) {
     printf("  Kernel Heap Size   : %lu KiB\n", info.heap_size / 1024);
     printf("  Kernel Heap Used   : %lu bytes\n", info.heap_used);
     printf("  Kernel Heap Free   : %lu bytes\n", info.heap_free);
+}
+
+static void format_ip_u(uint32_t ip, char* buf, size_t sz) {
+    uint8_t o1 = (uint8_t)(ip & 0xFF);
+    uint8_t o2 = (uint8_t)((ip >> 8) & 0xFF);
+    uint8_t o3 = (uint8_t)((ip >> 16) & 0xFF);
+    uint8_t o4 = (uint8_t)((ip >> 24) & 0xFF);
+    snprintf(buf, sz, "%u.%u.%u.%u", o1, o2, o3, o4);
+}
+
+static void format_mac_u(const uint8_t* mac, char* buf, size_t sz) {
+    if (!mac || !buf || sz < 18) return;
+    const char hex[] = "0123456789ABCDEF";
+    size_t idx = 0;
+    for (int i = 0; i < 6; i++) {
+        buf[idx++] = hex[(mac[i] >> 4) & 0x0F];
+        buf[idx++] = hex[mac[i] & 0x0F];
+        if (i < 5) buf[idx++] = ':';
+    }
+    buf[idx] = '\0';
+}
+
+static void builtin_ifconfig(void) {
+    struct seld_net_info info;
+    if (seld_net_info(&info) != 0) {
+        printf("[-] Failed to query network interface.\n");
+        return;
+    }
+
+    if (!info.link_up) {
+        printf("eth0: flags=DOWN (Interface Offline / No Compatible NIC Carrier Detected)\n");
+        printf("      In VirtualBox / VM settings: Set Adapter Type to Intel PRO/1000 MT (82540EM) or AMD PCnet-FAST III (Am79C973)\n");
+        return;
+    }
+
+    char ip_buf[16], mask_buf[16], gw_buf[16], mac_buf[18];
+    format_ip_u(info.ip, ip_buf, sizeof(ip_buf));
+    format_ip_u(info.netmask, mask_buf, sizeof(mask_buf));
+    format_ip_u(info.gateway, gw_buf, sizeof(gw_buf));
+    format_mac_u(info.mac, mac_buf, sizeof(mac_buf));
+
+    printf("eth0: flags=UP,BROADCAST,MULTICAST mtu 1500\n");
+    printf("      ether %s (Hardware PCI Ethernet)\n", mac_buf);
+    printf("      inet %s  netmask %s  gateway %s\n", ip_buf, mask_buf, gw_buf);
+    printf("      RX packets %lu  bytes %lu  dropped %lu  errors %lu\n",
+           info.rx_frames, info.rx_bytes, info.rx_dropped, info.rx_checksum_errors);
+    printf("      TX packets %lu  bytes %lu\n",
+           info.tx_frames, info.tx_bytes);
+}
+
+static int parse_ip_u(const char* str, uint32_t* ip_out) {
+    if (!str || !ip_out) return -1;
+    uint32_t octets[4] = {0};
+    int octet_idx = 0;
+    const char* p = str;
+    while (*p && octet_idx < 4) {
+        if (*p < '0' || *p > '9') return -1;
+        uint32_t val = 0;
+        while (*p >= '0' && *p <= '9') {
+            val = val * 10 + (*p - '0');
+            if (val > 255) return -1;
+            p++;
+        }
+        octets[octet_idx++] = val;
+        if (*p == '.') {
+            p++;
+            if (*p == '\0') return -1;
+        } else if (*p != '\0') {
+            return -1;
+        }
+    }
+    if (octet_idx != 4 || *p != '\0') return -1;
+    *ip_out = octets[0] | (octets[1] << 8) | (octets[2] << 16) | (octets[3] << 24);
+    return 0;
+}
+
+static void builtin_arp(void) {
+    struct seld_arp_entry table[16];
+    int count = seld_net_arp(table, 16);
+    if (count < 0) {
+        printf("[-] Failed to query ARP cache.\n");
+        return;
+    }
+    printf("Address          HWaddress           Iface    State\n");
+    printf("---------------  -----------------   -----    -------\n");
+    if (count == 0) {
+        printf("(ARP cache is currently empty)\n");
+        return;
+    }
+    for (int i = 0; i < count; i++) {
+        char ip_str[16];
+        char mac_str[18];
+        format_ip_u(table[i].ip, ip_str, sizeof(ip_str));
+        format_mac_u(table[i].mac, mac_str, sizeof(mac_str));
+        printf("%-16s %-18s eth0     RESOLVED\n", ip_str, mac_str);
+    }
+}
+
+static void builtin_ping(int argc, char* argv[]) {
+    if (argc < 2) {
+        printf("Usage: ping <target_ipv4_address>\n");
+        return;
+    }
+    uint32_t target_ip = 0;
+    if (parse_ip_u(argv[1], &target_ip) != 0) {
+        if (seld_dns_resolve(argv[1], &target_ip) != 0) {
+            printf("[-] ping: cannot resolve '%s': Unknown host\n", argv[1]);
+            return;
+        }
+    }
+
+    char ip_str[16];
+    format_ip_u(target_ip, ip_str, sizeof(ip_str));
+    printf("PING %s (%s) 56(84) bytes of data.\n", argv[1], ip_str);
+
+    int received = 0;
+    int transmitted = 4;
+    for (int seq = 1; seq <= transmitted; seq++) {
+        uint32_t rtt = 0;
+        int res = seld_net_ping(target_ip, (uint16_t)seq, &rtt);
+        if (res == 0) {
+            received++;
+            printf("64 bytes from %s: icmp_seq=%d ttl=64 time=%u ms\n", ip_str, seq, rtt);
+        } else if (res == -2) {
+            printf("[-] ping: route unreachable or send failed\n");
+            break;
+        } else {
+            printf("Request timeout for icmp_seq %d\n", seq);
+        }
+        if (seq < transmitted) {
+            seld_sleep(500);
+        }
+    }
+    printf("--- %s ping statistics ---\n", ip_str);
+    int loss = ((transmitted - received) * 100) / transmitted;
+    printf("%d packets transmitted, %d received, %d%% packet loss\n",
+           transmitted, received, loss);
+}
+
+static void builtin_dns(int argc, char* argv[]) {
+    if (argc < 2) {
+        printf("Usage: dns <hostname>\n");
+        return;
+    }
+    printf("Resolving %s via DNS (UDP 10.0.2.3:53)...\n", argv[1]);
+    uint32_t ip = 0;
+    if (seld_dns_resolve(argv[1], &ip) == 0) {
+        char ip_str[16];
+        format_ip_u(ip, ip_str, sizeof(ip_str));
+        printf("Resolved: %s -> %s\n", argv[1], ip_str);
+    } else {
+        printf("[-] Failed to resolve %s\n", argv[1]);
+    }
 }
 
 static void builtin_selftest(void) {
@@ -881,13 +1041,26 @@ int main(int argc, char* argv[]) {
             builtin_beep(cmd_argc, cmd_argv);
         } else if (strcmp(cmd, "mem") == 0) {
             builtin_mem();
+        } else if (strcmp(cmd, "ifconfig") == 0) {
+            builtin_ifconfig();
+        } else if (strcmp(cmd, "arp") == 0) {
+            builtin_arp();
+        } else if (strcmp(cmd, "ping") == 0) {
+            builtin_ping(cmd_argc, cmd_argv);
+        } else if (strcmp(cmd, "dns") == 0) {
+            builtin_dns(cmd_argc, cmd_argv);
         } else if (strcmp(cmd, "selftest") == 0) {
             builtin_selftest();
         } else {
             // External command execution from SeldFS (/bin/<cmd>)
             int res = spawnv(cmd, cmd_argv);
             if (res < 0) {
-                printf("snl: %s: command not found\n", cmd);
+                if (strcmp(cmd, "tor") == 0 || strcmp(cmd, "torbrowser") == 0) {
+                    printf("snl: tor: not installed in SeldFS.\n");
+                    printf("     Run 'download tor' to fetch Tor Browser over the network.\n");
+                } else {
+                    printf("snl: %s: command not found\n", cmd);
+                }
             }
         }
     }

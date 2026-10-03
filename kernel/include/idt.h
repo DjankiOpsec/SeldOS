@@ -25,7 +25,12 @@ struct interrupt_frame {
     uint64_t rip, cs, rflags, rsp, ss;
 } __attribute__((packed));
 
+typedef void (*irq_handler_t)(struct interrupt_frame* frame);
+
 void idt_init(void);
 void idt_set_gate(uint8_t num, uint64_t base, uint16_t sel, uint8_t flags);
+void pic_unmask_irq(uint8_t irq);
+void pic_mask_irq(uint8_t irq);
+void irq_register_handler(uint8_t irq, irq_handler_t handler);
 
 #endif

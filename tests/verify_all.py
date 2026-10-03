@@ -114,7 +114,9 @@ def main():
         "-drive", "file=build/disk.img,format=raw",
         "-display", "none",
         "-qmp", f"unix:{QMP_SOCK},server,nowait",
-        "-serial", f"file:{SERIAL_LOG}"
+        "-serial", f"file:{SERIAL_LOG}",
+        "-net", "nic,model=e1000",
+        "-net", "user"
     ]
 
     print("[*] Launching QEMU instance for SeldOS validation...")

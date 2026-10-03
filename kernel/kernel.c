@@ -51,6 +51,8 @@ static void print_banner(void) {
 #include "selftest.h"
 #include "mouse.h"
 #include "audio.h"
+#include "net.h"
+#include "e1000.h"
 
 void kernel_main(uint64_t mb_info_addr, uint64_t mb_magic) {
     serial_init();
@@ -112,6 +114,10 @@ void kernel_main(uint64_t mb_info_addr, uint64_t mb_magic) {
 
     vga_puts("[+] Initializing Supervisor Cooperative Scheduler...\n");
     sched_init();
+
+    vga_puts("[+] Initializing OpSec Hardened Network Subsystem (PCI / e1000 / IPv4)...\n");
+    serial_puts("[+] Initializing OpSec Hardened Network Subsystem (PCI / e1000 / IPv4)...\n");
+    net_init();
 
     vga_puts("[+] Executing Kernel Boot-Time Subsystem Validation...\n");
     serial_puts("[+] Executing Kernel Boot-Time Subsystem Validation...\n");

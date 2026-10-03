@@ -48,10 +48,42 @@
 #define SYS_BEEP        28
 #define SYS_AUDIO_PLAY  29
 #define SYS_SET_CONSOLE_ROWS 30
-#define SYS_SELD        42
+#define SYS_NET_INFO    31
+#define SYS_NET_PING    32
+#define SYS_NET_ARP     33
+#define SYS_NET_DOWNLOAD    34
+#define SYS_NET_TCP_CONNECT 35
+#define SYS_NET_TCP_SEND    36
+#define SYS_NET_TCP_RECV    37
+#define SYS_NET_TCP_CLOSE   38
+#define SYS_NET_DNS_RESOLVE 39
+#define SYS_SELD            42
 
 #define MAX_FD 32
 #define DEFAULT_USER_HEAP_BASE 0x0000000040000000ULL
+
+/* User-mode network structures */
+struct seld_net_info {
+    uint32_t ip;
+    uint32_t netmask;
+    uint32_t gateway;
+    uint32_t dns;
+    uint8_t  mac[6];
+    uint8_t  link_up;
+    uint64_t rx_frames;
+    uint64_t tx_frames;
+    uint64_t rx_bytes;
+    uint64_t tx_bytes;
+    uint64_t rx_dropped;
+    uint64_t rx_checksum_errors;
+};
+
+struct seld_arp_entry {
+    uint32_t ip;
+    uint8_t  mac[6];
+    uint8_t  valid;
+    uint64_t timestamp_ms;
+};
 
 /* User-mode stat structure */
 struct seld_stat {

@@ -3,8 +3,8 @@ LDFLAGS = -n -T kernel/arch/x86_64/linker.ld -nostdlib -no-pie
 
 USER_CFLAGS = -m64 -ffreestanding -fno-stack-protector -fno-pie -fno-pic -fno-asynchronous-unwind-tables -mno-red-zone -mcmodel=small -Wall -Wextra -Iuserspace/libc/include -O2
 
-ASM_SRCS = kernel/arch/x86_64/multiboot_header.asm kernel/arch/x86_64/boot.asm kernel/arch/x86_64/idt_asm.asm kernel/arch/x86_64/switch.asm kernel/arch/x86_64/syscall_entry.asm kernel/arch/x86_64/userspace_blob.asm
-C_SRCS = kernel/kernel.c kernel/drivers/vga.c kernel/drivers/serial.c kernel/drivers/kbd.c kernel/drivers/mouse.c kernel/drivers/audio.c kernel/drivers/ramdisk.c kernel/drivers/ata.c kernel/drivers/pit.c kernel/sys/idt.c kernel/sys/syscall.c kernel/sys/string.c kernel/sys/gdt.c kernel/sys/fast_syscall.c kernel/sys/selftest.c kernel/sys/elf.c kernel/shell/seldshell.c kernel/mm/pmm.c kernel/mm/vmm.c kernel/mm/kmalloc.c kernel/fs/seldfs.c kernel/crypto/rand.c kernel/crypto/sha256.c kernel/sched/sched.c
+ASM_SRCS = kernel/arch/x86_64/multiboot_header.asm kernel/arch/x86_64/boot.asm kernel/arch/x86_64/idt_asm.asm kernel/arch/x86_64/switch.asm kernel/arch/x86_64/syscall_entry.asm kernel/arch/x86_64/userspace_blob.asm kernel/arch/x86_64/pkg_tor.asm
+C_SRCS = kernel/kernel.c kernel/drivers/vga.c kernel/drivers/serial.c kernel/drivers/kbd.c kernel/drivers/mouse.c kernel/drivers/audio.c kernel/drivers/ramdisk.c kernel/drivers/ata.c kernel/drivers/pit.c kernel/drivers/pci.c kernel/drivers/e1000.c kernel/drivers/pcnet.c kernel/net/net.c kernel/sys/idt.c kernel/sys/syscall.c kernel/sys/string.c kernel/sys/gdt.c kernel/sys/fast_syscall.c kernel/sys/selftest.c kernel/sys/elf.c kernel/shell/seldshell.c kernel/mm/pmm.c kernel/mm/vmm.c kernel/mm/kmalloc.c kernel/fs/seldfs.c kernel/crypto/rand.c kernel/crypto/sha256.c kernel/sched/sched.c
 
 ASM_OBJS = $(ASM_SRCS:.asm=.o)
 C_OBJS = $(C_SRCS:.c=.o)
@@ -29,8 +29,9 @@ LIBC_OBJS = build/libc_syscall.o \
 
 LIBSNL = build/libsnl.a
 
-UTILS = init sh ls cat echo rm sha256sum uname ps
-ALL_BINS = $(addprefix build/bin/, $(UTILS)) build/bin/doom
+UTILS = init sh ls cat echo rm sha256sum uname ps fm download
+TOR_BIN = build/bin/tor
+ALL_BINS = $(addprefix build/bin/, $(UTILS)) build/bin/doom $(TOR_BIN)
 
 DOOM_CFLAGS = $(USER_CFLAGS) -Iuserspace/doom -DNORMALUNIX -DLINUX -DSNDSERV -D_DEFAULT_SOURCE -w
 DOOM_SRCS = dummy.c am_map.c doomdef.c doomstat.c dstrings.c d_event.c d_items.c d_iwad.c d_loop.c d_main.c d_mode.c d_net.c f_finale.c f_wipe.c g_game.c hu_lib.c hu_stuff.c info.c i_cdmus.c i_endoom.c i_joystick.c i_scale.c i_sound.c i_system.c i_timer.c memio.c m_argv.c m_bbox.c m_cheat.c m_config.c m_controls.c m_fixed.c m_menu.c m_misc.c m_random.c p_ceilng.c p_doors.c p_enemy.c p_floor.c p_inter.c p_lights.c p_map.c p_maputl.c p_mobj.c p_plats.c p_pspr.c p_saveg.c p_setup.c p_sight.c p_spec.c p_switch.c p_telept.c p_tick.c p_user.c r_bsp.c r_data.c r_draw.c r_main.c r_plane.c r_segs.c r_sky.c r_things.c sha1.c sounds.c statdump.c st_lib.c st_stuff.c s_sound.c tables.c v_video.c wi_stuff.c w_checksum.c w_file.c w_main.c w_wad.c z_zone.c w_file_stdc.c i_input.c i_video.c doomgeneric.c doomgeneric_seld.c
@@ -43,7 +44,7 @@ KERNEL_BIN = build/kernel.bin
 ISO_IMAGE = build/seldos.iso
 DISK_IMG = build/disk.img
 
-all: $(ISO_IMAGE) $(DISK_IMG)
+all: $(ISO_IMAGE) $(DISK_IMG) $(TOR_BIN)
 
 # Libc compilation and archiving
 $(LIBSNL): $(LIBC_OBJS)
@@ -69,6 +70,18 @@ build/bin/%: $(USER_CRT0) build/obj_bin_%.o $(LIBSNL) userspace/linker.ld
 	@mkdir -p build/bin
 	ld -T userspace/linker.ld -nostdlib -o $@ $(USER_CRT0) build/obj_bin_$*.o --whole-archive $(LIBSNL) --no-whole-archive
 
+# Tor Browser compilation and linking
+TOR_SRCS = userspace/bin/tor/main.c userspace/bin/tor/socks5.c userspace/bin/tor/http.c userspace/bin/tor/html.c userspace/bin/tor/ddg_serp.c
+TOR_OBJS = $(patsubst userspace/bin/tor/%.c, build/obj_tor_%.o, $(TOR_SRCS))
+
+build/obj_tor_%.o: userspace/bin/tor/%.c userspace/bin/tor/*.h userspace/libc/include/*.h
+	@mkdir -p build
+	$(CC) $(USER_CFLAGS) -Iuserspace/bin/tor -c $< -o $@
+
+build/bin/tor: $(USER_CRT0) $(TOR_OBJS) $(LIBSNL) userspace/linker.ld
+	@mkdir -p build/bin
+	ld -T userspace/linker.ld -nostdlib -o $@ $(USER_CRT0) $(TOR_OBJS) --whole-archive $(LIBSNL) --no-whole-archive
+
 # Doom compilation and linking
 build/obj_doom_%.o: userspace/doom/%.c
 	@mkdir -p build
@@ -88,7 +101,10 @@ $(USER_BIN): build/bin/init
 kernel/arch/x86_64/userspace_blob.o: kernel/arch/x86_64/userspace_blob.asm $(USER_BIN)
 	nasm -f elf64 $< -o $@
 
-$(KERNEL_BIN): $(USER_BIN) $(OBJS)
+kernel/arch/x86_64/pkg_tor.o: kernel/arch/x86_64/pkg_tor.asm $(TOR_BIN)
+	nasm -f elf64 $< -o $@
+
+$(KERNEL_BIN): $(USER_BIN) $(TOR_BIN) $(OBJS)
 	@mkdir -p build
 	ld $(LDFLAGS) -o $@ $(OBJS)
 
@@ -108,11 +124,30 @@ $(DISK_IMG): $(ALL_BINS) scripts/mkdisk.py
 	@mkdir -p build
 	python3 scripts/mkdisk.py $(DISK_IMG)
 
-qemu: $(ISO_IMAGE)
-	qemu-system-x86_64 -cdrom $(ISO_IMAGE) -serial stdio -vga std
+gateway: $(TOR_BIN)
+	@python3 scripts/opsec_gateway.py --daemon
 
-qemu-direct: $(KERNEL_BIN) $(DISK_IMG)
-	qemu-system-x86_64 -kernel $(KERNEL_BIN) -drive file=$(DISK_IMG),format=raw -serial stdio -vga std
+gateway-stop:
+	@python3 scripts/opsec_gateway.py --stop
+
+gateway-status:
+	@python3 scripts/opsec_gateway.py --status
+
+qemu: $(ISO_IMAGE) $(TOR_BIN)
+	@if ! python3 scripts/opsec_gateway.py --status >/dev/null 2>&1; then \
+		echo "[*] Launching OpSec TLS Termination Gateway on port 8080..."; \
+		python3 scripts/opsec_gateway.py --daemon; \
+		sleep 0.5; \
+	fi
+	qemu-system-x86_64 -cdrom $(ISO_IMAGE) -serial stdio -vga std -net nic,model=e1000 -net user
+
+qemu-direct: $(KERNEL_BIN) $(DISK_IMG) $(TOR_BIN)
+	@if ! python3 scripts/opsec_gateway.py --status >/dev/null 2>&1; then \
+		echo "[*] Launching OpSec TLS Termination Gateway on port 8080..."; \
+		python3 scripts/opsec_gateway.py --daemon; \
+		sleep 0.5; \
+	fi
+	qemu-system-x86_64 -kernel $(KERNEL_BIN) -drive file=$(DISK_IMG),format=raw -serial stdio -vga std -net nic,model=e1000 -net user
 
 clean:
 	rm -rf $(OBJS) $(LIBC_OBJS) $(LIBSNL) $(USER_BIN) $(USER_CRT0) build iso/boot/kernel.bin iso/boot/disk.img

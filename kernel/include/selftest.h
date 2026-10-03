@@ -19,5 +19,6 @@ int selftest_pmm(void);
 int selftest_scheduler(void);
 int selftest_spinlock(void);
 int selftest_user_buffer(void);
+int selftest_net(void);
 
 #endif /* SELD_SELFTEST_H */
