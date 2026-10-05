@@ -171,8 +171,7 @@ def main():
         "uname",
         "ps",
         "fm",
-        "download",
-        "tor"
+        "download"
     ]
 
     files_to_write = []

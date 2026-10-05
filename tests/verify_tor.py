@@ -174,17 +174,17 @@ def main():
         time.sleep(0.5)
 
         # -------------------------------------------------------------
-        # TEST 1: Sovereign Pre-installation Check (Tor is pre-installed)
+        # TEST 1: Proof of Absence (Tor is NOT pre-installed in ISO)
         # -------------------------------------------------------------
-        print("\n=== TEST 1: Verifying Tor Browser Sovereign Pre-installation ===")
-        send_string(s, "download tor\n")
-        time.sleep(1.0)
+        print("\n=== TEST 1: Verifying Tor is NOT in the ISO disk image ===")
+        send_string(s, "tor\n")
+        time.sleep(0.5)
 
         with open(SERIAL_LOG, "r") as f:
             log1 = f.read()
 
-        assert "already installed in SeldFS" in log1, "Tor was not pre-installed in SeldFS!"
-        print("[+] PASS: Verified Tor Browser is pre-installed in SeldFS.")
+        assert "not installed in SeldFS" in log1, "Tor was unexpectedly found installed on boot!"
+        print("[+] PASS: Verified Tor Browser is NOT baked into the ISO image.")
         img_abs = capture_screenshot(s, "tests/21_tor_initial_check.png")
         assert img_abs.size == (680, 334)
 
@@ -200,15 +200,16 @@ def main():
             if os.path.exists(SERIAL_LOG):
                 with open(SERIAL_LOG, "r") as f:
                     cur_log = f.read()
-                if "HTTP/1.0 200 OK - Download Complete!" in cur_log or "Download failed" in cur_log or "already installed in SeldFS" in cur_log:
+                if "HTTP/1.0 200 OK - Download Complete!" in cur_log or "Download failed" in cur_log:
                     dl_done = True
                     break
 
         with open(SERIAL_LOG, "r") as f:
             log2 = f.read()
 
-        assert ("HTTP/1.0 200 OK - Download Complete!" in log2) or ("already installed in SeldFS" in log2), f"Download check failed! Log:\n{log2}"
-        print("[+] PASS: Successfully verified /bin/tor in SeldFS.")
+        assert "HTTP/1.0 200 OK - Download Complete!" in log2, f"Download failed! Log:\n{log2}"
+        assert "/bin/tor successfully installed" in log2, "Failed to install /bin/tor in SeldFS"
+        print("[+] PASS: Successfully downloaded and installed /bin/tor over TCP/IP.")
         img_dl = capture_screenshot(s, "tests/22_tor_downloaded.png")
         assert img_dl.size == (680, 334)
 
