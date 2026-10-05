@@ -1,7 +1,7 @@
 /*
  * SeldOS - Humboldt Kernel Project
- * TempleOS-Compatible PC Speaker Sound Subsystem
- * Direct 8254 PIT Timer 2 Square Wave Synthesis & Ona Note Engine
+ * Sovereign PC Speaker Sound Subsystem Interface
+ * Direct 8254 PIT Timer 2 Square Wave Synthesis & Note Engine
  * GPLv3 Licensed.
  */
 

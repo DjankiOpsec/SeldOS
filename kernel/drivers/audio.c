@@ -1,8 +1,7 @@
 /*
  * SeldOS - Humboldt Kernel Project
- * TempleOS PC Speaker Audio Subsystem Implementation
- * Pure 8254 PIT Timer 2 Square Wave Synthesis & Ona Note Engine
- * Faithful to Terry A. Davis's TempleOS KMisc.HC / Snd / Beep Architecture.
+ * Sovereign PC Speaker Audio Subsystem Implementation
+ * Pure 8254 PIT Timer 2 Square Wave Synthesis & Note Engine
  * GPLv3 Licensed.
  */
 
@@ -21,11 +20,10 @@
 static struct audio_info s_audio_info = {0};
 
 /*
- * TempleOS Ona Table (1..127):
- * Formula: 440.0 / 32.0 * 2^(ona / 12.0)
- * ona = 60 corresponds to standard concert pitch A4 (440 Hz)
- * ona = 62 corresponds to Terry Davis's default Beep note (494 Hz, B4)
- * ona = 72 corresponds to A5 (880 Hz)
+ * Musical Semitone Note Frequency Table (1..127):
+ * Formula: 440.0 / 32.0 * 2^(note / 12.0)
+ * note 60 = standard concert pitch A4 (440 Hz)
+ * note 72 = A5 (880 Hz)
  */
 static const uint16_t s_ona_to_freq[128] = {
         0,    15,    15,    16,    17,    18,    19,    21, // ona 0..7
@@ -48,7 +46,6 @@ static const uint16_t s_ona_to_freq[128] = {
 
 uint32_t audio_ona_to_freq(int8_t ona) {
     if (ona <= 0) return 0;
-    if (ona > 127) ona = 127;
     return (uint32_t)s_ona_to_freq[(uint8_t)ona];
 }
 
@@ -83,8 +80,7 @@ int8_t audio_freq_to_ona(uint32_t freq_hz) {
 
 /*
  * audio_play_tone:
- * Direct TempleOS Snd frequency register programming.
- * Sets 8254 PIT Channel 2 divisor and enables Port 0x61 speaker gate and data bits.
+ * Frequency register programming for PIT Channel 2 and Port 0x61.
  */
 void audio_play_tone(uint32_t freq_hz) {
     if (freq_hz < 20 || freq_hz > 20000) {
@@ -118,7 +114,7 @@ void audio_stop_tone(void) {
 
 /*
  * audio_snd:
- * TempleOS Snd(I8 ona=0) equivalent.
+ * Continuous tone control by semitone note index.
  */
 void audio_snd(int8_t ona) {
     if (ona <= 0) {
@@ -130,7 +126,7 @@ void audio_snd(int8_t ona) {
 
 /*
  * audio_beep:
- * TempleOS Beep(I8 ona=62, Bool busy=FALSE) equivalent with overflow protection.
+ * Timed beep tone generator with overflow protection.
  */
 void audio_beep(uint32_t freq_hz, uint32_t duration_ms) {
     if (freq_hz == 0) {
@@ -151,17 +147,15 @@ void audio_beep(uint32_t freq_hz, uint32_t duration_ms) {
 
 /*
  * audio_chime_boot:
- * TempleOS signature boot sound: note ona 62 (494 Hz, B4) for 70 ms.
+ * Silent boot - no automatic startup tone.
  */
 void audio_chime_boot(void) {
-    audio_play_tone(494);
-    pit_sleep_ms(70);
-    audio_stop_tone();
+    // Silent boot
 }
 
 /*
  * audio_init:
- * Initialize TempleOS PC Speaker audio subsystem.
+ * Initialize PC Speaker audio subsystem.
  */
 void audio_init(void) {
     memset(&s_audio_info, 0, sizeof(s_audio_info));
@@ -169,10 +163,7 @@ void audio_init(void) {
     s_audio_info.active_devices = AUDIO_DEV_SPEAKER;
 
     audio_stop_tone();
-    serial_puts("[+] Audio: TempleOS PC Speaker subsystem active (PIT Ch2, Port 0x61).\n");
-
-    // Play TempleOS signature boot tone
-    audio_chime_boot();
+    serial_puts("[+] Audio: PC Speaker driver online (PIT Ch2, Port 0x61).\n");
 }
 
 struct audio_info audio_get_info(void) {

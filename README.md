@@ -446,8 +446,8 @@ python3 scripts/opsec_gateway.py --status   # Проверка статуса
 python3 scripts/opsec_gateway.py --daemon   # Запуск демона на порту 8080
 python3 scripts/opsec_gateway.py --stop     # Остановка демона
 
-# 4. Запуск в QEMU с прямым выводом отладочных сообщений ядра в консоль
-qemu-system-x86_64 -cdrom build/seldos.iso -serial stdio -vga std -net nic,model=e1000 -net user
+# 4. Запуск в QEMU с прямым выводом отладочных сообщений ядра и поддержкой звука
+qemu-system-x86_64 -cdrom build/seldos.iso -serial stdio -vga std -net nic,model=e1000 -net user -audiodev pa,id=audio0 -machine pcspk-audiodev=audio0
 
 # 5. Очистка артефактов сборки
 make clean

@@ -814,7 +814,7 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
             uint32_t dur = (uint32_t)a2;
 
             if (dur == 0) {
-                // Continuous tone control (TempleOS Snd primitive)
+                // Continuous tone control (Snd primitive)
                 if (freq == 0) {
                     audio_stop_tone();
                 } else {
