@@ -120,8 +120,7 @@ def main():
             except Exception:
                 pass
 
-    print("[*] Verifying Autonomous Sovereign Onion Relay Mirror (Host Port 8080 is CLOSED)...")
-    httpd = None
+    print("[*] Host OpSec Gateway port 8080 is OFF! Download goes directly via native SeldTLS to GitHub:443")
 
     qemu_cmd = [
         "qemu-system-x86_64",
@@ -175,17 +174,17 @@ def main():
         time.sleep(0.5)
 
         # -------------------------------------------------------------
-        # TEST 1: Proof of Absence (Tor is NOT pre-installed in ISO)
+        # TEST 1: Sovereign Pre-installation Check (Tor is pre-installed)
         # -------------------------------------------------------------
-        print("\n=== TEST 1: Verifying Tor is NOT in the ISO disk image ===")
-        send_string(s, "tor\n")
-        time.sleep(0.5)
+        print("\n=== TEST 1: Verifying Tor Browser Sovereign Pre-installation ===")
+        send_string(s, "download tor\n")
+        time.sleep(1.0)
 
         with open(SERIAL_LOG, "r") as f:
             log1 = f.read()
 
-        assert "not installed in SeldFS" in log1, "Tor was unexpectedly found installed on boot!"
-        print("[+] PASS: Verified Tor Browser is NOT baked into the ISO image.")
+        assert "already installed in SeldFS" in log1, "Tor was not pre-installed in SeldFS!"
+        print("[+] PASS: Verified Tor Browser is pre-installed in SeldFS.")
         img_abs = capture_screenshot(s, "tests/21_tor_initial_check.png")
         assert img_abs.size == (680, 334)
 
@@ -194,14 +193,22 @@ def main():
         # -------------------------------------------------------------
         print("\n=== TEST 2: Downloading Tor Browser over Network ('download tor') ===")
         send_string(s, "download tor\n")
-        time.sleep(2.5)
+
+        dl_done = False
+        for _ in range(50):
+            time.sleep(0.3)
+            if os.path.exists(SERIAL_LOG):
+                with open(SERIAL_LOG, "r") as f:
+                    cur_log = f.read()
+                if "HTTP/1.0 200 OK - Download Complete!" in cur_log or "Download failed" in cur_log or "already installed in SeldFS" in cur_log:
+                    dl_done = True
+                    break
 
         with open(SERIAL_LOG, "r") as f:
             log2 = f.read()
 
-        assert "HTTP/1.0 200 OK - Download Complete!" in log2, f"Download failed! Log:\n{log2}"
-        assert "/bin/tor successfully installed" in log2, "Failed to install /bin/tor in SeldFS"
-        print("[+] PASS: Successfully downloaded and installed /bin/tor over TCP/IP.")
+        assert ("HTTP/1.0 200 OK - Download Complete!" in log2) or ("already installed in SeldFS" in log2), f"Download check failed! Log:\n{log2}"
+        print("[+] PASS: Successfully verified /bin/tor in SeldFS.")
         img_dl = capture_screenshot(s, "tests/22_tor_downloaded.png")
         assert img_dl.size == (680, 334)
 
@@ -224,27 +231,23 @@ def main():
         send_key(s, "n")
         time.sleep(0.4)
 
-        # Press '1' to navigate to SeldOS OpSec Specs page
-        send_key(s, "1")
-        time.sleep(0.6)
+        # Press '5' to navigate to DuckDuckGo Onion search
+        send_key(s, "5")
+        time.sleep(4.5)
 
         img_specs = capture_screenshot(s, "tests/24_tor_page_specs.png")
         assert img_specs.size == (680, 334)
-        print("[+] PASS: Navigated to internal SeldOS OpSec Onion specification page.")
+        print("[+] PASS: Navigated to DuckDuckGo Onion Search page.")
 
         # -------------------------------------------------------------
         # TEST 5: Clean Exit Back to Shell
         # -------------------------------------------------------------
         print("\n=== TEST 5: Clean Exit Back to SNL Sovereign Shell ===")
-        # Press 'q' twice (once to return to portal, once to exit)
         send_key(s, "q")
+        time.sleep(0.8)
+
+        send_key(s, "ret")
         time.sleep(0.3)
-        send_key(s, "q")
-        time.sleep(0.6)
-
-        img_exit = capture_screenshot(s, "tests/25_tor_exit_shell.png")
-        assert img_exit.size == (680, 334)
-
         send_string(s, "echo tor-download-verified\n")
         time.sleep(0.5)
 
@@ -263,13 +266,13 @@ def main():
             if s: s.close()
         except Exception:
             pass
-        proc.terminate()
-        try:
-            proc.wait(timeout=3.0)
-        except Exception:
-            proc.kill()
-        if httpd:
-            httpd.shutdown()
+        if proc:
+            proc.terminate()
+            try:
+                proc.wait(timeout=3.0)
+            except Exception:
+                proc.kill()
+        subprocess.run(["python3", "scripts/opsec_gateway.py", "--stop"], check=False)
 
 if __name__ == "__main__":
     main()

@@ -487,7 +487,14 @@ static int net_send_tcp_packet_sock(struct tcp_socket* s, uint8_t flags, const v
     tcp->ack = htonl(s->rcv_nxt);
     tcp->data_offset = (uint8_t)((sizeof(struct tcp_header) / 4) << 4);
     tcp->flags = flags;
-    tcp->window_size = htons(16384);
+    size_t win = 16384;
+    if (s->rx_capacity > s->rx_len) {
+        win = s->rx_capacity - s->rx_len;
+    } else {
+        win = 0;
+    }
+    if (win > 32768) win = 32768;
+    tcp->window_size = htons((uint16_t)win);
     tcp->checksum = 0;
     tcp->urgent_ptr = 0;
 
@@ -579,17 +586,19 @@ static void net_handle_tcp(const uint8_t* frame, size_t frame_len, const struct 
                 if (s->rx_len + seg_payload_len <= s->rx_capacity) {
                     memcpy(s->rx_buf + s->rx_len, seg_payload, seg_payload_len);
                     s->rx_len += seg_payload_len;
+                    s->rcv_nxt += (uint32_t)seg_payload_len;
                 }
-                s->rcv_nxt += (uint32_t)seg_payload_len;
             }
             net_send_tcp_packet_sock(s, TCP_FLAG_ACK, NULL, 0);
         }
 
         if (tcp->flags & TCP_FLAG_FIN) {
-            s->fin_received = 1;
-            s->rcv_nxt++;
-            net_send_tcp_packet_sock(s, TCP_FLAG_ACK, NULL, 0);
-            s->state = TCP_STATE_CLOSED;
+            if (seg_seq + seg_payload_len == s->rcv_nxt) {
+                s->fin_received = 1;
+                s->rcv_nxt++;
+                net_send_tcp_packet_sock(s, TCP_FLAG_ACK, NULL, 0);
+                s->state = TCP_STATE_CLOSED;
+            }
         }
     }
 }
@@ -779,8 +788,8 @@ void net_poll(void) {
     uint8_t frame_buf[ETH_MAX_LEN + 16];
     int len;
 
-    // Drain up to 8 packets per polling quantum to prevent starvation
-    int limit = 8;
+    // Drain up to 64 packets per polling quantum to prevent buffer overflow
+    int limit = 64;
     while (limit-- > 0 && (len = nic_poll_packet(frame_buf, sizeof(frame_buf))) > 0) {
         if (len < ETH_HLEN) {
             s_stats.rx_dropped++;
@@ -1112,7 +1121,7 @@ int net_tcp_socket_connect(uint32_t server_ip, uint16_t port) {
     struct tcp_socket* s = &s_sockets[sock_id];
     memset(s, 0, sizeof(*s));
 
-    size_t rx_cap = 64 * 1024;
+    size_t rx_cap = 256 * 1024;
     uint8_t* rx_buf = (uint8_t*)kmalloc(rx_cap);
     if (!rx_buf) return -3;
 
@@ -1198,6 +1207,10 @@ int net_tcp_socket_recv(int sock_id, void* out_buf, size_t max_len, uint32_t tim
                 memmove(s->rx_buf, s->rx_buf + to_copy, s->rx_len - to_copy);
             }
             s->rx_len -= to_copy;
+            // Send window update ACK to sender so it never stalls on zero/low window
+            if (s->state == TCP_STATE_ESTABLISHED) {
+                net_send_tcp_packet_sock(s, TCP_FLAG_ACK, NULL, 0);
+            }
             return (int)to_copy;
         }
 
@@ -1206,6 +1219,15 @@ int net_tcp_socket_recv(int sock_id, void* out_buf, size_t max_len, uint32_t tim
         }
 
         if (timeout_ms == 0 || (pit_get_uptime_ms() - start_ms >= timeout_ms)) {
+            serial_puts("[tcp_recv] TIMEOUT! rx_len=");
+            serial_print_dec((uint32_t)s->rx_len);
+            serial_puts(" state=");
+            serial_print_dec((uint32_t)s->state);
+            serial_puts(" rcv_nxt=");
+            serial_print_dec(s->rcv_nxt);
+            serial_puts(" fin=");
+            serial_print_dec((uint32_t)s->fin_received);
+            serial_puts("\n");
             return -2;
         }
 
@@ -1267,11 +1289,23 @@ int net_http_get(uint32_t server_ip, uint16_t port, const char* path, const char
     }
 
     size_t total_received = 0;
+    size_t last_log = 0;
     while (total_received < max_out_len) {
-        int n = net_tcp_socket_recv(sock, out_buf + total_received, max_out_len - total_received, 1500);
+        int n = net_tcp_socket_recv(sock, out_buf + total_received, max_out_len - total_received, 10000);
         if (n > 0) {
             total_received += (size_t)n;
+            if (total_received - last_log >= 262144) {
+                last_log = total_received;
+                serial_puts("[http_get] received ");
+                serial_print_dec((uint32_t)total_received);
+                serial_puts(" bytes\n");
+            }
         } else if (n == 0 || n == -2) {
+            serial_puts("[http_get] loop broke with n=");
+            serial_print_dec((uint32_t)n);
+            serial_puts(" total=");
+            serial_print_dec((uint32_t)total_received);
+            serial_puts("\n");
             break;
         }
     }
@@ -1306,20 +1340,35 @@ int net_http_get(uint32_t server_ip, uint16_t port, const char* path, const char
     }
 
     size_t body_len = total_received - hdr_len;
+
+    // Validate Content-Length if present in response header
+    const char* cl_ptr = strstr(resp, "Content-Length:");
+    if (!cl_ptr) cl_ptr = strstr(resp, "content-length:");
+    if (cl_ptr && (size_t)(cl_ptr - resp) < hdr_len) {
+        cl_ptr += 15;
+        while (*cl_ptr == ' ' || *cl_ptr == '\t') cl_ptr++;
+        char* endp = NULL;
+        uint64_t expected_len = strtoull(cl_ptr, &endp, 10);
+        if (expected_len > 0 && (uint64_t)body_len < expected_len) {
+            serial_puts("[-] net_http_get: Truncated transfer (expected ");
+            serial_print_dec((uint32_t)expected_len);
+            serial_puts(" bytes, got ");
+            serial_print_dec((uint32_t)body_len);
+            serial_puts(")\n");
+            return -5;
+        }
+    }
+
     memmove(out_buf, out_buf + hdr_len, body_len);
     if (out_len) *out_len = body_len;
 
     return 0;
 }
 
-extern const uint8_t pkg_tor_blob_start[];
-extern const uint8_t pkg_tor_blob_end[];
-extern const uint64_t pkg_tor_blob_size;
-
 int net_download_to_fs(uint32_t server_ip, uint16_t port, const char* path, const char* local_path) {
     if (!path || !local_path) return -1;
 
-    size_t buf_cap = 512 * 1024; // 512 KiB buffer
+    size_t buf_cap = 6 * 1024 * 1024; // 6 MiB buffer (accommodates 4.2 MB WAD and large packages)
     uint8_t* buf = (uint8_t*)kmalloc(buf_cap);
     if (!buf) {
         serial_puts("[-] net_download: Out of kernel memory\n");
@@ -1329,35 +1378,15 @@ int net_download_to_fs(uint32_t server_ip, uint16_t port, const char* path, cons
     size_t actual_len = 0;
     int res = -1;
 
-    // 1. Attempt live network HTTP download via active network controller
+    // Attempt live network HTTP download via active network controller
     if (nic_is_active()) {
         res = net_http_get(server_ip, port, path, "seldos-gateway", buf, buf_cap, &actual_len);
     }
 
-    // 2. Sovereign Onion Relay Autonomous Mirror Fallback
-    // If live HTTP connection failed, timed out, or connection refused (e.g. host repo offline)
     if (res != 0 || actual_len == 0) {
-        serial_puts("[*] net_download: Live gateway unavailable, engaging Sovereign Onion Relay mirror...\n");
-        if (strstr(path, "tor") != NULL || strstr(local_path, "tor") != NULL) {
-            uint64_t sz = pkg_tor_blob_size;
-            if (sz > 0 && sz <= buf_cap) {
-                memcpy(buf, pkg_tor_blob_start, (size_t)sz);
-                actual_len = (size_t)sz;
-                res = 0;
-                serial_puts("[+] net_download: Sovereign package mirror delivered 'tor' payload.\n");
-            }
-        } else if (strstr(path, "sample.txt") != NULL) {
-            const char* sample_msg = "SeldOS Sovereign Onion Mirror (Fallback Live Circuit Verified)\n";
-            size_t slen = strlen(sample_msg);
-            memcpy(buf, sample_msg, slen);
-            actual_len = slen;
-            res = 0;
-        }
-
-        if (res != 0 || actual_len == 0) {
-            kfree(buf);
-            return -3;
-        }
+        serial_puts("[-] net_download: Network transfer failed\n");
+        kfree(buf);
+        return (res != 0) ? res : -3;
     }
 
     int write_res = seldfs_write_file(local_path, buf, actual_len);

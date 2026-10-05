@@ -171,7 +171,8 @@ def main():
         "uname",
         "ps",
         "fm",
-        "download"
+        "download",
+        "tor"
     ]
 
     files_to_write = []
@@ -188,23 +189,6 @@ def main():
 
         target_name = f"/bin/{util}"
         files_to_write.append((target_name, data))
-
-    # Provision Doom binary if present
-    doom_bin = os.path.join(bin_dir, "doom")
-    if os.path.exists(doom_bin):
-        with open(doom_bin, "rb") as f:
-            data = f.read()
-        files_to_write.append(("/bin/doom", data))
-
-    # Provision Doom WAD if present
-    wad_candidates = ["doom1.wad", "build/doom1.wad", "userspace/doom/doom1.wad"]
-    for wad_path in wad_candidates:
-        if os.path.exists(wad_path):
-            print(f"[*] Found DOOM WAD: {wad_path} ({os.path.getsize(wad_path)} bytes)")
-            with open(wad_path, "rb") as f:
-                data = f.read()
-            files_to_write.append(("doom1.wad", data))
-            break
 
     sample_readme = (
         "Welcome to SeldOS (Humboldt Kernel Project)!\n"
@@ -226,10 +210,6 @@ def main():
         "4. Cooperative Scheduler with Ring 0 / Ring 3 Privilege Gates\n"
     ).encode("utf-8")
     files_to_write.append(("opsec.txt", sample_opsec))
-
-    if os.path.exists("seldos_logo.svgz"):
-        with open("seldos_logo.svgz", "rb") as f:
-            files_to_write.append(("seldos_logo.svgz", f.read()))
 
     create_seldfs_image(output_disk, files_to_write)
 

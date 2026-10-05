@@ -168,15 +168,168 @@ int seld_net_download(uint32_t ip, uint16_t port, const char* url_path, const ch
     return (int)seld_syscall4(SYS_NET_DOWNLOAD, (long)ip, (long)port, (long)url_path, (long)local_path);
 }
 
+#include "seld_tls.h"
+#include <stdio.h>
+#include <stdlib.h>
+
+int seld_https_download(const char* host, const char* path, const char* local_path) {
+    if (!host || !path || !local_path) return -1;
+
+    uint32_t ip = 0;
+    if (seld_dns_resolve(host, &ip) != 0 || ip == 0) {
+        return -2; // DNS resolution failed
+    }
+
+    printf("[*] DNS: %s -> %u.%u.%u.%u\n",
+           host,
+           (unsigned int)(ip & 0xFF),
+           (unsigned int)((ip >> 8) & 0xFF),
+           (unsigned int)((ip >> 16) & 0xFF),
+           (unsigned int)((ip >> 24) & 0xFF));
+
+    int sock = seld_tcp_connect(ip, 443);
+    if (sock < 0) return -3; // TCP connection failed
+
+    printf("[*] TCP connected to port 443. Starting sovereign SeldTLS 1.3 handshake...\n");
+
+    struct seld_tls_conn* tls = (struct seld_tls_conn*)malloc(sizeof(struct seld_tls_conn));
+    if (!tls) {
+        seld_tcp_close(sock);
+        return -4;
+    }
+
+    int hs = seld_tls_handshake(tls, sock, host);
+    if (hs != 0) {
+        printf("[-] SeldTLS handshake failed (code=%d)\n", hs);
+        seld_tls_close(tls);
+        free(tls);
+        return -4; // TLS 1.3 handshake failed
+    }
+
+    printf("[+] TLS 1.3 handshake negotiated! Cipher: TLS_AES_128_GCM_SHA256\n");
+    printf("[*] Fetching %s via encrypted tunnel...\n", path);
+
+    char req[512];
+    snprintf(req, sizeof(req),
+        "GET %s HTTP/1.1\r\n"
+        "Host: %s\r\n"
+        "User-Agent: SeldOS-Native-SeldTLS/1.0\r\n"
+        "Accept: */*\r\n"
+        "Connection: close\r\n\r\n",
+        path, host
+    );
+
+    if (seld_tls_write(tls, req, strlen(req)) <= 0) {
+        seld_tls_close(tls);
+        free(tls);
+        return -5;
+    }
+
+    // Read response body into memory buffer (up to 5 MiB for binaries & WAD assets)
+    size_t cap = 5 * 1024 * 1024;
+    uint8_t* resp_buf = (uint8_t*)malloc(cap);
+    if (!resp_buf) {
+        seld_tls_close(tls);
+        free(tls);
+        return -6;
+    }
+
+    size_t total_read = 0;
+    while (total_read < cap) {
+        int n = seld_tls_read(tls, resp_buf + total_read, cap - total_read, 8000);
+        if (n > 0) {
+            total_read += (size_t)n;
+        } else if (n == 0) {
+            break; // EOF or close_notify
+        } else {
+            // Read error or TLS verification failure
+            seld_tls_close(tls);
+            free(tls);
+            free(resp_buf);
+            return -7;
+        }
+    }
+    seld_tls_close(tls);
+    free(tls);
+
+    if (total_read == 0) {
+        free(resp_buf);
+        return -7;
+    }
+
+    // Separate HTTP header from body
+    size_t hdr_len = 0;
+    for (size_t i = 0; i + 3 < total_read; i++) {
+        if (resp_buf[i] == '\r' && resp_buf[i+1] == '\n' && resp_buf[i+2] == '\r' && resp_buf[i+3] == '\n') {
+            hdr_len = i + 4;
+            break;
+        }
+    }
+
+    if (hdr_len == 0 || hdr_len >= total_read) {
+        free(resp_buf);
+        return -8;
+    }
+
+    // Check 200 OK
+    if (strncmp((char*)resp_buf, "HTTP/1.1 200", 12) != 0 &&
+        strncmp((char*)resp_buf, "HTTP/1.0 200", 12) != 0) {
+        free(resp_buf);
+        return -9; // HTTP status not 200
+    }
+
+    uint8_t* body = resp_buf + hdr_len;
+    size_t body_len = total_read - hdr_len;
+
+    // Check Content-Length if present in header
+    char* cl_ptr = strstr((char*)resp_buf, "content-length:");
+    if (!cl_ptr) cl_ptr = strstr((char*)resp_buf, "Content-Length:");
+    if (cl_ptr && (size_t)(cl_ptr - (char*)resp_buf) < hdr_len) {
+        cl_ptr += 15;
+        while (*cl_ptr == ' ' || *cl_ptr == '\t') cl_ptr++;
+        size_t expected_len = (size_t)atoi(cl_ptr);
+        if (expected_len > 0 && body_len < expected_len) {
+            free(resp_buf);
+            return -8; // Truncated transfer
+        }
+    }
+
+    int wres = seld_writefile(local_path, body, body_len);
+    free(resp_buf);
+
+    return (wres == 0) ? 0 : -10;
+}
+
 int seld_download_url(const char* url, const char* local_path) {
     if (!url || !local_path) return -1;
 
+    // Tor Browser package: Direct GitHub repo fetch over SeldTLS 1.3
     if (strcmp(url, "tor") == 0 || strcmp(url, "torbrowser") == 0) {
-        return seld_net_download(0, 8080, "/tor", local_path);
+        return seld_https_download("raw.githubusercontent.com",
+                                   "/DjankiOpsec/SeldOS/main/build/bin/tor",
+                                   local_path);
+    }
+
+    // DOOM package: Direct GitHub repo fetch over SeldTLS 1.3
+    if (strcmp(url, "doom") == 0) {
+        return seld_https_download("raw.githubusercontent.com",
+                                   "/DjankiOpsec/SeldOS/main/build/bin/doom",
+                                   local_path);
+    }
+
+    // DOOM WAD game assets: Direct GitHub repo fetch over SeldTLS 1.3
+    if (strcmp(url, "wad") == 0 || strcmp(url, "doom1.wad") == 0) {
+        return seld_https_download("raw.githubusercontent.com",
+                                   "/DjankiOpsec/SeldOS/main/doom1.wad",
+                                   local_path);
     }
 
     const char* p = url;
-    if (strncmp(p, "http://", 7) == 0) {
+    int is_https = 0;
+    if (strncmp(p, "https://", 8) == 0) {
+        is_https = 1;
+        p += 8;
+    } else if (strncmp(p, "http://", 7) == 0) {
         p += 7;
     }
 
@@ -187,7 +340,7 @@ int seld_download_url(const char* url, const char* local_path) {
     }
     host_str[hidx] = '\0';
 
-    uint16_t port = 80;
+    uint16_t port = is_https ? 443 : 80;
     if (*p == ':') {
         p++;
         port = 0;
@@ -197,6 +350,10 @@ int seld_download_url(const char* url, const char* local_path) {
     }
 
     const char* path = (*p == '/') ? p : "/";
+
+    if (is_https) {
+        return seld_https_download(host_str, path, local_path);
+    }
 
     uint32_t ip = 0;
     if (strcmp(host_str, "localhost") == 0 || strcmp(host_str, "127.0.0.1") == 0 || strcmp(host_str, "gateway") == 0) {

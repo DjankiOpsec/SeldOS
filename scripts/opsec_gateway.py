@@ -23,7 +23,7 @@ import mimetypes
 import subprocess
 import json
 import re
-from urllib.parse import unquote, unquote_plus, urljoin
+from urllib.parse import unquote, unquote_plus, quote_plus, urljoin
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
 try:
@@ -89,149 +89,7 @@ def ensure_tor_running():
             pass
     return False
 
-def search_duckduckgo_onion(query):
-    query_clean = query.strip()
-    if not query_clean:
-        query_clean = "linux"
 
-    log(f"Executing REAL DuckDuckGo .onion search for: '{query_clean}'")
-    ensure_tor_running()
-
-    proxies = {
-        "http": f"socks5h://{TOR_SOCKS5_HOST}:{TOR_SOCKS5_PORT}",
-        "https": f"socks5h://{TOR_SOCKS5_HOST}:{TOR_SOCKS5_PORT}"
-    }
-    ua = "Mozilla/5.0 (Windows NT 10.0; rv:109.0) Gecko/20100101 Firefox/115.0"
-    headers = {
-        "User-Agent": ua,
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.5"
-    }
-
-    results = []
-    onion_url = f"https://{DDG_ONION_HOST}/lite/?q={query_clean}"
-
-    # 1. Fetch from Real Tor DuckDuckGo Onion Hidden Service
-    if HAVE_REQUESTS:
-        try:
-            r = requests.get(onion_url, proxies=proxies, headers=headers, timeout=14, verify=False)
-            if r.status_code == 200 and len(r.text) > 500:
-                html = r.text
-                if HAVE_BS4:
-                    soup = BeautifulSoup(html, "html.parser")
-                    for tr in soup.find_all("tr"):
-                        link = tr.find("a", class_="result-link")
-                        if link:
-                            title = link.get_text(strip=True).replace("|", "/")
-                            href = link.get("href", "")
-                            m = re.search(r"uddg=([^&]+)", href)
-                            real_url = unquote(m.group(1)) if m else href
-                            domain = real_url.split("/")[2] if "://" in real_url else real_url
-                            snip_tr = tr.find_next_sibling("tr")
-                            snippet = ""
-                            if snip_tr:
-                                snip_td = snip_tr.find("td", class_="result-snippet")
-                                if snip_td:
-                                    snippet = snip_td.get_text(strip=True).replace("|", "/").replace("\n", " ")
-                            results.append((title, real_url, domain, snippet))
-                else:
-                    # Regex fallback parser
-                    links = re.findall(r'<a[^>]*class=["\']result-link["\'][^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', html)
-                    for href, title in links:
-                        m = re.search(r"uddg=([^&]+)", href)
-                        real_url = unquote(m.group(1)) if m else href
-                        domain = real_url.split("/")[2] if "://" in real_url else real_url
-                        clean_title = re.sub(r"<[^>]+>", "", title).strip().replace("|", "/")
-                        results.append((clean_title, real_url, domain, "DuckDuckGo Sovereign Search Result"))
-                log(f"Successfully fetched {len(results)} live results from DuckDuckGo .onion for '{query_clean}'")
-        except Exception as e:
-            log(f"Notice: Live Onion request for '{query_clean}' encountered: {e}. Falling back to Instant Answer API.")
-
-    # 2. Query DuckDuckGo Instant Answer API for Knowledge Card & Fallback
-    kc_title = query_clean.capitalize()
-    kc_text = ""
-    kc_source = "DuckDuckGo"
-    kc_url = f"https://{DDG_ONION_HOST}/?q={query_clean}"
-
-    try:
-        api_url = f"https://api.duckduckgo.com/?q={query_clean}&format=json&no_html=1"
-        kr = requests.get(api_url, timeout=5) if HAVE_REQUESTS else None
-        if kr and kr.status_code == 200:
-            kd = kr.json()
-            if kd.get("Heading"):
-                kc_title = kd["Heading"]
-            if kd.get("AbstractText"):
-                kc_text = kd["AbstractText"].replace("|", "/").replace("\n", " ")
-                kc_source = kd.get("AbstractSource", "Wikipedia")
-                kc_url = kd.get("AbstractURL", "")
-            elif kd.get("RelatedTopics"):
-                # Search for best related topic
-                for item in kd["RelatedTopics"]:
-                    if isinstance(item, dict) and item.get("Text"):
-                        txt = item["Text"].replace("|", "/").replace("\n", " ")
-                        # Prefer topic matching mascot/penguin/linux for tux
-                        if not kc_text or any(k in txt.lower() for k in ["mascot", "penguin", "linux", "kernel", "os"]):
-                            kc_text = txt
-                            kc_url = item.get("FirstURL", "")
-                            kc_source = "Wikipedia"
-                            if any(k in txt.lower() for k in ["mascot", "penguin"]):
-                                break
-
-            # If onion search had no results, use RelatedTopics from Instant Answer
-            if not results and kd.get("RelatedTopics"):
-                for item in kd["RelatedTopics"]:
-                    if isinstance(item, dict) and item.get("Text") and item.get("FirstURL"):
-                        title = item.get("FirstURL", "").split("/")[-1].replace("_", " ")
-                        if not title: title = query_clean
-                        href = item["FirstURL"]
-                        domain = href.split("/")[2] if "://" in href else "duckduckgo.com"
-                        results.append((title, href, domain, item["Text"].replace("|", "/")))
-    except Exception as e:
-        log(f"Instant Answer API lookup: {e}")
-
-    # Fallback knowledge card from top result
-    if not kc_text and results:
-        kc_title = results[0][0]
-        kc_text = results[0][3]
-        kc_source = results[0][2]
-        kc_url = results[0][1]
-
-    # Deterministic query fallbacks if completely offline
-    if not results:
-        if "tux" in query_clean.lower():
-            results = [
-                ("Download Tux Paint", "https://tuxpaint.org/download/", "tuxpaint.org", "Tux Paint is a fun and easy-to-use painting program that runs on various platforms and devices. Download the latest version, view the gallery, or learn more about its features and history."),
-                ("Tux (mascot) - Wikipedia", "https://en.wikipedia.org/wiki/Tux_(mascot)", "en.wikipedia.org", "Tux is a penguin character and the official mascot of the Linux kernel, created by Linus Torvalds and Larry Ewing. Learn about the history, uses and reception of Tux."),
-                ("Tux Paint - Free art software for kids of all ages", "https://tuxpaint.org/", "tuxpaint.org", "Tux Paint is a free, award-winning drawing program for children ages 3 to 12. Tux Paint is used in schools around the world as a computer literacy drawing activity."),
-                ("Tux Paint - Wikipedia", "https://en.wikipedia.org/wiki/Tux_Paint", "en.wikipedia.org", "Tux Paint is a free and open source raster graphics editor geared towards young children. The project was started in 2002 by Bill Kendrick who continues to maintain it.")
-            ]
-            kc_title = "Tux"
-            kc_text = "Tux is a penguin character and the official brand character of the Linux kernel, created by Linus Torvalds and Larry Ewing."
-            kc_source = "Wikipedia"
-            kc_url = "https://en.wikipedia.org/wiki/Tux_(mascot)"
-        else:
-            results = [
-                ("Download Linux | Linux.org", "https://www.linux.org/pages/download/", "Linux.org", "Find links to popular Linux distributions and download pages on Linux.org Forums. Explore different Linux options."),
-                ("Linux.org", "https://www.linux.org/", "Linux.org", "Of course, many companies may need an OS other than Linux, such as Windows. The setup is straightforward like Linux."),
-                ("Linux — Википедия", "https://ru.wikipedia.org/wiki/Linux", "ru.wikipedia.org", "Linux-системы реализуются на модульных принципах, стандартах и соглашениях. Монолитное ядро..."),
-                ("Linux - Wikipedia", "https://en.wikipedia.org/wiki/Linux", "en.wikipedia.org", "Linux is a family of free and open-source software Unix-like operating systems based on Linux kernel.")
-            ]
-            if not kc_text:
-                kc_title = "Linux"
-                kc_text = "Linux — семейство Unix-подобных операционных систем на базе ядра Linux, включая тот или иной набор утилит и программ GNU."
-                kc_source = "Wikipedia (RU)"
-                kc_url = "https://ru.wikipedia.org/wiki/Linux"
-
-    lines = [
-        "# SELDOS DUCKDUCKGO ONION SERP V1",
-        f"QUERY: {query_clean}",
-        f"COUNT: {len(results)}"
-    ]
-    for t, u, d, s in results[:DDG_MAX_RESULTS if 'DDG_MAX_RESULTS' in globals() else 8]:
-        lines.append(f"RESULT|{t}|{u}|{d}|{s}")
-    lines.append(f"CARD|{kc_title}|{kc_text[:250]}|{kc_source}|{kc_url}")
-
-    return "\n".join(lines) + "\n"
 
 def clean_text_for_seldos(text: str) -> str:
     replacements = {
@@ -268,19 +126,73 @@ def sanitize_html_for_seldos(content_bytes: bytes, url: str) -> bytes:
             title_tag = soup.find('title')
             title_text = title_tag.get_text().strip() if title_tag else 'Web Page'
 
-            # 1. Target main article body (e.g. Wikipedia mw-parser-output, article, main)
-            main_content = (
-                soup.find(class_=re.compile(r'mw-parser-output|article-content|entry-content|post-content', re.I)) or
-                soup.find('article') or
-                soup.find('main') or
-                soup.find('div', id=re.compile(r'^(content|main|article)$', re.I)) or
-                soup.find('div', class_=re.compile(r'^(content|main|article)$', re.I)) or
-                soup.find('body') or
-                soup
-            )
+            # Handle DuckDuckGo Search Result Pages (Onion & Clearnet)
+            if 'duckduckgo' in url or DDG_ONION_HOST in url:
+                results = soup.find_all(class_=lambda c: c and 'result' in c and 'web-result' in c)
+                if not results:
+                    # Also check alternative result link containers
+                    results = soup.find_all(class_=lambda c: c and 'result__body' in c)
+                if results:
+                    q_title = title_text.replace(" at DuckDuckGo", "").strip()
+                    out = [
+                        f"<!doctype html><html><head><title>{title_text}</title></head><body>",
+                        f"<h1>DuckDuckGo Onion Search: {clean_text_for_seldos(q_title)}</h1>",
+                        f"<p>Tor Sovereign Hidden Service (duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion)</p><hr>"
+                    ]
+                    for res in results:
+                        t = res.find(class_='result__title')
+                        if not t: continue
+                        a = t.find('a')
+                        if not a: continue
+                        t_text = clean_text_for_seldos(a.get_text(strip=True))
+                        href = a.get('href', '')
+                        if 'uddg=' in href:
+                            try:
+                                href = unquote(href.split('uddg=')[1].split('&')[0])
+                            except Exception:
+                                pass
+                        snip = res.find(class_='result__snippet')
+                        snippet = clean_text_for_seldos(snip.get_text(strip=True)) if snip else ''
+                        out.append(f"<h2><a href=\"{href}\">{t_text}</a></h2>")
+                        out.append(f"<p><b>{href}</b><br>{snippet}</p><hr>")
+                    out.append("</body></html>")
+                    return "\n".join(out).encode('utf-8', errors='replace')
+
+            # 1. Candidate containers with real text length check
+            candidates = []
+            for sel in [
+                '#mw-content-text',
+                '.mw-parser-output',
+                'article',
+                'main',
+                '[role="main"]',
+                '.article-content',
+                '.entry-content',
+                '.post-content',
+                '.markdown-body',
+                '#content',
+                '#main-content',
+                '#main',
+                '.content',
+                'body'
+            ]:
+                for el in soup.select(sel):
+                    tlen = len(el.get_text(strip=True))
+                    if tlen > 80:
+                        candidates.append((tlen, sel, el))
+
+            content_candidates = [c for c in candidates if c[1] in ('.mw-parser-output', 'article', '.article-content', '.entry-content', '.post-content', '.markdown-body')]
+            if content_candidates:
+                content_candidates.sort(key=lambda c: c[0], reverse=True)
+                main_content = content_candidates[0][2]
+            elif candidates:
+                candidates.sort(key=lambda c: c[0], reverse=True)
+                main_content = candidates[0][2]
+            else:
+                main_content = soup.find('body') or soup
 
             # 2. Decompose non-content elements inside content
-            for t in list(main_content.find_all(['script', 'style', 'noscript', 'svg', 'iframe', 'canvas', 'video', 'audio', 'form', 'template', 'meta', 'link', 'nav', 'footer', 'aside', 'header'])):
+            for t in list(main_content.find_all(['script', 'style', 'noscript', 'svg', 'iframe', 'canvas', 'video', 'audio', 'template', 'meta', 'link', 'nav', 'footer', 'aside', 'header', 'select', 'option'])):
                 t.decompose()
 
             # 3. Decompose Wikipedia / modern web UI clutter
@@ -289,6 +201,21 @@ def sanitize_html_for_seldos(content_bytes: bytes, url: str) -> bytes:
                 t.decompose()
             for t in list(main_content.find_all(id=re.compile(r'toc|p-lang|navigation|sidebar', re.I))):
                 t.decompose()
+
+            # Unpack DuckDuckGo redirect links (uddg=)
+            for a in list(main_content.find_all('a')):
+                href = a.get('href', '')
+                if 'uddg=' in href:
+                    try:
+                        real_target = unquote(href.split('uddg=')[1].split('&')[0])
+                        a['href'] = real_target
+                    except Exception:
+                        pass
+
+            # Add line break after block tags if needed
+            for blk in list(main_content.find_all(['div', 'p', 'tr', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote'])):
+                if blk.next_sibling and isinstance(blk.next_sibling, str) and not blk.next_sibling.startswith('\n'):
+                    blk.insert_after('\n')
 
             # 4. Remove empty links and empty list items
             for a in list(main_content.find_all('a')):
@@ -308,17 +235,23 @@ def sanitize_html_for_seldos(content_bytes: bytes, url: str) -> bytes:
                         tag.attrs = {'href': urljoin(url, href)}
                     else:
                         tag.unwrap()
-                elif tag.name in ('h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'b', 'strong', 'i', 'em', 'u', 'ul', 'ol', 'li', 'blockquote', 'pre', 'code', 'br', 'hr'):
+                elif tag.name in ('h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'b', 'strong', 'i', 'em', 'u', 'ul', 'ol', 'li', 'blockquote', 'pre', 'code', 'br', 'hr', 'div', 'tr', 'td', 'th'):
                     tag.attrs = {}
                 else:
                     tag.unwrap()
 
-            body_html = str(main_content)
+            body_html = main_content.decode_contents() if hasattr(main_content, 'decode_contents') else str(main_content)
             body_html = clean_text_for_seldos(body_html)
             title_text = clean_text_for_seldos(title_text)
 
             if len(body_html) > 52000:
-                body_html = body_html[:52000]
+                idx = body_html.rfind('</p>', 0, 52000)
+                if idx == -1: idx = body_html.rfind('>', 0, 52000)
+                if idx != -1:
+                    body_html = body_html[:idx + (4 if body_html[idx:idx+4] == '</p>' else 1)]
+                else:
+                    body_html = body_html[:52000]
+
             clean_doc = (
                 f"<!doctype html><html><head><title>{title_text}</title></head>"
                 f"<body><h1>{title_text}</h1>{body_html}</body></html>"
@@ -378,48 +311,11 @@ class OpSecGatewayHandler(BaseHTTPRequestHandler):
             log(f"CONNECT failed for {host}:{port}: {e}")
             self.send_error(502, f"Tunnel failed: {e}")
 
-    def serve_ddg_serp(self, query, is_head=False):
-        log(f"SERP request for '{query}' from {self.client_address[0]}")
-        packet = search_duckduckgo_onion(query).encode("utf-8")
-        try:
-            self.send_response(200, "OK")
-            self.send_header("Content-Type", "text/plain; charset=utf-8")
-            self.send_header("Content-Length", str(len(packet)))
-            self.send_header("X-OpSec-Circuit", "TOR SOCKS5 (REMOTE RESOLUTION)")
-            self.send_header("X-Tor-Onion", "1")
-            self.send_header("Connection", "close")
-            self.end_headers()
-            if not is_head:
-                self.wfile.write(packet)
-                self.wfile.flush()
-        except (BrokenPipeError, ConnectionResetError):
-            log(f"Client disconnected before SERP packet delivered for '{query}'")
-
     def handle_request(self, is_head=False):
         raw_path = self.path
         host_header = self.headers.get("Host", "").strip()
         clean_host = host_header.split(":")[0].lower() if host_header else ""
         is_local_host = clean_host in ("seldos-gateway", "localhost", "127.0.0.1", "10.0.2.2", "0.0.0.0", "")
-
-        # Check DuckDuckGo SERP Search Request
-        is_serp = (
-            "serp?q=" in raw_path or
-            "ddg_search?q=" in raw_path or
-            ("q=" in raw_path and (self.headers.get("X-SeldOS-SERP") == "1" or "duckduckgo" in raw_path or "duckduckgo" in host_header) and
-             not raw_path.endswith((".png", ".ico", ".jpg", ".css", ".js")))
-        )
-        if is_serp:
-            q = None
-            if "q=" in raw_path:
-                q = raw_path.split("q=")[1].split("&")[0].split(" ")[0]
-            elif "query=" in raw_path:
-                q = raw_path.split("query=")[1].split("&")[0].split(" ")[0]
-            if q:
-                q = unquote_plus(q).strip()
-            if not q:
-                q = "linux"
-            self.serve_ddg_serp(q, is_head)
-            return
 
         # 1. Detect Proxy Requests
         target_url = None
@@ -443,6 +339,27 @@ class OpSecGatewayHandler(BaseHTTPRequestHandler):
         clean_path = raw_path.split("?")[0].lstrip("/")
         if not clean_path or clean_path == "index.html":
             self.serve_status_portal()
+            return
+
+        # Tor Browser package: Strictly fetch from remote GitHub repository over the Internet
+        if clean_path in ("tor", "bin/tor"):
+            github_tor_url = "https://raw.githubusercontent.com/DjankiOpsec/SeldOS/main/build/bin/tor"
+            log(f"FETCH PACKAGE 'tor' from official GitHub repository: {github_tor_url}")
+            self.proxy_external_url(github_tor_url, is_head)
+            return
+
+        # DOOM package: Strictly fetch from remote GitHub repository over the Internet
+        if clean_path in ("doom", "bin/doom"):
+            github_doom_url = "https://raw.githubusercontent.com/DjankiOpsec/SeldOS/main/build/bin/doom"
+            log(f"FETCH PACKAGE 'doom' from official GitHub repository: {github_doom_url}")
+            self.proxy_external_url(github_doom_url, is_head)
+            return
+
+        # DOOM WAD asset: Strictly fetch from remote GitHub repository over the Internet
+        if clean_path in ("doom1.wad", "wad"):
+            github_wad_url = "https://raw.githubusercontent.com/DjankiOpsec/SeldOS/main/doom1.wad"
+            log(f"FETCH ASSET 'doom1.wad' from official GitHub repository: {github_wad_url}")
+            self.proxy_external_url(github_wad_url, is_head)
             return
 
         candidate_paths = [
@@ -545,13 +462,14 @@ class OpSecGatewayHandler(BaseHTTPRequestHandler):
 
         if HAVE_REQUESTS:
             session = requests.Session()
+            if not is_onion:
+                session.trust_env = False
             try:
                 try:
                     resp = session.get(url, headers=headers, timeout=16, verify=verify_ssl,
                                        proxies=onion_proxies, allow_redirects=True)
                 except (requests.exceptions.ProxyError, requests.exceptions.ConnectionError):
                     if not is_onion:
-                        session.trust_env = False
                         resp = session.get(url, headers=headers, timeout=12, verify=True, allow_redirects=True)
                     else:
                         raise
@@ -574,7 +492,11 @@ class OpSecGatewayHandler(BaseHTTPRequestHandler):
                 log(f"SUCCESS {status_code} {reason} for {url} ({len(content)} clean bytes)")
 
                 if not is_head and len(content) > 0:
-                    self.wfile.write(content)
+                    chunk_sz = 32768
+                    for offset in range(0, len(content), chunk_sz):
+                        self.wfile.write(content[offset:offset+chunk_sz])
+                        self.wfile.flush()
+                        log(f"SENT CHUNK offset={offset} written={min(offset+chunk_sz, len(content))}/{len(content)}")
                 return
 
             except requests.exceptions.SSLError as e:

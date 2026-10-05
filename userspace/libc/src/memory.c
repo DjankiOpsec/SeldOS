@@ -161,22 +161,22 @@ void free(void* ptr) {
     block->is_free = 1;
 
     /* Coalesce with forward adjacent block if free */
-    if (block->next != NULL && block->next->is_free) {
+    if (block->next != NULL && block->next->magic == BLOCK_MAGIC && block->next->is_free) {
         if ((uint8_t*)block + BLOCK_HEADER_SIZE + block->size == (uint8_t*)block->next) {
             block->size += BLOCK_HEADER_SIZE + block->next->size;
             block->next = block->next->next;
-            if (block->next != NULL) {
+            if (block->next != NULL && block->next->magic == BLOCK_MAGIC) {
                 block->next->prev = block;
             }
         }
     }
 
     /* Coalesce with backward adjacent block if free */
-    if (block->prev != NULL && block->prev->is_free) {
+    if (block->prev != NULL && block->prev->magic == BLOCK_MAGIC && block->prev->is_free) {
         if ((uint8_t*)block->prev + BLOCK_HEADER_SIZE + block->prev->size == (uint8_t*)block) {
             block->prev->size += BLOCK_HEADER_SIZE + block->size;
             block->prev->next = block->next;
-            if (block->next != NULL) {
+            if (block->next != NULL && block->next->magic == BLOCK_MAGIC) {
                 block->next->prev = block->prev;
             }
         }

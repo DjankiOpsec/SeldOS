@@ -159,45 +159,56 @@ int http_fetch(const char* url, uint32_t proxy_ip, uint16_t proxy_port, struct h
 
         int sock = -1;
         int used_tor = 0;
-        int is_gateway = 0;
-
+        int is_https = (port == 443 || strncmp(cur_url, "https://", 8) == 0);
         int is_onion = (strstr(host, ".onion") != NULL);
+        struct seld_tls_conn* tls = NULL;
 
         if (is_onion) {
-            // First check if direct plaintext SOCKS5 is possible on port 80
-            if (port == 80 && !s_tor_socks_down) {
+            // Tor Onion Service via SOCKS5
+            if (!s_tor_socks_down) {
                 sock = socks5_connect(proxy_ip, proxy_port, host, port);
                 if (sock >= 0) {
                     used_tor = 1;
-                }
-            }
-            // If direct SOCKS5 is down or onion requires TLS (e.g. DDG onion):
-            // Route through OpSec Gateway (10.0.2.2:8080) which terminates TLS over Tor SOCKS5
-            if (sock < 0) {
-                uint32_t gw_ip = proxy_ip ? proxy_ip : (10 | (0 << 8) | (2 << 16) | (2 << 24));
-                sock = seld_tcp_connect(gw_ip, 8080);
-                if (sock >= 0) {
-                    used_tor = 1; // Tor Onion via gateway proxy
-                    is_gateway = 1;
                 } else {
-                    return -14; // Onion host unreachable / Gateway offline
+                    return -14; // Onion service unreachable / Tor daemon offline
+                }
+            } else {
+                return -14;
+            }
+        } else if (is_https) {
+            // Sovereign HTTPS: Direct TLS 1.3 negotiation inside SeldOS
+            uint32_t ip = parse_ipv4(host);
+            if (ip == 0) {
+                struct seld_net_info ninfo;
+                if (seld_net_info(&ninfo) == 0 && !ninfo.link_up) {
+                    return -15; // Network interface offline
+                }
+                int dns_err = seld_dns_resolve(host, &ip);
+                if (dns_err != 0 || ip == 0) {
+                    return (dns_err == -4) ? -15 : -3; // DNS resolution failed
                 }
             }
-        } else if (port == 443 || strncmp(cur_url, "https://", 8) == 0) {
-            // HTTPS target: Connect via OpSec Web Gateway (10.0.2.2:8080) if available
-            uint32_t gw_ip = proxy_ip ? proxy_ip : 0;
-            if (gw_ip == 0) {
-                struct seld_net_info ninfo;
-                if (seld_net_info(&ninfo) == 0) gw_ip = ninfo.gateway;
+
+            sock = seld_tcp_connect(ip, port);
+            if (sock < 0) {
+                return -4; // TCP connection failed
             }
-            if (gw_ip == 0) gw_ip = (10 | (0 << 8) | (2 << 16) | (2 << 24));
-            sock = seld_tcp_connect(gw_ip, 8080);
-            if (sock >= 0) {
-                used_tor = 2; // OpSec Web Gateway
-                is_gateway = 1;
-            } else {
-                return -8; // HTTPS requires OpSec Web Gateway on port 8080
+
+            tls = (struct seld_tls_conn*)malloc(sizeof(struct seld_tls_conn));
+            if (!tls) {
+                seld_tcp_close(sock);
+                return -6;
             }
+
+            int hs = seld_tls_handshake(tls, sock, host);
+            if (hs != 0) {
+                seld_tls_close(tls);
+                free(tls);
+                return -8; // SeldTLS 1.3 handshake failed
+            }
+
+            seld_tls_get_cert(tls, &resp->cert);
+            used_tor = 2; // SeldTLS 1.3 Native Sovereign Connection
         } else {
             // Standard Clearnet HTTP: Try Tor SOCKS5 first, then Native DNS & Direct TCP
             if (!s_tor_socks_down) {
@@ -223,23 +234,9 @@ int http_fetch(const char* url, uint32_t proxy_ip, uint16_t proxy_port, struct h
                     if (seld_net_info(&ninfo) == 0 && !ninfo.link_up) {
                         return -15; // Network interface offline
                     }
-                    // Resolve domain name via Native SeldOS DNS (UDP port 53)
                     int dns_err = seld_dns_resolve(host, &ip);
                     if (dns_err != 0 || ip == 0) {
-                        // DNS resolution failed on LAN; try OpSec Gateway fallback
-                        uint32_t gw_ip = proxy_ip ? proxy_ip : 0;
-                        if (gw_ip == 0) {
-                            struct seld_net_info ninfo2;
-                            if (seld_net_info(&ninfo2) == 0) gw_ip = ninfo2.gateway;
-                        }
-                        if (gw_ip == 0) gw_ip = (10 | (0 << 8) | (2 << 16) | (2 << 24));
-                        int gw_sock = seld_tcp_connect(gw_ip, 8080);
-                        if (gw_sock >= 0) {
-                            sock = gw_sock;
-                            used_tor = 2; // Route via OpSec Gateway
-                        } else {
-                            return (dns_err == -4) ? -15 : -3; // DNS resolution failed
-                        }
+                        return (dns_err == -4) ? -15 : -3; // DNS resolution failed
                     }
                 }
 
@@ -247,25 +244,12 @@ int http_fetch(const char* url, uint32_t proxy_ip, uint16_t proxy_port, struct h
                     sock = seld_tcp_connect(ip, port);
                     if (sock >= 0) {
                         used_tor = 0; // Direct Native Clearnet
-                    } else {
-                        // Direct TCP failed (e.g. site drops HTTP or port 80 blocked), fallback to OpSec Gateway
-                        uint32_t gw_ip = proxy_ip ? proxy_ip : 0;
-                        if (gw_ip == 0) {
-                            struct seld_net_info ninfo2;
-                            if (seld_net_info(&ninfo2) == 0) gw_ip = ninfo2.gateway;
-                        }
-                        if (gw_ip == 0) gw_ip = (10 | (0 << 8) | (2 << 16) | (2 << 24));
-                        int gw_sock = seld_tcp_connect(gw_ip, 8080);
-                        if (gw_sock >= 0) {
-                            sock = gw_sock;
-                            used_tor = 2; // Route via OpSec Gateway
-                        }
                     }
                 }
             }
         }
 
-        if (sock < 0) {
+        if (sock < 0 && !tls) {
             return -4; // Connection failed
         }
 
@@ -273,56 +257,75 @@ int http_fetch(const char* url, uint32_t proxy_ip, uint16_t proxy_port, struct h
 
         // Step 2: Build standardized privacy HTTP/1.1 request
         char req[1024];
-        if (used_tor == 2 || is_gateway) {
-            int is_serp_req = (strstr(cur_url, "/serp?q=") != NULL || strstr(cur_url, "ddg_search?q=") != NULL);
-            // Gateway proxy request line
-            snprintf(req, sizeof(req),
-                     "GET %s HTTP/1.1\r\n"
-                     "Host: %s\r\n"
-                     "User-Agent: Mozilla/5.0 (Windows NT 10.0; rv:109.0) Gecko/20100101 Firefox/115.0\r\n"
-                     "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\n"
-                     "Accept-Language: en-US,en;q=0.5\r\n"
-                     "%s"
-                     "Connection: close\r\n\r\n",
-                     cur_url, host, is_serp_req ? "X-SeldOS-SERP: 1\r\n" : "");
-        } else {
-            snprintf(req, sizeof(req),
-                     "GET %s HTTP/1.1\r\n"
-                     "Host: %s\r\n"
-                     "User-Agent: Mozilla/5.0 (Windows NT 10.0; rv:109.0) Gecko/20100101 Firefox/115.0\r\n"
-                     "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\n"
-                     "Accept-Language: en-US,en;q=0.5\r\n"
-                     "Connection: close\r\n\r\n",
-                     path, host);
-        }
+        snprintf(req, sizeof(req),
+                 "GET %s HTTP/1.1\r\n"
+                 "Host: %s\r\n"
+                 "User-Agent: Mozilla/5.0 (Windows NT 10.0; rv:109.0) Gecko/20100101 Firefox/115.0\r\n"
+                 "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\n"
+                 "Accept-Language: en-US,en;q=0.5\r\n"
+                 "DNT: 1\r\n"
+                 "Sec-GPC: 1\r\n"
+                 "Connection: close\r\n\r\n",
+                 path, host);
 
         size_t req_len = strlen(req);
-        if (seld_tcp_send(sock, req, req_len) != (int)req_len) {
-            seld_tcp_close(sock);
-            return -5;
+        if (is_https && tls) {
+            if (seld_tls_write(tls, req, req_len) <= 0) {
+                seld_tls_close(tls);
+                free(tls);
+                return -5;
+            }
+        } else {
+            if (seld_tcp_send(sock, req, req_len) != (int)req_len) {
+                seld_tcp_close(sock);
+                return -5;
+            }
         }
 
         // Step 3: Receive HTTP response into dynamic buffer
         size_t buf_cap = HTTP_MAX_RESP_LEN;
         char* raw_buf = (char*)malloc(buf_cap);
         if (!raw_buf) {
-            seld_tcp_close(sock);
+            if (is_https && tls) {
+                seld_tls_close(tls);
+                free(tls);
+            } else if (sock >= 0) {
+                seld_tcp_close(sock);
+            }
             return -6;
         }
 
         size_t raw_len = 0;
-        uint32_t first_timeout = (used_tor || is_gateway) ? 15000 : 5000;
-        while (raw_len + 1 < buf_cap) {
-            uint32_t to_ms = (raw_len == 0) ? first_timeout : 3000;
-            int n = seld_tcp_recv(sock, raw_buf + raw_len, buf_cap - raw_len - 1, to_ms);
-            if (n > 0) {
-                raw_len += (size_t)n;
-            } else if (n == 0 || n == -2) {
-                break; // EOF or timeout
+        if (is_https && tls) {
+            while (raw_len + 1 < buf_cap) {
+                int n = seld_tls_read(tls, (uint8_t*)raw_buf + raw_len, buf_cap - raw_len - 1, 8000);
+                if (n > 0) {
+                    raw_len += (size_t)n;
+                } else if (n == 0) {
+                    break; // EOF or TLS close_notify
+                } else {
+                    break;
+                }
             }
+            seld_tls_close(tls);
+            free(tls);
+            tls = NULL;
+        } else {
+            uint32_t first_timeout = used_tor ? 15000 : 5000;
+            while (raw_len + 1 < buf_cap) {
+                uint32_t to_ms = (raw_len == 0) ? first_timeout : 3000;
+                int n = seld_tcp_recv(sock, raw_buf + raw_len, buf_cap - raw_len - 1, to_ms);
+                if (n > 0) {
+                    raw_len += (size_t)n;
+                } else if (n == 0 || n == -2) {
+                    break; // EOF or timeout
+                }
+            }
+            seld_tcp_close(sock);
+            sock = -1;
         }
         raw_buf[raw_len] = '\0';
-        seld_tcp_close(sock);
+
 
         if (raw_len == 0) {
             free(raw_buf);

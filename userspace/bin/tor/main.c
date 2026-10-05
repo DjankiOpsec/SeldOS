@@ -14,7 +14,6 @@
 #include "socks5.h"
 #include "http.h"
 #include "html.h"
-#include "ddg_serp.h"
 
 #define SCR_W 680
 #define SCR_H 334
@@ -58,15 +57,15 @@ static uint32_t*           s_draw_target = NULL;
 static char s_current_url[HTTP_MAX_URL_LEN] = "home";
 static char s_edit_url[HTTP_MAX_URL_LEN] = "home";
 static int  s_url_editing = 0;
-static int  s_is_ddg = 0;
-static char s_ddg_query[64] = "linux";
-static struct ddg_serp_data s_ddg_data;
 
 static char* s_page_html = NULL;
 static size_t s_page_html_sz = 0;
 static struct html_doc s_doc;
 static int s_scroll_y = 0;
 static int s_used_tor = 1;
+
+static struct seld_tls_cert s_last_cert;
+static int s_show_cert_modal = 0;
 
 static char s_history[MAX_HISTORY][HTTP_MAX_URL_LEN];
 static int  s_hist_count = 0;
@@ -81,31 +80,35 @@ static int s_sb_start_scroll = 0;
 
 static const char* s_home_html =
     "<html>"
-    "<head><title>Tor Sovereign Onion Portal</title></head>"
+    "<head><title>Tor Sovereign Web Portal</title></head>"
     "<body>"
     "<h1>Tor Sovereign Web Browser</h1>"
-    "<p><b>Security Architecture:</b> RFC 1928 SOCKS5 Remote Resolution, Ephemeral RAM Sandbox, No JS Engine.</p>"
+    "<p><b>Security Architecture:</b> Native SeldTLS 1.3 (RFC 8446), RFC 1928 SOCKS5 Onion Routing, Ephemeral RAM Sandbox, No JS Engine.</p>"
     "<hr>"
-    "<h2>Real Internet & Sovereign HTTPS Gateways</h2>"
-    "<p>Click any link below or click the address bar above to browse any URL:</p>"
+    "<h2>Real Internet & Sovereign HTTPS Destinations</h2>"
+    "<p>Click any link below or click the address bar (or press 'O') to browse any URL:</p>"
     "<ul>"
-    "<li><a href=\"onion://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/?q=linux\">DuckDuckGo .onion Search (Linux SERP)</a> - Sovereign Search Engine</li>"
+    "<li><a href=\"https://example.com/\">https://example.com/ (HTTPS)</a> - Native SeldTLS 1.3 Verification</li>"
+    "<li><a href=\"https://github.com/\">https://github.com/ (HTTPS)</a> - Open Source Software Hub</li>"
     "<li><a href=\"https://duckduckgo.com/lite/\">DuckDuckGo Lite (HTTPS)</a> - Sovereign Search Portal</li>"
-    "<li><a href=\"https://example.com/\">https://example.com/ (HTTPS)</a> - Encrypted IANA Domain</li>"
     "<li><a href=\"https://en.wikipedia.org/wiki/TempleOS\">Wikipedia: TempleOS (HTTPS)</a> - Sovereign OS Article</li>"
+    "<li><a href=\"https://en.wikipedia.org/wiki/Terry_A._Davis\">Wikipedia: Terry A. Davis (HTTPS)</a> - Legendary Engineer</li>"
+    "<li><a href=\"onion://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/html/?q=linux\">DuckDuckGo .onion Search</a> - Sovereign Onion Search</li>"
     "<li><a href=\"http://example.com/\">http://example.com/</a> - Clearnet Domain</li>"
     "<li><a href=\"http://neverssl.com/\">http://neverssl.com/</a> - Clearnet HTTP Portal</li>"
     "<li><a href=\"http://info.cern.ch/hypertext/WWW/TheProject.html\">http://info.cern.ch/</a> - Original Web</li>"
     "<li><a href=\"http://icanhazip.com/\">http://icanhazip.com/</a> - Public IP Detector</li>"
-    "<li><a href=\"http://10.0.2.2:8080/\">OpSec Gateway Status</a> - Port 8080 Verification</li>"
     "</ul>"
     "<hr>"
-    "<h3>Hardened Privacy Protections</h3>"
-    "<p>* Triple-Route Engine: Modern TLS 1.3 Gateway, Tor SOCKS5 Onion, Clearnet.</p>"
+    "<h3>Hardened OpSec & Privacy Protections</h3>"
+    "<p>* Native SeldTLS 1.3: Sovereign Pure-C TLS 1.3 stack running directly inside SeldOS.</p>"
+    "<p>* Certificate Inspector: Press 'C' or click Shield to inspect X.509 cert and PKI trust.</p>"
     "<p>* Zero Fingerprint: Standardized Tor Firefox User-Agent on 680x334 viewport.</p>"
+    "<p>* Privacy Headers: Do Not Track (DNT: 1) and Global Privacy Control (Sec-GPC: 1).</p>"
     "<p>* Ephemeral Context: All page data stays in volatile RAM and is wiped on exit.</p>"
     "</body>"
     "</html>";
+
 
 static const uint8_t font5x7[95][5] = {
     {0x00, 0x00, 0x00, 0x00, 0x00}, // 32 ' '
@@ -349,7 +352,6 @@ static void load_url(const char* url) {
     }
 
     if (strcmp(clean_url, "home") == 0) {
-        s_is_ddg = 0;
         if (s_page_html && s_page_html != s_home_html) {
             memset(s_page_html, 0, s_page_html_sz);
             free(s_page_html);
@@ -360,6 +362,7 @@ static void load_url(const char* url) {
         strncpy(s_edit_url, "home", sizeof(s_edit_url) - 1);
         s_scroll_y = 0;
         s_used_tor = 1;
+        memset(&s_last_cert, 0, sizeof(s_last_cert));
 
         html_render(s_page_html, NULL, SCR_W, SCR_H, VP_X, VP_Y, VP_W, VP_H, 0, &s_doc);
         return;
@@ -369,57 +372,26 @@ static void load_url(const char* url) {
     if (strncmp(clean_url, "http://", 7) != 0 &&
         strncmp(clean_url, "https://", 8) != 0 &&
         strncmp(clean_url, "onion://", 8) != 0) {
-        if (strchr(clean_url, '.') == NULL) {
+        if (strstr(clean_url, ".onion") != NULL) {
+            snprintf(target_url, sizeof(target_url), "onion://%s", clean_url);
+        } else if (strchr(clean_url, '.') == NULL) {
             // Unqualified word -> Route through DuckDuckGo .onion sovereign search engine!
-            snprintf(target_url, sizeof(target_url), "onion://" DDG_ONION_HOST "/?q=%s", clean_url);
+            char query_enc[HTTP_MAX_URL_LEN];
+            size_t qi = 0;
+            for (const char* p = clean_url; *p && qi + 4 < sizeof(query_enc); p++) {
+                if (*p == ' ') query_enc[qi++] = '+';
+                else query_enc[qi++] = *p;
+            }
+            query_enc[qi] = '\0';
+            snprintf(target_url, sizeof(target_url), "onion://" DDG_ONION_HOST "/html/?q=%s", query_enc);
         } else {
-            snprintf(target_url, sizeof(target_url), "http://%s", clean_url);
+            // Sovereign HTTPS-First default
+            snprintf(target_url, sizeof(target_url), "https://%s", clean_url);
         }
     } else {
         strncpy(target_url, clean_url, sizeof(target_url) - 1);
         target_url[sizeof(target_url) - 1] = '\0';
     }
-
-    // Check if target is DuckDuckGo Search Engine Results Page
-    if (is_ddg_url(target_url, s_ddg_query, sizeof(s_ddg_query))) {
-        s_is_ddg = 1;
-        s_used_tor = 1; // Tor Onion Circuit (Remote DNS resolution)
-        strncpy(s_current_url, target_url, sizeof(s_current_url) - 1);
-        strncpy(s_edit_url, target_url, sizeof(s_edit_url) - 1);
-        s_scroll_y = 0;
-
-        if (s_hist_count < MAX_HISTORY) {
-            strncpy(s_history[s_hist_count++], s_current_url, HTTP_MAX_URL_LEN - 1);
-            s_hist_idx = s_hist_count - 1;
-        }
-
-        struct seld_net_info ninfo;
-        uint32_t proxy_ip = 0;
-        if (seld_net_info(&ninfo) == 0 && ninfo.gateway != 0) {
-            proxy_ip = ninfo.gateway;
-        } else {
-            proxy_ip = (10 | (0 << 8) | (2 << 16) | (2 << 24)); // Default QEMU Gateway 10.0.2.2
-        }
-
-        char serp_req[HTTP_MAX_URL_LEN];
-        snprintf(serp_req, sizeof(serp_req), "onion://" DDG_ONION_HOST "/serp?q=%s", s_ddg_query);
-
-        struct http_response resp;
-        int err = http_fetch(serp_req, proxy_ip, 9050, &resp);
-        if (err == 0 && resp.body) {
-            ddg_serp_parse(resp.body, &s_ddg_data);
-            if (resp.body != s_home_html) {
-                free(resp.body);
-            }
-        } else {
-            ddg_serp_init_defaults(&s_ddg_data, s_ddg_query);
-        }
-
-        ddg_serp_render(s_ddg_query, &s_ddg_data, NULL, SCR_W, SCR_H, VP_X, VP_Y, VP_W, VP_H, 0, &s_doc);
-        return;
-    }
-
-    s_is_ddg = 0;
 
     struct seld_net_info ninfo;
     uint32_t proxy_ip = 0;
@@ -442,6 +414,7 @@ static void load_url(const char* url) {
         strncpy(s_current_url, resp.final_url, sizeof(s_current_url) - 1);
         strncpy(s_edit_url, resp.final_url, sizeof(s_edit_url) - 1);
         s_used_tor = resp.used_tor;
+        s_last_cert = resp.cert;
         s_scroll_y = 0;
 
         // Add to history
@@ -460,7 +433,7 @@ static void load_url(const char* url) {
         else if (err == -5) reason = "HTTP Request Transmission Failed";
         else if (err == -6) reason = "Out of Memory (Failed buffer allocation)";
         else if (err == -7) reason = "Remote Server Sent Empty Response";
-        else if (err == -8) reason = "HTTPS Target Requires OpSec Gateway (10.0.2.2:8080)";
+        else if (err == -8) reason = "SeldTLS 1.3 Handshake Failed (TLS 1.3 Crypto Negotiation)";
         else if (err == -9) reason = "Too Many HTTP Redirects (Redirect Loop)";
         else if (err == -10) reason = "Tor SOCKS5 Daemon Offline (10.0.2.2:9050 unreachable)";
         else if (err == -11) reason = "Tor SOCKS5 Authentication Negotiation Failed";
@@ -477,6 +450,7 @@ static void load_url(const char* url) {
                  "<p>Diagnostic: <b>%s (code %d)</b></p>"
                  "<hr>"
                  "<h3>OpSec Network Diagnostics:</h3>"
+                 "<p>* Sovereign HTTPS: Native SeldTLS 1.3 (RFC 8446) with AES-128-GCM and X25519.</p>"
                  "<p>* Clearnet: Native UDP DNS (10.0.2.3:53) + Direct TCP socket.</p>"
                  "<p>* Onion: SOCKS5 (10.0.2.2:9050) with remote ATYP=0x03 DNS resolution.</p>"
                  "<p>* Hardware: Intel PRO/1000 MT (82540EM) or AMD PCnet-FAST III (Am79C973).</p>"
@@ -500,9 +474,110 @@ static void load_url(const char* url) {
             strncpy(s_edit_url, target_url, sizeof(s_edit_url) - 1);
             s_scroll_y = 0;
             s_used_tor = -1; // Connection Failed
+            memset(&s_last_cert, 0, sizeof(s_last_cert));
             html_render(s_page_html, NULL, SCR_W, SCR_H, VP_X, VP_Y, VP_W, VP_H, 0, &s_doc);
         }
     }
+}
+
+
+static void draw_cert_modal(void) {
+    int mx = 30;
+    int my = 35;
+    int mw = 620;
+    int mh = 265;
+
+    // Dark semi-transparent backdrop fill
+    draw_rect(mx, my, mw, mh, COL_PURPLE_LIGHT, 0xFF120E1C);
+
+    // Modal Header
+    fill_rect(mx, my, mw, 24, 0xFF3B1854);
+    for (int c = mx; c < mx + mw; c++) {
+        put_pixel(c, my + 24, COL_PURPLE_LIGHT);
+    }
+    draw_onion_icon(mx + 6, my + 4);
+    draw_text_8x16(mx + 28, my + 4, "SeldTLS 1.3 Sovereign Certificate & Privacy Inspector", COL_TEXT_WHITE);
+
+    // [X] Close button
+    draw_rect(mx + mw - 22, my + 2, 20, 20, COL_RED_CLOSE, 0xFF450A0A);
+    draw_text_5x7(mx + mw - 15, my + 8, "X", COL_TEXT_WHITE);
+
+    int ty = my + 32;
+    draw_text_5x7(mx + 16, ty, "TARGET HOST :", COL_GOLD_ACCENT);
+    draw_text_5x7(mx + 110, ty, s_current_url, COL_TEXT_WHITE);
+
+    ty += 14;
+    draw_text_5x7(mx + 16, ty, "PROTOCOL    :", COL_GOLD_ACCENT);
+    if (s_used_tor == 2) {
+        draw_text_5x7(mx + 110, ty, "TLSv1.3 (RFC 8446) / AES-128-GCM-SHA256 (Native SeldTLS)", COL_GREEN_SECURE);
+    } else if (s_used_tor == 1) {
+        draw_text_5x7(mx + 110, ty, "Tor Onion Service (RFC 1928 SOCKS5 Remote Resolution)", COL_PURPLE_LIGHT);
+    } else {
+        draw_text_5x7(mx + 110, ty, "Clearnet HTTP (Port 80 Plaintext)", COL_GOLD_ACCENT);
+    }
+
+    ty += 14;
+    draw_text_5x7(mx + 16, ty, "CIPHER SUITE:", COL_GOLD_ACCENT);
+    draw_text_5x7(mx + 110, ty, "TLS_AES_128_GCM_SHA256 | Key Exchange: Ephemeral X25519 (PFS)", COL_TEXT_LIGHT);
+
+    ty += 18;
+    fill_rect(mx + 16, ty, mw - 32, 1, COL_CARD_BORDER);
+
+    ty += 8;
+    draw_text_5x7(mx + 16, ty, "--- SERVER X.509 CERTIFICATE DETAILS ---", COL_PURPLE_LIGHT);
+
+    ty += 14;
+    draw_text_5x7(mx + 16, ty, "SUBJECT CN  :", COL_GOLD_ACCENT);
+    draw_text_5x7(mx + 110, ty, s_last_cert.subject_cn[0] ? s_last_cert.subject_cn : "None / Anonymous", COL_TEXT_WHITE);
+
+    ty += 14;
+    draw_text_5x7(mx + 16, ty, "ISSUER      :", COL_GOLD_ACCENT);
+    char iss_buf[128];
+    if (s_last_cert.issuer_cn[0]) {
+        snprintf(iss_buf, sizeof(iss_buf), "%s (%s)", s_last_cert.issuer_cn, s_last_cert.issuer_org[0] ? s_last_cert.issuer_org : "Root CA");
+    } else {
+        strncpy(iss_buf, "None / Self-Signed", sizeof(iss_buf));
+    }
+    draw_text_5x7(mx + 110, ty, iss_buf, COL_TEXT_LIGHT);
+
+    ty += 14;
+    draw_text_5x7(mx + 16, ty, "SAN NAMES   :", COL_GOLD_ACCENT);
+    draw_text_5x7(mx + 110, ty, s_last_cert.san[0] ? s_last_cert.san : (s_last_cert.subject_cn[0] ? s_last_cert.subject_cn : "N/A"), COL_TEXT_LIGHT);
+
+    ty += 14;
+    draw_text_5x7(mx + 16, ty, "FINGERPRINT :", COL_GOLD_ACCENT);
+    if (s_last_cert.valid) {
+        char fp_disp[64];
+        snprintf(fp_disp, sizeof(fp_disp), "SHA-256: %.32s...", s_last_cert.sha256_hex);
+        draw_text_5x7(mx + 110, ty, fp_disp, COL_TEXT_MUTED);
+    } else {
+        draw_text_5x7(mx + 110, ty, "N/A", COL_TEXT_MUTED);
+    }
+
+    ty += 14;
+    draw_text_5x7(mx + 16, ty, "VALIDATION  :", COL_GOLD_ACCENT);
+    if (s_last_cert.valid && s_last_cert.ca_verified) {
+        draw_text_5x7(mx + 110, ty, "[VERIFIED] Sovereign & Public Root PKI Trust Confirmed", COL_GREEN_SECURE);
+    } else if (s_last_cert.valid) {
+        draw_text_5x7(mx + 110, ty, "[ACTIVE] Direct End-to-End Encryption Established", COL_GREEN_SECURE);
+    } else {
+        draw_text_5x7(mx + 110, ty, "[UNVERIFIED] Clearnet / Plaintext Connection", COL_GOLD_ACCENT);
+    }
+
+    ty += 18;
+    fill_rect(mx + 16, ty, mw - 32, 1, COL_CARD_BORDER);
+
+    ty += 8;
+    draw_text_5x7(mx + 16, ty, "OPSEC PRIVACY GUARDS :", COL_GOLD_ACCENT);
+    draw_text_5x7(mx + 160, ty, "DNT: 1 | Sec-GPC: 1 | Referer: Stripped | Cookies: Disabled", COL_GREEN_SECURE);
+
+    ty += 12;
+    draw_text_5x7(mx + 16, ty, "STORAGE & RESIDUALS :", COL_GOLD_ACCENT);
+    draw_text_5x7(mx + 160, ty, "RAM-only sandbox (0 bytes on disk) | Zero-trace memory wiping", COL_GREEN_SECURE);
+
+    ty += 18;
+    fill_rect(mx + 10, my + mh - 22, mw - 20, 18, 0xFF1A1424);
+    draw_text_5x7(mx + 160, my + mh - 16, "[ Press 'C' or ESC or Click [X] to Close Inspector ]", COL_GOLD_ACCENT);
 }
 
 static void render_page(void) {
@@ -520,9 +595,20 @@ static void render_page(void) {
     draw_onion_icon(8, 5);
     draw_text_8x16(28, 5, s_doc.title[0] ? s_doc.title : "Tor Browser", COL_TEXT_WHITE);
 
-    // Security Shield
-    draw_rect(420, 4, 180, 18, COL_GREEN_SECURE, 0xFF052E16);
-    draw_text_5x7(430, 9, "[ Shield: Safest / No JS ]", COL_GREEN_SECURE);
+    // Security Shield / Certificate Badge
+    if (s_used_tor == 2) {
+        draw_rect(410, 4, 210, 18, COL_GREEN_SECURE, 0xFF052E16);
+        draw_text_5x7(418, 9, "[* TLS 1.3: Cert Valid | 'C' *]", COL_GREEN_SECURE);
+    } else if (s_used_tor == 1) {
+        draw_rect(420, 4, 180, 18, COL_PURPLE_LIGHT, 0xFF2A103D);
+        draw_text_5x7(430, 9, "[ Tor Onion | SOCKS5 E2E ]", COL_PURPLE_LIGHT);
+    } else if (s_used_tor == 0) {
+        draw_rect(420, 4, 180, 18, COL_GOLD_ACCENT, 0xFF3D2605);
+        draw_text_5x7(430, 9, "[! HTTP Clearnet / Plaintext !]", COL_GOLD_ACCENT);
+    } else {
+        draw_rect(420, 4, 180, 18, COL_RED_CLOSE, 0xFF450A0A);
+        draw_text_5x7(430, 9, "[X Offline / Target Error X]", COL_RED_CLOSE);
+    }
 
     // Close Button [X]
     draw_rect(652, 3, 22, 20, COL_RED_CLOSE, 0xFF450A0A);
@@ -571,22 +657,28 @@ static void render_page(void) {
         put_pixel(c, 75, COL_NAV_BORDER);
     }
 
-    if (s_is_ddg) {
+    if (s_used_tor == 1 || strstr(s_current_url, ".onion") != NULL) {
         draw_text_5x7(10, 60, "CIRCUIT:", COL_GOLD_ACCENT);
-        draw_text_5x7(60, 60, "[SeldOS] -> [SOCKS5: 10.0.2.2:9050] -> [Tor Network] -> [duckduckgo.onion]", COL_TEXT_WHITE);
-        draw_text_5x7(470, 60, "TOR SOCKS5 (REMOTE RESOLUTION)", COL_GREEN_SECURE);
-    } else if (s_used_tor == 1) {
-        draw_text_5x7(10, 60, "CIRCUIT:", COL_GOLD_ACCENT);
-        draw_text_5x7(60, 60, "[SeldOS] -> [SOCKS5: 10.0.2.2:9050] -> [Tor Network] -> [Target Host]", COL_TEXT_WHITE);
+        if (strstr(s_current_url, DDG_ONION_HOST) != NULL) {
+            draw_text_5x7(60, 60, "[SeldOS] -> [SOCKS5] -> [Tor Network] -> [duckduckgo.onion]", COL_TEXT_WHITE);
+        } else {
+            draw_text_5x7(60, 60, "[SeldOS] -> [SOCKS5] -> [Tor Network] -> [Target Host]", COL_TEXT_WHITE);
+        }
         draw_text_5x7(470, 60, "TOR SOCKS5 (REMOTE RESOLUTION)", COL_GREEN_SECURE);
     } else if (s_used_tor == 2) {
-        draw_text_5x7(10, 60, "GATEWAY:", COL_GOLD_ACCENT);
-        draw_text_5x7(60, 60, "[Me] -> [OpSec Gateway: 10.0.2.2:8080] -> [TLS 1.3 / Modern HTTPS]", COL_TEXT_WHITE);
-        draw_text_5x7(480, 60, "ENCRYPTED WEB TUNNEL", COL_GREEN_SECURE);
+        draw_text_5x7(10, 60, "SECURITY:", COL_GREEN_SECURE);
+        draw_text_5x7(70, 60, "[SeldOS] -> [SeldTLS 1.3 (RFC 8446)] -> [Host:443]", COL_TEXT_WHITE);
+        if (s_last_cert.valid && s_last_cert.ca_verified) {
+            draw_text_5x7(450, 60, "TLS 1.3 | CERT VALID & VERIFIED", COL_GREEN_SECURE);
+        } else if (s_last_cert.valid) {
+            draw_text_5x7(450, 60, "TLS 1.3 | ENCRYPTED (E2E)", COL_GREEN_SECURE);
+        } else {
+            draw_text_5x7(450, 60, "NATIVE SELD-TLS 1.3 TUNNEL", COL_GREEN_SECURE);
+        }
     } else if (s_used_tor == 0) {
         draw_text_5x7(10, 60, "ROUTE:", COL_GOLD_ACCENT);
         draw_text_5x7(54, 60, "[Me] -> [DNS 10.0.2.3:53] -> [Direct WAN / Real Internet]", COL_TEXT_WHITE);
-        draw_text_5x7(470, 60, "CLEARNET FALLBACK (TOR OFFLINE)", COL_GOLD_ACCENT);
+        draw_text_5x7(470, 60, "CLEARNET (PORT 80 PLAINTEXT)", COL_GOLD_ACCENT);
     } else {
         draw_text_5x7(10, 60, "STATUS:", COL_RED_CLOSE);
         draw_text_5x7(54, 60, "[Me] -X- [Connection Failed / Target Unreachable]", COL_TEXT_WHITE);
@@ -594,13 +686,10 @@ static void render_page(void) {
     }
 
     // 5. Main Content Viewport
-    draw_rect(VP_X, VP_Y, VP_W, VP_H, s_is_ddg ? 0xFFE5E7EB : COL_CARD_BORDER, s_is_ddg ? 0xFFFFFFFF : COL_CARD_BG);
+    draw_rect(VP_X, VP_Y, VP_W, VP_H, COL_CARD_BORDER, COL_CARD_BG);
 
-    // Render DuckDuckGo SERP or HTML into viewport
-    if (s_is_ddg) {
-        ddg_serp_render(s_ddg_query, &s_ddg_data, s_draw_target, SCR_W, SCR_H,
-                        VP_X, VP_Y, VP_W, VP_H, s_scroll_y, &s_doc);
-    } else if (s_page_html) {
+    // Render HTML into viewport
+    if (s_page_html) {
         html_render(s_page_html, s_draw_target, SCR_W, SCR_H,
                     VP_X + 8, VP_Y + 8, VP_W - 24, VP_H - 16, s_scroll_y, &s_doc);
     }
@@ -609,16 +698,14 @@ static void render_page(void) {
     int sb_x = VP_X + VP_W - 12;
     int sb_y = VP_Y + 2;
     int sb_h = VP_H - 4;
-    uint32_t track_col = s_is_ddg ? 0xFFF3F4F6 : COL_SCROLL_TRACK;
-    uint32_t thumb_col = s_is_ddg ? 0xFF9CA3AF : COL_SCROLL_THUMB;
-    fill_rect(sb_x, sb_y, 8, sb_h, track_col);
+    fill_rect(sb_x, sb_y, 8, sb_h, COL_SCROLL_TRACK);
 
     if (s_doc.total_height > VP_H) {
         int thumb_h = (sb_h * VP_H) / s_doc.total_height;
         if (thumb_h < 14) thumb_h = 14;
         int max_scroll = s_doc.total_height - VP_H;
         int thumb_y = sb_y + (s_scroll_y * (sb_h - thumb_h)) / max_scroll;
-        fill_rect(sb_x + 1, thumb_y, 6, thumb_h, thumb_col);
+        fill_rect(sb_x + 1, thumb_y, 6, thumb_h, COL_SCROLL_THUMB);
     }
 
     // 6. Bottom Status Bar
@@ -626,9 +713,14 @@ static void render_page(void) {
     for (int c = 0; c < SCR_W; c++) {
         put_pixel(c, 315, COL_NAV_BORDER);
     }
-    draw_text_5x7(10, 322, "SANDBOX: RAM-ONLY | DISK WRITES: 0 BYTES | OPSEC: VERIFIED", COL_TEXT_MUTED);
-    draw_text_5x7(360, 322, "[ESC: Exit] [O: URL] [Scroll: Drag/Arrows/Space/j/k]", COL_PURPLE_LIGHT);
+    draw_text_5x7(10, 322, "RAM SANDBOX | DISK WRITES: 0 | OPSEC: OK", COL_TEXT_MUTED);
+    draw_text_5x7(330, 322, "[ESC: Exit] [O: URL] [C: Cert] [Scroll: Arrows/j/k]", COL_PURPLE_LIGHT);
+
+    if (s_show_cert_modal) {
+        draw_cert_modal();
+    }
 }
+
 
 static void draw_frame(void) {
     if (!s_page_buf || !s_backbuf || !s_fb.framebuffer) return;
@@ -710,10 +802,19 @@ int main(int argc, char* argv[]) {
             int max_scroll = (s_doc.total_height > VP_H) ? (s_doc.total_height - VP_H) : 0;
 
             if (btn_down && !s_prev_mouse_btn) {
+                if (s_show_cert_modal) {
+                    s_show_cert_modal = 0;
+                    needs_page_render = 1;
+                }
                 // Click Top-Right Exit [X]
-                if (s_mouse_x >= 652 && s_mouse_y <= 24) {
+                else if (s_mouse_x >= 652 && s_mouse_y <= 24) {
                     running = 0;
                     break;
+                }
+                // Click Certificate / Security Shield Badge
+                else if (s_mouse_x >= 410 && s_mouse_x <= 630 && s_mouse_y >= 3 && s_mouse_y <= 24) {
+                    s_show_cert_modal = 1;
+                    needs_page_render = 1;
                 }
                 // Click [< Back]
                 else if (s_mouse_x >= 6 && s_mouse_x <= 24 && s_mouse_y >= 30 && s_mouse_y <= 48) {
@@ -796,26 +897,8 @@ int main(int argc, char* argv[]) {
                         if (s_mouse_x >= l->x && s_mouse_x < l->x + l->w &&
                             s_mouse_y >= l->y && s_mouse_y < l->y + l->h) {
                             seld_beep(1200, 30);
-                            if (strcmp(l->href, "action:edit_search") == 0) {
-                                s_url_editing = 1;
-                                s_edit_url[0] = '\0';
-                                needs_page_render = 1;
-                            } else if (strncmp(l->href, "ddg:", 4) == 0) {
-                                const char* cat = l->href + 4;
-                                if (strcmp(cat, "all") == 0) {
-                                    char new_url[HTTP_MAX_URL_LEN];
-                                    snprintf(new_url, sizeof(new_url), "onion://" DDG_ONION_HOST "/?q=%s", s_ddg_query);
-                                    load_url(new_url);
-                                } else {
-                                    char new_url[HTTP_MAX_URL_LEN];
-                                    snprintf(new_url, sizeof(new_url), "onion://" DDG_ONION_HOST "/?q=%s+%s", s_ddg_query, cat);
-                                    load_url(new_url);
-                                }
-                                needs_page_render = 1;
-                            } else {
-                                load_url(l->href);
-                                needs_page_render = 1;
-                            }
+                            load_url(l->href);
+                            needs_page_render = 1;
                             break;
                         }
                     }
@@ -855,6 +938,15 @@ int main(int argc, char* argv[]) {
                 continue;
             }
             if (!kev.pressed) continue;
+
+            if (s_show_cert_modal) {
+                char ch = scancode_to_char(sc, s_shift_down);
+                if (sc == 0x01 || ch == 27 || ch == 'c' || ch == 'C' || ch == 'q' || ch == 'Q' || ch == ' ' || ch == '\n') {
+                    s_show_cert_modal = 0;
+                    needs_page_render = 1;
+                }
+                continue;
+            }
 
             int max_scroll = (s_doc.total_height > VP_H) ? (s_doc.total_height - VP_H) : 0;
 
@@ -960,6 +1052,9 @@ int main(int argc, char* argv[]) {
                 } else if (ch == 'h' || ch == 'H') {
                     load_url("home");
                     needs_page_render = 1;
+                } else if (ch == 'c' || ch == 'C') {
+                    s_show_cert_modal = 1;
+                    needs_page_render = 1;
                 } else if (ch == 'l' || ch == 'L' || ch == 'o' || ch == 'O' || ch == '/') {
                     s_url_editing = 1;
                     s_edit_url[0] = '\0';
@@ -977,7 +1072,7 @@ int main(int argc, char* argv[]) {
                     load_url("http://info.cern.ch/hypertext/WWW/TheProject.html");
                     needs_page_render = 1;
                 } else if (ch == '5' || ch == 'd' || ch == 'D' || ch == 's' || ch == 'S') {
-                    load_url("onion://" DDG_ONION_HOST "/?q=linux");
+                    load_url("onion://" DDG_ONION_HOST "/html/?q=linux");
                     needs_page_render = 1;
                 } else if (ch == '6') {
                     load_url("https://duckduckgo.com/lite/");
@@ -987,6 +1082,9 @@ int main(int argc, char* argv[]) {
                     needs_page_render = 1;
                 } else if (ch == '8') {
                     load_url("https://en.wikipedia.org/wiki/TempleOS");
+                    needs_page_render = 1;
+                } else if (ch == '9') {
+                    load_url("https://en.wikipedia.org/wiki/Terry_A._Davis");
                     needs_page_render = 1;
                 }
             }

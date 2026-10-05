@@ -9,6 +9,7 @@
 #include <font.h>
 #include <string.h>
 #include <stdlib.h>
+#include "font_cyrillic.h"
 
 #define COL_TEXT_LIGHT   0xFFE2E8F0
 #define COL_TEXT_WHITE   0xFFFFFFFF
@@ -126,8 +127,8 @@ static void put_pixel_clip(uint32_t* buf, int sw, int sh, int x, int y, uint32_t
     buf[y * sw + x] = col;
 }
 
-static void draw_char_5x7(uint32_t* buf, int sw, int sh, int x, int y, char ch, uint32_t col,
-                          int cx1, int cy1, int cx2, int cy2) {
+static void draw_char_5x7_clip(uint32_t* buf, int sw, int sh, int x, int y, char ch, uint32_t col,
+                               int cx1, int cy1, int cx2, int cy2) {
     if (ch < 32 || ch > 126) ch = ' ';
     const uint8_t* glyph = font5x7[ch - 32];
     for (int c = 0; c < 5; c++) {
@@ -138,6 +139,54 @@ static void draw_char_5x7(uint32_t* buf, int sw, int sh, int x, int y, char ch, 
             }
         }
     }
+}
+
+static void draw_char_5x7(uint32_t* buf, int sw, int sh, int x, int y, char ch, uint32_t col,
+                          int cx1, int cy1, int cx2, int cy2) {
+    draw_char_5x7_clip(buf, sw, sh, x, y, ch, col, cx1, cy1, cx2, cy2);
+}
+
+static int draw_utf8_char_clip(uint32_t* buf, int sw, int sh, int x, int y, uint32_t cp, uint32_t col,
+                               int cx1, int cy1, int cx2, int cy2) {
+    if (cp >= 32 && cp <= 126) {
+        draw_char_5x7_clip(buf, sw, sh, x, y, (char)cp, col, cx1, cy1, cx2, cy2);
+        return 6;
+    } else if (cp >= 0x0410 && cp <= 0x042F) { // Russian Capital
+        int idx = cp - 0x0410;
+        const uint8_t* glyph = font_cyr_upper[idx];
+        for (int c = 0; c < 5; c++) {
+            uint8_t bits = glyph[c];
+            for (int r = 0; r < 7; r++) {
+                if (bits & (1 << r)) put_pixel_clip(buf, sw, sh, x + c, y + r, col, cx1, cy1, cx2, cy2);
+            }
+        }
+        return 6;
+    } else if (cp >= 0x0430 && cp <= 0x044F) { // Russian Lowercase
+        int idx = cp - 0x0430;
+        const uint8_t* glyph = font_cyr_lower[idx];
+        for (int c = 0; c < 5; c++) {
+            uint8_t bits = glyph[c];
+            for (int r = 0; r < 7; r++) {
+                if (bits & (1 << r)) put_pixel_clip(buf, sw, sh, x + c, y + r, col, cx1, cy1, cx2, cy2);
+            }
+        }
+        return 6;
+    } else if (cp == 0x0401) { // Ё
+        draw_utf8_char_clip(buf, sw, sh, x, y, 0x0415, col, cx1, cy1, cx2, cy2);
+        put_pixel_clip(buf, sw, sh, x + 1, y - 2, col, cx1, cy1, cx2, cy2);
+        put_pixel_clip(buf, sw, sh, x + 3, y - 2, col, cx1, cy1, cx2, cy2);
+        return 6;
+    } else if (cp == 0x0451) { // ё
+        draw_utf8_char_clip(buf, sw, sh, x, y, 0x0435, col, cx1, cy1, cx2, cy2);
+        put_pixel_clip(buf, sw, sh, x + 1, y - 2, col, cx1, cy1, cx2, cy2);
+        put_pixel_clip(buf, sw, sh, x + 3, y - 2, col, cx1, cy1, cx2, cy2);
+        return 6;
+    } else if (cp == 0x2014) { // Em-dash —
+        for (int c = 0; c < 6; c++) put_pixel_clip(buf, sw, sh, x + c, y + 3, col, cx1, cy1, cx2, cy2);
+        return 7;
+    }
+    draw_char_5x7_clip(buf, sw, sh, x, y, ' ', col, cx1, cy1, cx2, cy2);
+    return 6;
 }
 
 static void draw_char_8x16(uint32_t* buf, int sw, int sh, int x, int y, char ch, uint32_t col,
@@ -355,6 +404,30 @@ void html_render(const char* html, uint32_t* backbuf, int screen_w, int screen_h
                 in_link = 0;
                 cur_href[0] = '\0';
                 cur_col = heading_level ? COL_GOLD_H1 : COL_TEXT_LIGHT;
+            } else if (strncasecmp(t, "h5", 2) == 0 || strncasecmp(t, "h6", 2) == 0) {
+                heading_level = 3;
+                cx = margin_left;
+                doc_y += 10;
+                cur_col = COL_TEXT_WHITE;
+            } else if (strncasecmp(t, "/h5", 3) == 0 || strncasecmp(t, "/h6", 3) == 0) {
+                heading_level = 0;
+                cx = margin_left;
+                doc_y += 10;
+                cur_col = COL_TEXT_LIGHT;
+            } else if (strncasecmp(t, "div", 3) == 0 || strncasecmp(t, "/div", 4) == 0 ||
+                       strncasecmp(t, "section", 7) == 0 || strncasecmp(t, "/section", 8) == 0 ||
+                       strncasecmp(t, "article", 7) == 0 || strncasecmp(t, "/article", 8) == 0 ||
+                       strncasecmp(t, "tr", 2) == 0 || strncasecmp(t, "/tr", 3) == 0) {
+                if (cx > margin_left) {
+                    cx = margin_left;
+                    doc_y += 12;
+                }
+            } else if (strncasecmp(t, "td", 2) == 0 || strncasecmp(t, "th", 2) == 0) {
+                cx += 8;
+            } else if (strncasecmp(t, "b", 1) == 0 || strncasecmp(t, "strong", 6) == 0) {
+                if (!heading_level && !in_link) cur_col = COL_TEXT_WHITE;
+            } else if (strncasecmp(t, "/b", 2) == 0 || strncasecmp(t, "/strong", 7) == 0) {
+                if (!heading_level && !in_link) cur_col = COL_TEXT_LIGHT;
             }
 
             continue;
@@ -389,9 +462,9 @@ void html_render(const char* html, uint32_t* backbuf, int screen_w, int screen_h
         }
 
         // Word parsing (consecutive non-whitespace characters)
-        char word[128];
+        char word[256];
         size_t widx = 0;
-        while (*p && *p != ' ' && *p != '\t' && *p != '\r' && *p != '\n' && *p != '<' && widx < sizeof(word) - 1) {
+        while (*p && *p != ' ' && *p != '\t' && *p != '\r' && *p != '\n' && *p != '<' && widx < sizeof(word) - 4) {
             // HTML Entity Decoding
             if (*p == '&') {
                 if (strncmp(p, "&amp;", 5) == 0) { word[widx++] = '&'; p += 5; }
@@ -409,9 +482,18 @@ void html_render(const char* html, uint32_t* backbuf, int screen_w, int screen_h
 
         if (widx == 0) continue;
 
+        int glyph_count = 0;
+        const char* wp = word;
+        while (*wp) {
+            uint32_t cp = 0;
+            wp = utf8_next_codepoint(wp, &cp);
+            if (cp != 0) glyph_count++;
+        }
+        if (glyph_count == 0) continue;
+
         int char_w = (heading_level ? 8 : 6);
         int line_h = (heading_level ? 16 : 12);
-        int word_w = (int)widx * char_w;
+        int word_w = glyph_count * char_w;
 
         // Word wrap
         if (cx + word_w > max_x) {
@@ -437,14 +519,24 @@ void html_render(const char* html, uint32_t* backbuf, int screen_w, int screen_h
 
         // Render word glyphs if in visible viewport
         if (screen_y + line_h >= vp_y && screen_y < vp_y + vp_h && backbuf) {
-            for (size_t i = 0; i < widx; i++) {
-                int px = screen_x + (int)i * char_w;
+            int cur_px = screen_x;
+            wp = word;
+            while (*wp) {
+                uint32_t cp = 0;
+                wp = utf8_next_codepoint(wp, &cp);
+                if (cp == 0) break;
                 if (heading_level) {
-                    draw_char_8x16(backbuf, screen_w, screen_h, px, screen_y, word[i], cur_col,
-                                   vp_x, vp_y, vp_x + vp_w, vp_y + vp_h);
+                    if (cp < 128) {
+                        draw_char_8x16(backbuf, screen_w, screen_h, cur_px, screen_y, (char)cp, cur_col,
+                                       vp_x, vp_y, vp_x + vp_w, vp_y + vp_h);
+                    } else {
+                        draw_utf8_char_clip(backbuf, screen_w, screen_h, cur_px, screen_y + 4, cp, cur_col,
+                                            vp_x, vp_y, vp_x + vp_w, vp_y + vp_h);
+                    }
+                    cur_px += 8;
                 } else {
-                    draw_char_5x7(backbuf, screen_w, screen_h, px, screen_y + 2, word[i], cur_col,
-                                  vp_x, vp_y, vp_x + vp_w, vp_y + vp_h);
+                    cur_px += draw_utf8_char_clip(backbuf, screen_w, screen_h, cur_px, screen_y + 2, cp, cur_col,
+                                                  vp_x, vp_y, vp_x + vp_w, vp_y + vp_h);
                 }
             }
 

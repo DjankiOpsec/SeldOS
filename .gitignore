@@ -1,0 +1,5 @@
+scratch/
+scripts/__pycache__/
+__pycache__/
+*.ppm
+*.tmp

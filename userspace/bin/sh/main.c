@@ -178,7 +178,7 @@ static void init_vkeys(void) {
     s_num_vkeys = 0;
 
     // Quick Command Buttons (Row 0: y: 204, h: 24)
-    s_vkeys[s_num_vkeys++] = (struct vkey){8, 204, 64, 24, 0, "DOOM", 0xFF22DD22, "doom"};
+    s_vkeys[s_num_vkeys++] = (struct vkey){8, 204, 64, 24, 0, "TOR", 0xFF9966FF, "tor"};
     s_vkeys[s_num_vkeys++] = (struct vkey){78, 204, 46, 24, 0, "LS", 0xFF3399FF, "ls"};
     s_vkeys[s_num_vkeys++] = (struct vkey){130, 204, 46, 24, 0, "PS", 0xFF33FFFF, "ps"};
     s_vkeys[s_num_vkeys++] = (struct vkey){182, 204, 66, 24, 0, "UNAME", 0xFFFFFF33, "uname"};
@@ -566,10 +566,10 @@ static void builtin_help(void) {
     printf("  sha256sum <f>   Verify file integrity against stored SHA-256\n");
     printf("  uname           Display system identification\n");
     printf("  ps              Query and display active tasks / PID info\n");
-    printf("  doom            Classic DOOM (doomgeneric with linear framebuffer)\n");
     printf("  fm              Seld Sovereign Graphical File Manager (SNL-FM)\n");
     printf("  download <url>  Fetch binary/package over network into SeldFS\n");
-    printf("  tor             Tor Browser (download via 'download tor')\n");
+    printf("  tor             Sovereign Tor & SeldTLS 1.3 Web Browser\n");
+    printf("  doom            Classic DOOM (download via 'download doom')\n");
     printf("  init            First userspace program (init system)\n\n");
     printf("Hardware Driver Control (Simulate Kernel Panic):\n");
     printf("  gpu drv off     Brutally disable GPU display driver (triggers kernel panic)\n");
@@ -1105,9 +1105,30 @@ int main(int argc, char* argv[]) {
             // External command execution from SeldFS (/bin/<cmd>)
             int res = spawnv(cmd, cmd_argv);
             if (res < 0) {
-                if (strcmp(cmd, "tor") == 0 || strcmp(cmd, "torbrowser") == 0) {
+                struct seld_stat st;
+                char test_path[64];
+                snprintf(test_path, sizeof(test_path), "/bin/%s", cmd);
+                int file_exists = (seld_stat(test_path, &st) == 0 || seld_stat(cmd, &st) == 0);
+
+                if (file_exists) {
+                    if (strcmp(cmd, "doom") == 0) {
+                        struct seld_stat wad_st;
+                        int has_wad = (seld_stat("/doom1.wad", &wad_st) == 0 || seld_stat("doom1.wad", &wad_st) == 0);
+                        if (!has_wad) {
+                            printf("snl: doom: game data 'doom1.wad' not found in SeldFS.\n");
+                            printf("     Run 'download wad' to fetch DOOM game assets from GitHub repo.\n");
+                        } else {
+                            printf("snl: doom: execution failed with exit code: %d\n", res);
+                        }
+                    } else {
+                        printf("snl: %s: execution failed (invalid binary or load error, code: %d)\n", cmd, res);
+                    }
+                } else if (strcmp(cmd, "tor") == 0 || strcmp(cmd, "torbrowser") == 0) {
                     printf("snl: tor: not installed in SeldFS.\n");
                     printf("     Run 'download tor' to fetch Tor Browser over the network.\n");
+                } else if (strcmp(cmd, "doom") == 0) {
+                    printf("snl: doom: not installed in SeldFS.\n");
+                    printf("     Run 'download doom' to fetch DOOM from GitHub repo.\n");
                 } else {
                     printf("snl: %s: command not found\n", cmd);
                 }

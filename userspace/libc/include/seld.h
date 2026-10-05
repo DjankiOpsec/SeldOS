@@ -184,6 +184,7 @@ int      seld_net_ping(uint32_t ip, uint16_t seq, uint32_t* rtt_ms);
 int      seld_net_arp(struct seld_arp_entry* entries, size_t max_entries);
 int      seld_net_download(uint32_t ip, uint16_t port, const char* url_path, const char* local_path);
 int      seld_download_url(const char* url, const char* local_path);
+int      seld_https_download(const char* host, const char* path, const char* local_path);
 int      seld_tcp_connect(uint32_t ip, uint16_t port);
 int      seld_tcp_send(int sock, const void* data, size_t len);
 int      seld_tcp_recv(int sock, void* buf, size_t max_len, uint32_t timeout_ms);

@@ -14,9 +14,9 @@
 #include <stdint.h>
 #include <stddef.h>
 
-/* Number of descriptors in rings (must be multiple of 8, max 64 for minimal footprint) */
-#define E1000_NUM_RX_DESC 32
-#define E1000_NUM_TX_DESC 32
+/* Number of descriptors in rings (RX=256 fits in 1 page and holds 512KB DMA buffers) */
+#define E1000_NUM_RX_DESC 256
+#define E1000_NUM_TX_DESC 64
 #define E1000_PKT_BUF_SZ  2048
 
 /* E1000 MMIO Register Offsets */

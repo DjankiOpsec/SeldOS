@@ -10,9 +10,11 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <seld_tls.h>
 
 #define HTTP_MAX_URL_LEN 256
 #define HTTP_MAX_RESP_LEN (128 * 1024) // 128 KiB HTML buffer
+#define DDG_ONION_HOST "duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion"
 
 struct http_response {
     int   status_code;
@@ -21,7 +23,9 @@ struct http_response {
     char  content_type[64];
     char* body;
     size_t body_len;
+    struct seld_tls_cert cert;
 };
+
 
 /*
  * Fetches an HTTP resource via Tor SOCKS5 or direct fallback.
