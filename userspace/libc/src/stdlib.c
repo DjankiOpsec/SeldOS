@@ -33,13 +33,106 @@ int atoi(const char* nptr) {
         nptr++;
     }
 
-    int result = 0;
+    uint32_t result = 0;
     while (*nptr >= '0' && *nptr <= '9') {
-        result = result * 10 + (*nptr - '0');
+        uint32_t digit = (uint32_t)(*nptr - '0');
+        // Prevent signed integer multiplication/addition overflow
+        if (result > (2147483647U - digit) / 10U) {
+            return (sign == 1) ? 2147483647 : (-2147483647 - 1);
+        }
+        result = result * 10U + digit;
         nptr++;
     }
 
-    return result * sign;
+    return (int)result * sign;
+}
+
+int parse_uint32_safe(const char* str, uint32_t* out_val) {
+    if (!str || !out_val) return -1;
+
+    while (*str == ' ' || *str == '\t' || *str == '\n' || *str == '\r') {
+        str++;
+    }
+
+    // Explicitly reject negative numbers to prevent signed-to-unsigned wrap-around
+    if (*str == '-') {
+        return -2;
+    }
+    if (*str == '+') {
+        str++;
+    }
+
+    if (*str < '0' || *str > '9') {
+        return -1; // No valid digits
+    }
+
+    uint32_t acc = 0;
+    while (*str >= '0' && *str <= '9') {
+        uint32_t digit = (uint32_t)(*str - '0');
+        // Prevent 32-bit unsigned overflow
+        if (acc > (0xFFFFFFFFU - digit) / 10U) {
+            return -3; // Overflow error
+        }
+        acc = acc * 10U + digit;
+        str++;
+    }
+
+    while (*str == ' ' || *str == '\t' || *str == '\n' || *str == '\r') {
+        str++;
+    }
+    if (*str != '\0') {
+        return -1; // Extra trailing characters
+    }
+
+    *out_val = acc;
+    return 0;
+}
+
+unsigned long strtoul(const char* nptr, char** endptr, int base) {
+    if (!nptr) return 0;
+    while (*nptr == ' ' || *nptr == '\t' || *nptr == '\n' || *nptr == '\r') nptr++;
+
+    int sign = 1;
+    if (*nptr == '-') { sign = -1; nptr++; }
+    else if (*nptr == '+') { nptr++; }
+
+    if (base == 0) {
+        if (*nptr == '0') {
+            if (nptr[1] == 'x' || nptr[1] == 'X') { base = 16; nptr += 2; }
+            else { base = 8; nptr++; }
+        } else {
+            base = 10;
+        }
+    } else if (base == 16 && nptr[0] == '0' && (nptr[1] == 'x' || nptr[1] == 'X')) {
+        nptr += 2;
+    }
+
+    unsigned long acc = 0;
+    int any = 0;
+    while (1) {
+        int c = *nptr;
+        int digit;
+        if (c >= '0' && c <= '9') digit = c - '0';
+        else if (c >= 'a' && c <= 'z') digit = c - 'a' + 10;
+        else if (c >= 'A' && c <= 'Z') digit = c - 'A' + 10;
+        else break;
+
+        if (digit >= base) break;
+        if (acc > (~0UL - digit) / base) {
+            acc = ~0UL;
+        } else {
+            acc = acc * base + digit;
+        }
+        any = 1;
+        nptr++;
+    }
+
+    if (endptr) *endptr = (char*)(any ? nptr : (nptr - 1));
+    return (sign == -1) ? (unsigned long)(-(long)acc) : acc;
+}
+
+long strtol(const char* nptr, char** endptr, int base) {
+    return (long)strtoul(nptr, endptr, base);
 }
 
 double atof(const char* nptr) {

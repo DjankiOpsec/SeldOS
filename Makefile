@@ -140,11 +140,13 @@ gateway-stop:
 gateway-status:
 	@python3 scripts/opsec_gateway.py --status
 
+QEMU_AUDIO ?= -audiodev pa,id=audio0 -machine pcspk-audiodev=audio0
+
 qemu: $(ISO_IMAGE)
-	qemu-system-x86_64 -cdrom $(ISO_IMAGE) -serial stdio -vga std -net nic,model=e1000 -net user
+	qemu-system-x86_64 -cdrom $(ISO_IMAGE) -serial stdio -vga std -net nic,model=e1000 -net user $(QEMU_AUDIO)
 
 qemu-direct: $(KERNEL_BIN) $(DISK_IMG)
-	qemu-system-x86_64 -kernel $(KERNEL_BIN) -drive file=$(DISK_IMG),format=raw -serial stdio -vga std -net nic,model=e1000 -net user
+	qemu-system-x86_64 -kernel $(KERNEL_BIN) -drive file=$(DISK_IMG),format=raw -serial stdio -vga std -net nic,model=e1000 -net user $(QEMU_AUDIO)
 
 clean:
 	rm -rf $(OBJS) $(LIBC_OBJS) $(LIBSNL) $(USER_BIN) $(USER_CRT0) build iso/boot/kernel.bin iso/boot/disk.img

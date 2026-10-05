@@ -552,7 +552,8 @@ static void builtin_help(void) {
     printf("  echo [args..]   Output arguments to standard output\n");
     printf("  exit            Terminate shell session\n");
     printf("  uptime          Display system running time from PIT chronometer\n");
-    printf("  beep [freq] [d] Test audio output with tone frequency and duration\n");
+    printf("  beep [freq|ona] TempleOS PC Speaker beep tone (default: ona 62 / 494 Hz)\n");
+    printf("  snd [f|ona|off] TempleOS PC Speaker continuous sound generator\n");
     printf("  mem             Display physical memory & kernel heap usage\n");
     printf("  ifconfig        Display network interface details & statistics (e1000)\n");
     printf("  ping <ip>       Send ICMP Echo requests to host\n");
@@ -667,12 +668,174 @@ static void builtin_echo(int argc, char* argv[]) {
 }
 
 static void builtin_beep(int argc, char* argv[]) {
-    uint32_t freq = 880;
-    uint32_t dur = 150;
-    if (argc >= 2) freq = (uint32_t)atoi(argv[1]);
-    if (argc >= 3) dur = (uint32_t)atoi(argv[2]);
-    printf("[Audio] Playing beep tone: %u Hz (%u ms)...\n", freq, dur);
+    // TempleOS Beep Command (faithful to Terry Davis Beep(I8 ona=62, Bool busy=FALSE))
+    // Syntax:
+    //   beep                   -> default TempleOS beep (ona 62 / 494 Hz, 200 ms)
+    //   beep <freq_hz> [dur]   -> tone at freq_hz for dur ms
+    //   beep ona <1-127> [dur] -> tone for TempleOS ona note for dur ms
+    //   beep -o <1-127> [dur]  -> shorthand for ona note
+    uint32_t freq = 494; // TempleOS default note 62 (B4)
+    uint32_t dur = 200;
+    int is_ona_mode = 0;
+    int8_t ona_val = 62;
+
+    if (argc >= 2) {
+        if (strcmp(argv[1], "ona") == 0 || strcmp(argv[1], "-o") == 0) {
+            if (argc < 3) {
+                printf("snl: beep: error: missing ona note argument (1..127).\n");
+                printf("Usage: beep ona <1..127> [duration_ms]\n");
+                return;
+            }
+            uint32_t raw_ona = 0;
+            int err = parse_uint32_safe(argv[2], &raw_ona);
+            if (err == -2) {
+                printf("snl: beep: error: negative value not permitted (C overflow prevention).\n");
+                return;
+            } else if (err == -3) {
+                printf("snl: beep: error: integer overflow detected (exceeds 32-bit range).\n");
+                return;
+            } else if (err != 0 || raw_ona < 1 || raw_ona > 127) {
+                printf("snl: beep: error: ona note must be between 1 and 127.\n");
+                return;
+            }
+            ona_val = (int8_t)raw_ona;
+            freq = seld_ona2freq(ona_val);
+            is_ona_mode = 1;
+
+            if (argc >= 4) {
+                uint32_t raw_dur = 0;
+                int d_err = parse_uint32_safe(argv[3], &raw_dur);
+                if (d_err == -2) {
+                    printf("snl: beep: error: negative duration not permitted.\n");
+                    return;
+                } else if (d_err == -3) {
+                    printf("snl: beep: error: integer overflow in duration.\n");
+                    return;
+                } else if (d_err != 0) {
+                    printf("snl: beep: error: invalid duration '%s'.\n", argv[3]);
+                    return;
+                }
+                dur = raw_dur;
+            }
+        } else {
+            // Numeric frequency or duration
+            uint32_t raw_freq = 0;
+            int err = parse_uint32_safe(argv[1], &raw_freq);
+            if (err == -2) {
+                printf("snl: beep: error: negative value not permitted (C overflow prevention).\n");
+                printf("Usage: beep [freq_hz | ona <1..127>] [duration_ms]\n");
+                return;
+            } else if (err == -3) {
+                printf("snl: beep: error: integer overflow detected (exceeds 32-bit range).\n");
+                return;
+            } else if (err != 0) {
+                printf("snl: beep: error: invalid numeric frequency '%s'.\n", argv[1]);
+                printf("Usage: beep [freq_hz | ona <1..127>] [duration_ms]\n");
+                return;
+            }
+
+            if (raw_freq < 20 || raw_freq > 20000) {
+                printf("snl: beep: error: frequency %u Hz out of audible range (20 - 20000 Hz).\n", raw_freq);
+                return;
+            }
+            freq = raw_freq;
+            ona_val = seld_freq2ona(freq);
+
+            if (argc >= 3) {
+                uint32_t raw_dur = 0;
+                int d_err = parse_uint32_safe(argv[2], &raw_dur);
+                if (d_err == -2) {
+                    printf("snl: beep: error: negative duration not permitted.\n");
+                    return;
+                } else if (d_err == -3) {
+                    printf("snl: beep: error: integer overflow in duration.\n");
+                    return;
+                } else if (d_err != 0) {
+                    printf("snl: beep: error: invalid duration '%s'.\n", argv[2]);
+                    return;
+                }
+                dur = raw_dur;
+            }
+        }
+    }
+
+    if (dur > 10000) {
+        printf("snl: beep: error: duration %u ms exceeds maximum allowed limit (10000 ms).\n", dur);
+        return;
+    }
+    if (dur == 0) dur = 200;
+
+    if (is_ona_mode) {
+        printf("[TempleOS Audio] Playing ona %d: %u Hz (%u ms)...\n", ona_val, freq, dur);
+    } else {
+        printf("[TempleOS Audio] Playing tone: %u Hz (ona %d, %u ms)...\n", freq, ona_val, dur);
+    }
+    fflush(stdout);
+
     seld_beep(freq, dur);
+}
+
+static void builtin_snd(int argc, char* argv[]) {
+    // TempleOS Snd Command (KMisc.HC Snd(I8 ona=0))
+    // Syntax:
+    //   snd off | snd 0        -> stops sound (silence)
+    //   snd <freq_hz>          -> continuous tone at freq_hz
+    //   snd ona <1..127>       -> continuous tone for TempleOS ona note
+    if (argc < 2) {
+        printf("TempleOS PC Speaker Sound Generator (Snd)\n");
+        printf("Usage:\n");
+        printf("  snd <freq_hz>          Start continuous tone (e.g. snd 440)\n");
+        printf("  snd ona <1..127>       Start continuous tone by note (e.g. snd ona 60)\n");
+        printf("  snd off | snd 0        Stop tone / silence speaker\n");
+        return;
+    }
+
+    if (strcmp(argv[1], "off") == 0 || strcmp(argv[1], "0") == 0 || strcmp(argv[1], "stop") == 0) {
+        seld_beep(0, 0); // dur=0, freq=0 -> silence
+        printf("[TempleOS Audio] Speaker silenced.\n");
+        return;
+    }
+
+    uint32_t freq = 0;
+    int8_t ona_val = 0;
+
+    if (strcmp(argv[1], "ona") == 0 || strcmp(argv[1], "-o") == 0) {
+        if (argc < 3) {
+            printf("snl: snd: error: missing ona note argument (1..127).\n");
+            return;
+        }
+        uint32_t raw_ona = 0;
+        int err = parse_uint32_safe(argv[2], &raw_ona);
+        if (err != 0 || raw_ona < 1 || raw_ona > 127) {
+            printf("snl: snd: error: ona note must be between 1 and 127.\n");
+            return;
+        }
+        ona_val = (int8_t)raw_ona;
+        freq = seld_ona2freq(ona_val);
+    } else {
+        uint32_t raw_freq = 0;
+        int err = parse_uint32_safe(argv[1], &raw_freq);
+        if (err == -2) {
+            printf("snl: snd: error: negative value not permitted.\n");
+            return;
+        } else if (err == -3) {
+            printf("snl: snd: error: integer overflow detected.\n");
+            return;
+        } else if (err != 0) {
+            printf("snl: snd: error: invalid frequency '%s'.\n", argv[1]);
+            return;
+        }
+        if (raw_freq < 20 || raw_freq > 20000) {
+            printf("snl: snd: error: frequency %u Hz out of audible range (20 - 20000 Hz).\n", raw_freq);
+            return;
+        }
+        freq = raw_freq;
+        ona_val = seld_freq2ona(freq);
+    }
+
+    // Call seld_beep with duration=0 for continuous sound
+    seld_beep(freq, 0);
+    printf("[TempleOS Audio] Continuous tone active: %u Hz (ona %d). Type 'snd off' to stop.\n", freq, ona_val);
 }
 
 static void builtin_uptime(void) {
@@ -1087,6 +1250,8 @@ int main(int argc, char* argv[]) {
             builtin_uptime();
         } else if (strcmp(cmd, "beep") == 0) {
             builtin_beep(cmd_argc, cmd_argv);
+        } else if (strcmp(cmd, "snd") == 0) {
+            builtin_snd(cmd_argc, cmd_argv);
         } else if (strcmp(cmd, "mem") == 0) {
             builtin_mem();
         } else if (strcmp(cmd, "ifconfig") == 0) {

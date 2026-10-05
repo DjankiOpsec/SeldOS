@@ -140,8 +140,70 @@ int seld_poll_mouse(struct seld_mouse_event* ev) {
     return (int)seld_syscall(SYS_POLLMOUSE, (long)ev, 0, 0);
 }
 
+static const uint16_t s_libc_ona_to_freq[128] = {
+        0,    15,    15,    16,    17,    18,    19,    21,
+       22,    23,    24,    26,    28,    29,    31,    33,
+       35,    37,    39,    41,    44,    46,    49,    52,
+       55,    58,    62,    65,    69,    73,    78,    82,
+       87,    92,    98,   104,   110,   117,   123,   131,
+      139,   147,   156,   165,   175,   185,   196,   208,
+      220,   233,   247,   262,   277,   294,   311,   330,
+      349,   370,   392,   415,   440,   466,   494,   523,
+      554,   587,   622,   659,   698,   740,   784,   831,
+      880,   932,   988,  1047,  1109,  1175,  1245,  1319,
+     1397,  1480,  1568,  1661,  1760,  1865,  1976,  2093,
+     2217,  2349,  2489,  2637,  2794,  2960,  3136,  3322,
+     3520,  3729,  3951,  4186,  4435,  4699,  4978,  5274,
+     5588,  5920,  6272,  6645,  7040,  7459,  7902,  8372,
+     8870,  9397,  9956, 10548, 11175, 11840, 12544, 13290,
+    14080, 14917, 15804, 16744, 17740, 18795, 19912, 21096
+};
+
+uint32_t seld_ona2freq(int8_t ona) {
+    if (ona <= 0) return 0;
+    if (ona > 127) ona = 127;
+    return (uint32_t)s_libc_ona_to_freq[(uint8_t)ona];
+}
+
+int8_t seld_freq2ona(uint32_t freq_hz) {
+    if (freq_hz == 0) return 0;
+    if (freq_hz <= s_libc_ona_to_freq[1]) return 1;
+    if (freq_hz >= s_libc_ona_to_freq[127]) return 127;
+
+    int low = 1, high = 127;
+    int best_ona = 1;
+    uint32_t best_diff = 0xFFFFFFFF;
+
+    while (low <= high) {
+        int mid = (low + high) / 2;
+        uint32_t mid_f = s_libc_ona_to_freq[mid];
+        uint32_t diff = (freq_hz > mid_f) ? (freq_hz - mid_f) : (mid_f - freq_hz);
+        if (diff < best_diff) {
+            best_diff = diff;
+            best_ona = mid;
+        }
+
+        if (mid_f == freq_hz) {
+            return (int8_t)mid;
+        } else if (mid_f < freq_hz) {
+            low = mid + 1;
+        } else {
+            high = mid - 1;
+        }
+    }
+    return (int8_t)best_ona;
+}
+
 int seld_beep(uint32_t freq_hz, uint32_t duration_ms) {
     return (int)seld_syscall(SYS_BEEP, (long)freq_hz, (long)duration_ms, 0);
+}
+
+int seld_snd(int8_t ona) {
+    if (ona <= 0) {
+        return (int)seld_syscall(SYS_BEEP, 0, 0, 0);
+    }
+    uint32_t freq = seld_ona2freq(ona);
+    return (int)seld_syscall(SYS_BEEP, (long)freq, 0, 0);
 }
 
 int seld_audio_play(const void* samples, size_t len, uint32_t sample_rate) {

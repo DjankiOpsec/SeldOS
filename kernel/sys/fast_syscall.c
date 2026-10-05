@@ -812,7 +812,21 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
             // a1 = freq_hz, a2 = duration_ms
             uint32_t freq = (uint32_t)a1;
             uint32_t dur = (uint32_t)a2;
-            audio_beep(freq, dur);
+
+            if (dur == 0) {
+                // Continuous tone control (TempleOS Snd primitive)
+                if (freq == 0) {
+                    audio_stop_tone();
+                } else {
+                    if (freq > 20000) freq = 20000;
+                    audio_play_tone(freq);
+                }
+            } else {
+                // Timed beep with overflow protection
+                if (freq > 20000) freq = 20000;
+                if (dur > 10000) dur = 10000;
+                audio_beep(freq, dur);
+            }
             return 0;
         }
 

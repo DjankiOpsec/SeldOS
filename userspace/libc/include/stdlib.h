@@ -21,12 +21,15 @@ void* calloc(size_t nmemb, size_t size);
 void  exit(int status) __attribute__((noreturn));
 
 /* Conversions and Arithmetic */
-int   atoi(const char* nptr);
-double atof(const char* nptr);
-char* itoa(int value, char* str, int base);
-int   abs(int j);
-long  labs(long j);
-int   system(const char* command);
+int           atoi(const char* nptr);
+long          strtol(const char* nptr, char** endptr, int base);
+unsigned long strtoul(const char* nptr, char** endptr, int base);
+int           parse_uint32_safe(const char* str, uint32_t* out_val);
+double        atof(const char* nptr);
+char*         itoa(int value, char* str, int base);
+int           abs(int j);
+long          labs(long j);
+int           system(const char* command);
 
 /* Environment */
 char* getenv(const char* name);

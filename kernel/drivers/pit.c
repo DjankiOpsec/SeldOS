@@ -58,8 +58,16 @@ uint64_t pit_get_uptime_sec(void) {
 }
 
 void pit_sleep_ms(uint64_t ms) {
-    uint64_t target_ticks = timer_ticks + ((ms * current_hz + 999) / 1000);
-    while (timer_ticks < target_ticks) {
+    if (ms == 0) return;
+    // Bound sleep duration to 60 seconds max to prevent tick overflows & infinite freezes
+    if (ms > 60000) ms = 60000;
+    if (current_hz == 0) current_hz = PIT_TARGET_HZ;
+
+    uint64_t delta_ticks = (ms * current_hz + 999) / 1000;
+    if (delta_ticks == 0) delta_ticks = 1;
+
+    uint64_t start_ticks = timer_ticks;
+    while ((timer_ticks - start_ticks) < delta_ticks) {
         __asm__ volatile ("hlt");
     }
 }
