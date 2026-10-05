@@ -13,8 +13,8 @@
 
 #define AUDIO_DEV_NONE    0
 #define AUDIO_DEV_SPEAKER (1 << 0)
-#define AUDIO_DEV_SB16    0
-#define AUDIO_DEV_AC97    0
+#define AUDIO_DEV_AC97    (1 << 1)
+#define AUDIO_DEV_SB16    (1 << 2)
 
 struct audio_info {
     uint32_t active_devices;
@@ -34,5 +34,6 @@ uint32_t audio_ona_to_freq(int8_t ona);
 int8_t   audio_freq_to_ona(uint32_t freq_hz);
 int      audio_play_pcm(const uint8_t* samples, size_t len, uint32_t sample_rate);
 void     audio_chime_boot(void);
+void     audio_timer_tick(void);
 
 #endif /* SELD_AUDIO_H */

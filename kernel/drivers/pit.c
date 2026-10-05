@@ -9,6 +9,7 @@
  */
 
 #include "pit.h"
+#include "audio.h"
 #include "io.h"
 #include "serial.h"
 
@@ -43,6 +44,7 @@ void pit_init(uint32_t frequency) {
 
 void pit_handle_interrupt(void) {
     timer_ticks++;
+    audio_timer_tick();
 }
 
 uint64_t pit_get_ticks(void) {

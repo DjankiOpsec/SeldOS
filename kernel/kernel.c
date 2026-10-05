@@ -114,7 +114,7 @@ void kernel_main(uint64_t mb_info_addr, uint64_t mb_magic) {
     boot_anim_step("PIT", "100 Hz chronometer timer online, IRQ0 active", 10, 15);
 
     audio_init();
-    boot_anim_step("AUDIO", "PC Speaker sound driver online", 11, 15);
+    boot_anim_step("AUDIO", "Sound architecture online (Speaker/AC97/SB16)", 11, 15);
 
     sched_init();
     boot_anim_step("SCHED", "Supervisor cooperative scheduler initialized", 12, 15);
