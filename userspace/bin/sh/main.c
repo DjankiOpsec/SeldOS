@@ -920,15 +920,17 @@ static void builtin_ifconfig(void) {
         return;
     }
 
-    char ip_buf[16], mask_buf[16], gw_buf[16], mac_buf[18];
+    char ip_buf[16], mask_buf[16], gw_buf[16], mac_buf[18], dns_buf[16];
     format_ip_u(info.ip, ip_buf, sizeof(ip_buf));
     format_ip_u(info.netmask, mask_buf, sizeof(mask_buf));
     format_ip_u(info.gateway, gw_buf, sizeof(gw_buf));
+    format_ip_u(info.dns, dns_buf, sizeof(dns_buf));
     format_mac_u(info.mac, mac_buf, sizeof(mac_buf));
 
     printf("eth0: flags=UP,BROADCAST,MULTICAST mtu 1500\n");
     printf("      ether %s (Hardware PCI Ethernet)\n", mac_buf);
     printf("      inet %s  netmask %s  gateway %s\n", ip_buf, mask_buf, gw_buf);
+    printf("      dns  %s (Control D Ads & Trackers - OpSec P2)\n", dns_buf);
     printf("      RX packets %lu  bytes %lu  dropped %lu  errors %lu\n",
            info.rx_frames, info.rx_bytes, info.rx_dropped, info.rx_checksum_errors);
     printf("      TX packets %lu  bytes %lu\n",
@@ -990,7 +992,11 @@ static void builtin_ping(int argc, char* argv[]) {
     }
     uint32_t target_ip = 0;
     if (parse_ip_u(argv[1], &target_ip) != 0) {
-        if (seld_dns_resolve(argv[1], &target_ip) != 0) {
+        int dres = seld_dns_resolve(argv[1], &target_ip);
+        if (dres == -5 || target_ip == 0) {
+            printf("[-] ping: host '%s' is BLOCKED by Control D OpSec Filter (0.0.0.0)\n", argv[1]);
+            return;
+        } else if (dres != 0) {
             printf("[-] ping: cannot resolve '%s': Unknown host\n", argv[1]);
             return;
         }
@@ -1030,17 +1036,30 @@ static void builtin_ping(int argc, char* argv[]) {
 
 static void builtin_dns(int argc, char* argv[]) {
     if (argc < 2) {
-        printf("Usage: dns <hostname>\n");
+        printf("Usage: dns <hostname> [dot]\n");
+        printf("  dns <host>      - Resolve via Control D (76.76.2.2:53 [Ads & Trackers])\n");
+        printf("  dns <host> dot  - Resolve via Control D DoT (p2.freedns.controld.com:853)\n");
+        printf("  OpSec Profile: Ads & Trackers (No logging / Zero profiling)\n");
         return;
     }
-    printf("Resolving %s via DNS (UDP 10.0.2.3:53)...\n", argv[1]);
+    int use_dot = (argc >= 3 && (strcmp(argv[2], "dot") == 0 || strcmp(argv[2], "tls") == 0));
     uint32_t ip = 0;
-    if (seld_dns_resolve(argv[1], &ip) == 0) {
+    int res;
+    if (use_dot) {
+        printf("Resolving %s via Control D DNS-over-TLS (p2.freedns.controld.com:853)...\n", argv[1]);
+        res = seld_dns_resolve_dot(argv[1], &ip);
+    } else {
+        printf("Resolving %s via Control D (76.76.2.2:53 [Ads & Trackers])...\n", argv[1]);
+        res = seld_dns_resolve(argv[1], &ip);
+    }
+    if (res == 0 && ip != 0) {
         char ip_str[16];
         format_ip_u(ip, ip_str, sizeof(ip_str));
-        printf("Resolved: %s -> %s\n", argv[1], ip_str);
+        printf("Resolved: %s -> %s [%s]\n", argv[1], ip_str, use_dot ? "DoT TLS 1.3" : "Control D P2");
+    } else if (res == -5 || ip == 0) {
+        printf("[BLOCKED] %s -> 0.0.0.0 (Filtered by Control D Ads & Trackers)\n", argv[1]);
     } else {
-        printf("[-] Failed to resolve %s\n", argv[1]);
+        printf("[-] Failed to resolve %s (error %d)\n", argv[1], res);
     }
 }
 

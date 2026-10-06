@@ -457,9 +457,195 @@ int seld_tcp_close(int sock) {
     return (int)seld_syscall(SYS_NET_TCP_CLOSE, (long)sock, 0, 0);
 }
 
+static const uint8_t* dns_dot_skip_name(const uint8_t* p, const uint8_t* end) {
+    while (p < end) {
+        uint8_t len = *p;
+        if (len == 0) return p + 1;
+        if ((len & 0xC0) == 0xC0) return p + 2; // Compression pointer
+        p += 1 + len;
+    }
+    return end;
+}
+
+int seld_dns_resolve_dot(const char* hostname, uint32_t* ip_out) {
+    if (!hostname || !ip_out) return -1;
+    *ip_out = 0;
+
+    // 0. Sanitize hostname
+    const char* p = hostname;
+    while (*p == ' ' || *p == '\t') p++;
+    if (strncmp(p, "http://", 7) == 0) p += 7;
+    else if (strncmp(p, "https://", 8) == 0) p += 8;
+
+    char clean_host[128];
+    size_t clen = 0;
+    while (*p && *p != '/' && *p != ':' && *p != ' ' && clen < sizeof(clean_host) - 1) {
+        char ch = *p++;
+        if (ch >= 'A' && ch <= 'Z') ch += 32;
+        clean_host[clen++] = ch;
+    }
+    clean_host[clen] = '\0';
+    if (clen == 0) return -1;
+
+    // Fast bootstrap for Control D endpoints
+    if (strcmp(clean_host, "p2.freedns.controld.com") == 0 ||
+        strcmp(clean_host, "freedns.controld.com") == 0) {
+        *ip_out = SELD_CONTROLD_DOT_IP;
+        return 0;
+    }
+    if (strcmp(clean_host, "controld.com") == 0) {
+        *ip_out = SELD_CONTROLD_DNS_P2_PRIMARY;
+        return 0;
+    }
+
+    // Connect to Control D DoT Anycast (76.76.2.11) on port 853 (RFC 7858)
+    int sock = seld_tcp_connect(SELD_CONTROLD_DOT_IP, 853);
+    if (sock < 0) return -2;
+
+    struct seld_tls_conn* tls = (struct seld_tls_conn*)malloc(sizeof(struct seld_tls_conn));
+    if (!tls) {
+        seld_tcp_close(sock);
+        return -3;
+    }
+
+    if (seld_tls_handshake(tls, sock, SELD_CONTROLD_DOT_HOST) != 0) {
+        free(tls);
+        seld_tcp_close(sock);
+        return -4;
+    }
+
+    // Build DNS query with 2-byte length prefix (RFC 7858)
+    uint8_t qbuf[512];
+    uint8_t* dst = qbuf + 2; // Leave 2 bytes for length prefix
+
+    // DNS Header: ID=0x5E1D, Flags=0x0100 (Standard Query, RD=1), QDCOUNT=1
+    dst[0] = 0x5E; dst[1] = 0x1D; // ID
+    dst[2] = 0x01; dst[3] = 0x00; // Flags: RD
+    dst[4] = 0x00; dst[5] = 0x01; // QDCOUNT: 1
+    dst[6] = 0x00; dst[7] = 0x00; // ANCOUNT: 0
+    dst[8] = 0x00; dst[9] = 0x00; // NSCOUNT: 0
+    dst[10] = 0x00; dst[11] = 0x00; // ARCOUNT: 0
+    dst += 12;
+
+    // Question: QNAME
+    const char* src = clean_host;
+    while (*src) {
+        const char* dot = strchr(src, '.');
+        size_t label_len = dot ? (size_t)(dot - src) : strlen(src);
+        if (label_len == 0 || label_len > 63 || (size_t)(dst - qbuf) + label_len + 6 >= sizeof(qbuf)) {
+            seld_tls_close(tls);
+            free(tls);
+            seld_tcp_close(sock);
+            return -5;
+        }
+        *dst++ = (uint8_t)label_len;
+        memcpy(dst, src, label_len);
+        dst += label_len;
+        if (!dot) break;
+        src = dot + 1;
+    }
+    *dst++ = 0x00; // Root label
+    *dst++ = 0x00; *dst++ = 0x01; // QTYPE: A (1)
+    *dst++ = 0x00; *dst++ = 0x01; // QCLASS: IN (1)
+
+    uint16_t wire_len = (uint16_t)(dst - (qbuf + 2));
+    qbuf[0] = (uint8_t)(wire_len >> 8);
+    qbuf[1] = (uint8_t)(wire_len & 0xFF);
+
+    if (seld_tls_write(tls, qbuf, wire_len + 2) <= 0) {
+        seld_tls_close(tls);
+        free(tls);
+        seld_tcp_close(sock);
+        return -6;
+    }
+
+    // Read 2-byte response length
+    uint8_t len_bytes[2];
+    int r = seld_tls_read(tls, len_bytes, 2, 3000);
+    if (r != 2) {
+        seld_tls_close(tls);
+        free(tls);
+        seld_tcp_close(sock);
+        return -7;
+    }
+    uint16_t resp_len = ((uint16_t)len_bytes[0] << 8) | len_bytes[1];
+    if (resp_len < 12 || resp_len > 4096) {
+        seld_tls_close(tls);
+        free(tls);
+        seld_tcp_close(sock);
+        return -8;
+    }
+
+    uint8_t resp_buf[4096];
+    size_t total_read = 0;
+    while (total_read < resp_len) {
+        int nr = seld_tls_read(tls, resp_buf + total_read, resp_len - total_read, 2000);
+        if (nr <= 0) break;
+        total_read += (size_t)nr;
+    }
+
+    seld_tls_close(tls);
+    free(tls);
+    seld_tcp_close(sock);
+
+    if (total_read < resp_len) return -9;
+
+    // Parse DNS response
+    uint16_t flags = ((uint16_t)resp_buf[2] << 8) | resp_buf[3];
+    uint8_t rcode = (uint8_t)(flags & 0x0F);
+    if (rcode != 0) return -10; // NXDOMAIN or error
+
+    uint16_t qdcount = ((uint16_t)resp_buf[4] << 8) | resp_buf[5];
+    uint16_t ancount = ((uint16_t)resp_buf[6] << 8) | resp_buf[7];
+    if (ancount == 0) return -11;
+
+    const uint8_t* ptr = resp_buf + 12;
+    const uint8_t* end = resp_buf + resp_len;
+
+    // Skip question section
+    for (int q = 0; q < qdcount && ptr < end; q++) {
+        ptr = dns_dot_skip_name(ptr, end);
+        if (ptr + 4 > end) return -12;
+        ptr += 4; // QTYPE + QCLASS
+    }
+
+    // Parse answers
+    for (int a = 0; a < ancount && ptr < end; a++) {
+        ptr = dns_dot_skip_name(ptr, end);
+        if (ptr + 10 > end) return -13;
+        uint16_t rtype = ((uint16_t)ptr[0] << 8) | ptr[1];
+        uint16_t rclass = ((uint16_t)ptr[2] << 8) | ptr[3];
+        uint16_t rdlength = ((uint16_t)ptr[8] << 8) | ptr[9];
+        ptr += 10;
+        if (ptr + rdlength > end) return -14;
+
+        if (rtype == 1 && rclass == 1 && rdlength == 4) { // Type A, Class IN, 4 bytes
+            uint32_t ip = (uint32_t)(ptr[0] | (ptr[1] << 8) | (ptr[2] << 16) | (ptr[3] << 24));
+            *ip_out = ip;
+            if (ip == 0) return -5; // Blocked by OpSec Filter (0.0.0.0)
+            return 0;
+        }
+        ptr += rdlength;
+    }
+
+    return -15; // No A record found
+}
+
 int seld_dns_resolve(const char* hostname, uint32_t* ip_out) {
     if (!hostname || !ip_out) return -1;
-    return (int)seld_syscall(SYS_NET_DNS_RESOLVE, (long)hostname, (long)ip_out, 0);
+    // 1. Fast kernel resolution via Control D Ads & Trackers (76.76.2.2:53 / 76.76.10.2:53)
+    int res = (int)seld_syscall(SYS_NET_DNS_RESOLVE, (long)hostname, (long)ip_out, 0);
+    if (res == 0) {
+        if (*ip_out == 0) return -5; // Blocked by OpSec Filter
+        return 0;
+    }
+    if (res == -5) {
+        *ip_out = 0;
+        return -5; // Blocked by OpSec Filter
+    }
+
+    // 2. Encrypted fallback: DNS-over-TLS (p2.freedns.controld.com:853)
+    return seld_dns_resolve_dot(hostname, ip_out);
 }
 
 int seld_drv_off(const char* driver_name) {

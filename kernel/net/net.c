@@ -55,6 +55,12 @@ static struct {
     size_t   reply_len;
 } s_ping_state = {0};
 
+/* Control D Sovereign OpSec DNS (Ads & Trackers Profile - p2) */
+#define DNS_CONTROLD_P2_PRIMARY    MAKE_IP(76, 76, 2, 2)
+#define DNS_CONTROLD_P2_SECONDARY  MAKE_IP(76, 76, 10, 2)
+#define DNS_CONTROLD_DOT_IP        MAKE_IP(76, 76, 2, 11)
+#define DNS_CONTROLD_DOT_HOST      "p2.freedns.controld.com"
+
 /* DNS Query & Cache State */
 #define DNS_PORT 53
 #define DNS_CACHE_SIZE 16
@@ -679,11 +685,9 @@ static void net_handle_udp(const uint8_t* frame, size_t frame_len, const struct 
                         // Type 1 = A (IPv4), Class 1 = IN, rdlength = 4
                         if (rtype == 1 && rclass == 1 && rdlength == 4) {
                             uint32_t ip = (uint32_t)(p[0] | (p[1] << 8) | (p[2] << 16) | (p[3] << 24));
-                            if (ip != 0) {
-                                s_dns_tracker.resolved_ip = ip;
-                                s_dns_tracker.answered = 1;
-                                break;
-                            }
+                            s_dns_tracker.resolved_ip = ip;
+                            s_dns_tracker.answered = 1;
+                            break;
                         }
 
                         p += rdlength;
@@ -713,11 +717,9 @@ static void net_handle_udp(const uint8_t* frame, size_t frame_len, const struct 
 
                             if (rtype == 1 && rclass == 1 && rdlength == 4) {
                                 uint32_t ip = (uint32_t)(p[0] | (p[1] << 8) | (p[2] << 16) | (p[3] << 24));
-                                if (ip != 0) {
-                                    s_dns_tracker.resolved_ip = ip;
-                                    s_dns_tracker.answered = 1;
-                                    break;
-                                }
+                                s_dns_tracker.resolved_ip = ip;
+                                s_dns_tracker.answered = 1;
+                                break;
                             }
 
                             p += rdlength;
@@ -998,14 +1000,23 @@ int net_dns_resolve(const char* hostname, uint32_t* ip_out) {
         *ip_out = s_config.dns;
         return 0;
     }
+    if (strcmp(clean_host, "p2.freedns.controld.com") == 0 ||
+        strcmp(clean_host, "freedns.controld.com") == 0) {
+        *ip_out = DNS_CONTROLD_DOT_IP;
+        return 0;
+    }
+    if (strcmp(clean_host, "controld.com") == 0) {
+        *ip_out = DNS_CONTROLD_P2_PRIMARY;
+        return 0;
+    }
 
-    // 3. DNS Cache check
+    // 3. DNS Cache check (includes 0.0.0.0 sinkholed ads/trackers)
     uint64_t now = pit_get_uptime_ms();
     for (int i = 0; i < DNS_CACHE_SIZE; i++) {
-        if (s_dns_cache[i].ip != 0 && strcmp(s_dns_cache[i].hostname, clean_host) == 0) {
+        if (s_dns_cache[i].hostname[0] != '\0' && strcmp(s_dns_cache[i].hostname, clean_host) == 0) {
             if (now - s_dns_cache[i].timestamp_ms < 300000) { // 5 min TTL
                 *ip_out = s_dns_cache[i].ip;
-                return 0;
+                return (s_dns_cache[i].ip == 0) ? -5 : 0;
             }
         }
     }
@@ -1057,11 +1068,17 @@ int net_dns_resolve(const char* hostname, uint32_t* ip_out) {
 
     uint16_t client_port = (uint16_t)(45000 + (qid % 10000));
 
-    // Send query to primary DNS (10.0.2.3:53) and gateway (10.0.2.2:53)
-    net_send_udp(s_config.dns, client_port, DNS_PORT, query_buf, query_len);
+    // Send query to Control D P2 Primary (76.76.2.2:53) and Secondary (76.76.10.2:53)
+    // plus local gateway DNS (10.0.2.3:53 / s_config.gateway) as fallback
+    net_send_udp(DNS_CONTROLD_P2_PRIMARY, client_port, DNS_PORT, query_buf, query_len);
+    net_send_udp(DNS_CONTROLD_P2_SECONDARY, client_port, DNS_PORT, query_buf, query_len);
+    if (s_config.dns != DNS_CONTROLD_P2_PRIMARY && s_config.dns != 0) {
+        net_send_udp(s_config.dns, client_port, DNS_PORT, query_buf, query_len);
+    }
     if (s_config.gateway != 0 && s_config.gateway != s_config.dns) {
         net_send_udp(s_config.gateway, client_port, DNS_PORT, query_buf, query_len);
     }
+    net_send_udp(MAKE_IP(10, 0, 2, 3), client_port, DNS_PORT, query_buf, query_len);
 
     uint64_t start_ms = pit_get_uptime_ms();
     uint64_t last_retransmit_ms = start_ms;
@@ -1070,34 +1087,31 @@ int net_dns_resolve(const char* hostname, uint32_t* ip_out) {
         net_poll();
 
         if (s_dns_tracker.answered) {
-            if (s_dns_tracker.resolved_ip != 0) {
-                *ip_out = s_dns_tracker.resolved_ip;
+            *ip_out = s_dns_tracker.resolved_ip;
 
-                // Save to cache
-                strncpy(s_dns_cache[s_dns_cache_idx].hostname, clean_host, 63);
-                s_dns_cache[s_dns_cache_idx].ip = s_dns_tracker.resolved_ip;
-                s_dns_cache[s_dns_cache_idx].timestamp_ms = pit_get_uptime_ms();
-                s_dns_cache_idx = (s_dns_cache_idx + 1) % DNS_CACHE_SIZE;
+            // Save to cache (including 0.0.0.0 sinkholed records)
+            strncpy(s_dns_cache[s_dns_cache_idx].hostname, clean_host, 63);
+            s_dns_cache[s_dns_cache_idx].ip = s_dns_tracker.resolved_ip;
+            s_dns_cache[s_dns_cache_idx].timestamp_ms = pit_get_uptime_ms();
+            s_dns_cache_idx = (s_dns_cache_idx + 1) % DNS_CACHE_SIZE;
 
-                return 0;
-            } else {
-                return -3; // Host not found / NXDOMAIN
+            if (s_dns_tracker.resolved_ip == 0) {
+                return -5; // Blocked by OpSec DNS filter (Ads / Trackers)
             }
+            return 0;
         }
 
         uint64_t elapsed = pit_get_uptime_ms() - last_retransmit_ms;
         if (elapsed >= 250) {
             last_retransmit_ms = pit_get_uptime_ms();
 
-            // Retransmit to primary DNS and gateway
-            net_send_udp(s_config.dns, client_port, DNS_PORT, query_buf, query_len);
-            if (s_config.gateway != 0 && s_config.gateway != s_config.dns) {
+            // Retransmit to Control D P2 primary, secondary, and gateway
+            net_send_udp(DNS_CONTROLD_P2_PRIMARY, client_port, DNS_PORT, query_buf, query_len);
+            net_send_udp(DNS_CONTROLD_P2_SECONDARY, client_port, DNS_PORT, query_buf, query_len);
+            if (s_config.gateway != 0) {
                 net_send_udp(s_config.gateway, client_port, DNS_PORT, query_buf, query_len);
             }
-
-            // Parallel fallback to high-availability public DNS servers via NAT
-            net_send_udp(MAKE_IP(1, 1, 1, 1), client_port, DNS_PORT, query_buf, query_len);
-            net_send_udp(MAKE_IP(8, 8, 8, 8), client_port, DNS_PORT, query_buf, query_len);
+            net_send_udp(MAKE_IP(10, 0, 2, 3), client_port, DNS_PORT, query_buf, query_len);
         }
 
         pit_sleep_ms(2);
@@ -1425,19 +1439,18 @@ void net_init(void) {
         memcpy(s_config.mac, mac, ETH_ALEN);
         s_config.link_up = 1;
 
-        // Default QEMU / VirtualBox User Network configuration
+        // Default Sovereign Network Configuration: Control D Ads & Trackers (p2)
         s_config.ip      = MAKE_IP(10, 0, 2, 15);
         s_config.netmask = MAKE_IP(255, 255, 255, 0);
         s_config.gateway = MAKE_IP(10, 0, 2, 2);
-        s_config.dns     = MAKE_IP(10, 0, 2, 3);
+        s_config.dns     = DNS_CONTROLD_P2_PRIMARY; // 76.76.2.2 (Control D Ads & Trackers)
 
-        // Proactively seed ARP table for gateway and DNS
+        // Proactively seed ARP table for gateway
         net_arp_request(s_config.gateway);
-        net_arp_request(s_config.dns);
 
         serial_puts("[+] Net: Interface eth0 active (");
         serial_puts(nic_name);
-        serial_puts("). IP: 10.0.2.15, Mask: 255.255.255.0, GW: 10.0.2.2\n");
+        serial_puts("). IP: 10.0.2.15, GW: 10.0.2.2, DNS: 76.76.2.2 (Control D P2 - Ads & Trackers)\n");
     } else {
         serial_puts("[-] Net: No compatible NIC detected. Network offline.\n");
         s_config.link_up = 0;

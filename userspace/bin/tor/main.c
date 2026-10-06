@@ -550,7 +550,7 @@ static void load_url(const char* url) {
                  "<hr>"
                  "<h3>OpSec Network Diagnostics:</h3>"
                  "<p>* Sovereign HTTPS: Native SeldTLS 1.3 (RFC 8446) with AES-128-GCM and X25519.</p>"
-                 "<p>* Clearnet: Native UDP DNS (10.0.2.3:53) + Direct TCP socket.</p>"
+                 "<p>* Clearnet: Control D OpSec DNS (76.76.2.2:53 / Ads & Trackers) + Direct TCP.</p>"
                  "<p>* Onion: SOCKS5 (10.0.2.2:9050) with remote ATYP=0x03 DNS resolution.</p>"
                  "<p>* Hardware: Intel PRO/1000 MT (82540EM) or AMD PCnet-FAST III (Am79C973).</p>"
                  "<p>* Verify interface status with 'ifconfig' and 'ping 10.0.2.2'.</p>"
@@ -785,7 +785,7 @@ static void render_page(void) {
         }
     } else if (s_used_tor == 0) {
         draw_text_5x7(10, 60, "ROUTE:", COL_GOLD_ACCENT);
-        draw_text_5x7(54, 60, "[Me] -> [DNS 10.0.2.3:53] -> [Direct WAN / Real Internet]", COL_TEXT_WHITE);
+        draw_text_5x7(54, 60, "[Me] -> [Control D 76.76.2.2:53 (P2)] -> [Direct WAN / Real Internet]", COL_TEXT_WHITE);
         draw_text_5x7(470, 60, "CLEARNET (PORT 80 PLAINTEXT)", COL_GOLD_ACCENT);
     } else {
         draw_text_5x7(10, 60, "STATUS:", COL_RED_CLOSE);

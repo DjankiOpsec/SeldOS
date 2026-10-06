@@ -192,7 +192,17 @@ int      seld_tcp_connect(uint32_t ip, uint16_t port);
 int      seld_tcp_send(int sock, const void* data, size_t len);
 int      seld_tcp_recv(int sock, void* buf, size_t max_len, uint32_t timeout_ms);
 int      seld_tcp_close(int sock);
+/* Control D Sovereign OpSec DNS Profile (Ads & Trackers - p2) */
+#define SELD_MAKE_IP(a, b, c, d) \
+    ((uint32_t)(a) | ((uint32_t)(b) << 8) | ((uint32_t)(c) << 16) | ((uint32_t)(d) << 24))
+#define SELD_CONTROLD_DNS_P2_PRIMARY   SELD_MAKE_IP(76, 76, 2, 2)
+#define SELD_CONTROLD_DNS_P2_SECONDARY SELD_MAKE_IP(76, 76, 10, 2)
+#define SELD_CONTROLD_DOT_IP           SELD_MAKE_IP(76, 76, 2, 11)
+#define SELD_CONTROLD_DOT_HOST         "p2.freedns.controld.com"
+#define SELD_CONTROLD_DOH_URL          "https://freedns.controld.com/p2"
+
 int      seld_dns_resolve(const char* hostname, uint32_t* ip_out);
+int      seld_dns_resolve_dot(const char* hostname, uint32_t* ip_out);
 int      seld_drv_off(const char* driver_name);
 
 #endif /* _SELD_H_ */

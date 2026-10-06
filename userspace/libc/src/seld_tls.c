@@ -209,6 +209,7 @@ static void parse_server_certificate(struct seld_tls_conn* conn, const uint8_t* 
         strstr(icn, "Sectigo") || strstr(iorg, "Sectigo") ||
         strstr(icn, "GlobalSign") || strstr(iorg, "GlobalSign") ||
         strstr(icn, "Amazon") || strstr(iorg, "Amazon") ||
+        strstr(icn, "ZeroSSL") || strstr(iorg, "ZeroSSL") ||
         strstr(icn, "SeldOS") || strstr(iorg, "SeldOS")) {
         conn->peer_cert.ca_verified = 1;
     }
