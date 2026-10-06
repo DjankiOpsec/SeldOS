@@ -161,6 +161,10 @@ void vmm_destroy_address_space(uint64_t* pml4_virt) {
                                     if (fb_start && frame_phys >= fb_start && frame_phys < fb_end) {
                                         // Framebuffer physical memory: skip
                                     } else {
+                                        // OpSec: Wipe process page memory to prevent data remanence
+                                        if (frame_phys < 0x100000000ULL) {
+                                            memset(phys_to_virt(frame_phys), 0, PAGE_SIZE);
+                                        }
                                         pmm_free_frame((void*)frame_phys);
                                     }
                                 }

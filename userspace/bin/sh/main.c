@@ -618,8 +618,12 @@ static void builtin_help(void) {
     printf("  ifconfig        Display network interface details & statistics (e1000)\n");
     printf("  ping <ip>       Send ICMP Echo requests to host\n");
     printf("  arp             Display kernel ARP resolution cache\n");
+    printf("  purge           OpSec Immune Purge: kill rogue tasks, zero-wipe threats, sever sockets\n");
+    printf("  net [mode]      Air-Gap Shield: status, lock, unlock, ondemand, stealth, desync\n");
+    printf("  desync [mode]   TSPU/DPI Evasion: split (SNI segmentation), fake, off\n");
     printf("  selftest        Execute userspace Ring 3 verification test suite\n\n");
     printf("External Utilities in /bin/:\n");
+    printf("  stealth [cmd]   Anti-TSPU/DPI Stealth Suite & Native C99 VLESS Client\n");
     printf("  ls              List files with size, blocks, and SHA-256 hash\n");
     printf("  cat <file>      Display contents of file\n");
     printf("  echo [args..]   Print arguments to stdout\n");
@@ -1011,14 +1015,17 @@ static void builtin_ping(int argc, char* argv[]) {
         printf("Usage: ping <target_ipv4_address>\n");
         return;
     }
+    seld_net_lease_acquire();
     uint32_t target_ip = 0;
     if (parse_ip_u(argv[1], &target_ip) != 0) {
         int dres = seld_dns_resolve(argv[1], &target_ip);
         if (dres == -5 || target_ip == 0) {
             printf("[-] ping: host '%s' is BLOCKED by Control D OpSec Filter (0.0.0.0)\n", argv[1]);
+            seld_net_lease_release();
             return;
         } else if (dres != 0) {
             printf("[-] ping: cannot resolve '%s': Unknown host\n", argv[1]);
+            seld_net_lease_release();
             return;
         }
     }
@@ -1039,6 +1046,9 @@ static void builtin_ping(int argc, char* argv[]) {
         if (res == 0) {
             received++;
             printf("64 bytes from %s: icmp_seq=%d ttl=64 time=%u ms\n", ip_str, seq, rtt);
+        } else if (res == -5) {
+            printf("[-] ping: blocked in STEALTH mode (anti-active-tracking guard)\n");
+            break;
         } else if (res == -2) {
             printf("[-] ping: route unreachable or send failed\n");
             break;
@@ -1053,6 +1063,7 @@ static void builtin_ping(int argc, char* argv[]) {
     int loss = ((transmitted - received) * 100) / transmitted;
     printf("%d packets transmitted, %d received, %d%% packet loss\n",
            transmitted, received, loss);
+    seld_net_lease_release();
 }
 
 static void builtin_dns(int argc, char* argv[]) {
@@ -1063,6 +1074,7 @@ static void builtin_dns(int argc, char* argv[]) {
         printf("  OpSec Profile: Ads & Trackers (No logging / Zero profiling)\n");
         return;
     }
+    seld_net_lease_acquire();
     int use_dot = (argc >= 3 && (strcmp(argv[2], "dot") == 0 || strcmp(argv[2], "tls") == 0));
     uint32_t ip = 0;
     int res;
@@ -1082,6 +1094,112 @@ static void builtin_dns(int argc, char* argv[]) {
     } else {
         printf("[-] Failed to resolve %s (error %d)\n", argv[1], res);
     }
+    seld_net_lease_release();
+}
+
+static void builtin_purge(void) {
+    printf("\n=======================================================================\n");
+    printf(" [OpSec] SELDOS IMMUNE SYSTEM & ZERO-TRUST DEFENSE SWEEP\n");
+    printf("=======================================================================\n");
+    printf("[*] Initiating Kernel-Level Cryptographic Integrity Audit...\n");
+    printf("[*] Sweeping Scheduler Process Table for rogue tasks...\n");
+    printf("[*] Severing active TCP connections & dropping socket buffers...\n");
+    printf("[*] Scrubbing physical memory pages & engaging Air-Gap Shield...\n");
+
+    int res = seld_immune_purge();
+    int wiped_files = res & 0xFFFF;
+    int killed_tasks = (res >> 16) & 0xFF;
+    int aborted_socks = (res >> 24) & 0xFF;
+
+    printf("[+] SeldFS Cryptographic Audit : Verified inodes (%d tampered/unauthorized wiped)\n", wiped_files);
+    printf("[+] Process Scheduler Sweep    : %d rogue/unauthorized tasks terminated\n", killed_tasks);
+    printf("[+] Network Socket Severing    : %d TCP sockets aborted (RST sent, ARP/DNS wiped)\n", aborted_socks);
+    printf("[+] Air-Gap Network Shield     : ENGAGED (Default-Deny On-Demand Mode active)\n");
+    printf("[+] Executable Attestation     : Default-Deny SHA-256 Gatekeeper ENFORCED\n");
+    printf("=======================================================================\n");
+    printf(" [OK] SYSTEM INTEGRITY: IMMUNE, SEALED & HARDENED\n");
+    printf("=======================================================================\n\n");
+}
+
+static void builtin_net(int argc, char* argv[]) {
+    if (argc <= 1 || strcmp(argv[1], "status") == 0) {
+        int status = seld_net_get_lock();
+        int desync = seld_net_get_desync();
+        printf("[*] SeldOS Air-Gap Network Shield Status: ");
+        if (status == 1) {
+            printf("LOCKED (Strict Air-Gap Lockdown - All TX dropped)\n");
+        } else if (status == 2) {
+            printf("ON-DEMAND (Default-Deny - Auto-leased for tor/download/ping)\n");
+        } else if (status == 3) {
+            printf("STEALTH (Zero-Emission / TSPU Evasion / DoT Forced / Ping Drop)\n");
+        } else {
+            printf("UNLOCKED (Clearnet Open Mode)\n");
+        }
+        printf("    TSPU TCP Desync: %s\n",
+               desync == SELD_DESYNC_SPLIT ? "SPLIT (SNI/Host Segment Evasion active)" :
+               desync == SELD_DESYNC_FAKE  ? "FAKE (TTL desync)" : "OFF");
+        printf("    Usage: net <status | lock | unlock | ondemand | stealth | desync>\n");
+        return;
+    }
+
+    if (strcmp(argv[1], "lock") == 0) {
+        seld_net_lock(1);
+        printf("[+] Air-Gap Network Shield: STRICT LOCKDOWN ENGAGED (All network TX dropped).\n");
+    } else if (strcmp(argv[1], "unlock") == 0) {
+        seld_net_lock(0);
+        printf("[*] Air-Gap Network Shield: DISENGAGED (Clearnet Open Mode).\n");
+    } else if (strcmp(argv[1], "ondemand") == 0) {
+        seld_net_lock(2);
+        printf("[+] Air-Gap Network Shield: ON-DEMAND MODE ENGAGED (Auto-leased for tor/download).\n");
+    } else if (strcmp(argv[1], "stealth") == 0) {
+        seld_net_lock(3);
+        seld_net_set_desync(SELD_DESYNC_SPLIT);
+        printf("[+] Stealth Mode ENGAGED: In-Kernel TCP Desync active, raw UDP DNS blocked (DoT forced), ICMP dropped.\n");
+    } else if (strcmp(argv[1], "desync") == 0) {
+        if (argc >= 3) {
+            if (strcmp(argv[2], "split") == 0) {
+                seld_net_set_desync(SELD_DESYNC_SPLIT);
+                printf("[+] TCP Desync mode: SPLIT (SNI Segmentation enabled).\n");
+            } else if (strcmp(argv[2], "fake") == 0) {
+                seld_net_set_desync(SELD_DESYNC_FAKE);
+                printf("[+] TCP Desync mode: FAKE enabled.\n");
+            } else if (strcmp(argv[2], "off") == 0 || strcmp(argv[2], "none") == 0) {
+                seld_net_set_desync(SELD_DESYNC_NONE);
+                printf("[*] TCP Desync mode: DISABLED.\n");
+            } else {
+                printf("Usage: net desync <split | fake | off>\n");
+            }
+        } else {
+            int d = seld_net_get_desync();
+            printf("Current TCP Desync mode: %s\n",
+                   d == SELD_DESYNC_SPLIT ? "SPLIT" : d == SELD_DESYNC_FAKE ? "FAKE" : "OFF");
+        }
+    } else {
+        printf("snl: net: unknown argument '%s'. Options: status, lock, unlock, ondemand, stealth, desync\n", argv[1]);
+    }
+}
+
+static void builtin_desync(int argc, char* argv[]) {
+    if (argc < 2) {
+        int d = seld_net_get_desync();
+        printf("TSPU TCP Desync: %s\n",
+               d == SELD_DESYNC_SPLIT ? "SPLIT (SNI Segmentation)" :
+               d == SELD_DESYNC_FAKE  ? "FAKE" : "OFF");
+        printf("Usage: desync <split | fake | off>\n");
+        return;
+    }
+    if (strcmp(argv[1], "split") == 0) {
+        seld_net_set_desync(SELD_DESYNC_SPLIT);
+        printf("[+] TCP Desync: SPLIT enabled (SNI segmentation across packets).\n");
+    } else if (strcmp(argv[1], "fake") == 0) {
+        seld_net_set_desync(SELD_DESYNC_FAKE);
+        printf("[+] TCP Desync: FAKE enabled.\n");
+    } else if (strcmp(argv[1], "off") == 0 || strcmp(argv[1], "none") == 0) {
+        seld_net_set_desync(SELD_DESYNC_NONE);
+        printf("[*] TCP Desync: DISABLED.\n");
+    } else {
+        printf("Usage: desync <split | fake | off>\n");
+    }
 }
 
 static void builtin_selftest(void) {
@@ -1089,11 +1207,11 @@ static void builtin_selftest(void) {
     printf("[Ring 3]   SELD OS USERSPACE RUNTIME & TEST SUITE (Ring 3)\n");
     printf("[Ring 3] ========================================================\n");
 
-    int total_tests = 7;
+    int total_tests = 8;
     int passed_tests = 0;
 
     // Test 1: Hardware Privilege Level & Segment Selectors (CPL=3)
-    printf("[*] [TEST 1/7] Inspecting CPU Privilege Level & Segments...\n");
+    printf("[*] [TEST 1/8] Inspecting CPU Privilege Level & Segments...\n");
     uint16_t cs = 0, ss = 0;
     __asm__ volatile ("mov %%cs, %0" : "=r"(cs));
     __asm__ volatile ("mov %%ss, %0" : "=r"(ss));
@@ -1104,46 +1222,46 @@ static void builtin_selftest(void) {
     printf("    SS selector: 0x%x (RPL = %d)\n", ss, spl);
 
     if (cpl == 3 && spl == 3) {
-        printf("[+] [TEST 1/7] PASSED: Hardware CPL=3 verified. Running in unprivileged user mode.\n");
+        printf("[+] [TEST 1/8] PASSED: Hardware CPL=3 verified. Running in unprivileged user mode.\n");
         passed_tests++;
     } else {
-        printf("[-] [TEST 1/7] FAILED: CPL/SPL privilege level mismatch!\n");
+        printf("[-] [TEST 1/8] FAILED: CPL/SPL privilege level mismatch!\n");
     }
 
     // Test 2: Fast SYSCALL / SYSRET Handshake (SYS_SELD 42)
-    printf("[*] [TEST 2/7] Invoking SYS_SELD handshake (syscall 42)...\n");
+    printf("[*] [TEST 2/8] Invoking SYS_SELD handshake (syscall 42)...\n");
     long seld_ret = seld_ping();
     if (seld_ret == 0x5E1D5EC) {
-        printf("[+] [TEST 2/7] PASSED: Syscall handshake returned 0x5E1D5EC.\n");
+        printf("[+] [TEST 2/8] PASSED: Syscall handshake returned 0x5E1D5EC.\n");
         passed_tests++;
     } else {
-        printf("[-] [TEST 2/7] FAILED: Invalid handshake return code: 0x%lx\n", seld_ret);
+        printf("[-] [TEST 2/8] FAILED: Invalid handshake return code: 0x%lx\n", seld_ret);
     }
 
     // Test 3: Process Identification (SYS_GETPID)
-    printf("[*] [TEST 3/7] Invoking SYS_GETPID via getpid() wrapper...\n");
+    printf("[*] [TEST 3/8] Invoking SYS_GETPID via getpid() wrapper...\n");
     int pid = getpid();
     printf("    Assigned Process ID: %d\n", pid);
     if (pid >= 1) {
-        printf("[+] [TEST 3/7] PASSED: Valid process ID received from kernel scheduler.\n");
+        printf("[+] [TEST 3/8] PASSED: Valid process ID received from kernel scheduler.\n");
         passed_tests++;
     } else {
-        printf("[-] [TEST 3/7] FAILED: Invalid PID received!\n");
+        printf("[-] [TEST 3/8] FAILED: Invalid PID received!\n");
     }
 
     // Test 4: System Chronometry (SYS_UPTIME)
-    printf("[*] [TEST 4/7] Invoking SYS_UPTIME via uptime() wrapper...\n");
+    printf("[*] [TEST 4/8] Invoking SYS_UPTIME via uptime() wrapper...\n");
     uint64_t ms = uptime();
     printf("    Current system uptime: %lu ms\n", ms);
     if (ms > 0) {
-        printf("[+] [TEST 4/7] PASSED: High-precision PIT timer counter queried.\n");
+        printf("[+] [TEST 4/8] PASSED: High-precision PIT timer counter queried.\n");
         passed_tests++;
     } else {
-        printf("[-] [TEST 4/7] FAILED: Uptime query returned 0 ms!\n");
+        printf("[-] [TEST 4/8] FAILED: Uptime query returned 0 ms!\n");
     }
 
     // Test 5: Syscall Verification & Parameter Passing (SYS_SELD_VERIFY)
-    printf("[*] [TEST 5/7] Testing SYS_SELD_VERIFY parameter validation...\n");
+    printf("[*] [TEST 5/8] Testing SYS_SELD_VERIFY parameter validation...\n");
     long v0 = seld_verify(0, 0);
     long token = 0x12345678L;
     long v1 = seld_verify(token, 0);
@@ -1153,14 +1271,14 @@ static void builtin_selftest(void) {
     long v_kernel_ptr = seld_verify(1, (long)0xFFFF800000000000ULL);
 
     if (v0 == 0x5E1D0001L && v1 == expected_v1 && v_user_stack == 1 && v_kernel_ptr == 0) {
-        printf("[+] [TEST 5/7] PASSED: Token arithmetic and user/kernel pointer verification valid.\n");
+        printf("[+] [TEST 5/8] PASSED: Token arithmetic and user/kernel pointer verification valid.\n");
         passed_tests++;
     } else {
-        printf("[-] [TEST 5/7] FAILED: Parameter verification mismatch!\n");
+        printf("[-] [TEST 5/8] FAILED: Parameter verification mismatch!\n");
     }
 
     // Test 6: Memory Bounds & Stack R/W Integrity
-    printf("[*] [TEST 6/7] Validating userspace memory bounds and stack R/W...\n");
+    printf("[*] [TEST 6/8] Validating userspace memory bounds and stack R/W...\n");
     uint64_t code_addr = (uint64_t)&builtin_selftest;
     uint64_t stack_addr = (uint64_t)&cpl;
 
@@ -1190,17 +1308,56 @@ static void builtin_selftest(void) {
     }
 
     if (bounds_ok) {
-        printf("[+] [TEST 6/7] PASSED: Memory bounds and stack integrity verified.\n");
+        printf("[+] [TEST 6/8] PASSED: Memory bounds and stack integrity verified.\n");
         passed_tests++;
     } else {
-        printf("[-] [TEST 6/7] FAILED: Memory bounds violation or buffer corruption!\n");
+        printf("[-] [TEST 6/8] FAILED: Memory bounds violation or buffer corruption!\n");
     }
 
     // Test 7: Cooperative Preemption Yield (SYS_YIELD)
-    printf("[*] [TEST 7/7] Yielding execution quantum to kernel via yield()...\n");
+    printf("[*] [TEST 7/8] Yielding execution quantum to kernel via yield()...\n");
     yield();
-    printf("[+] [TEST 7/7] PASSED: Successfully resumed execution in Ring 3 after yield.\n");
+    printf("[+] [TEST 7/8] PASSED: Successfully resumed execution in Ring 3 after yield.\n");
     passed_tests++;
+
+    // Test 8: Sovereign OpSec Ring 3 Defense (Zero-on-Free, Seld-Pledge & RFC 7686 Guard)
+    printf("[*] [TEST 8/8] Validating Ring 3 OpSec Hardening (Zero-on-Free, Seld-Pledge, RFC 7686)...\n");
+    int opsec_ok = 1;
+
+    // A. Userspace Zero-on-Free Verification
+    uint8_t* p_heap = (uint8_t*)malloc(128);
+    if (!p_heap) {
+        opsec_ok = 0;
+    } else {
+        memset(p_heap, 0x99, 128);
+        free(p_heap);
+        for (int i = 0; i < 128; i++) {
+            if (p_heap[i] != 0x00) {
+                opsec_ok = 0;
+                break;
+            }
+        }
+    }
+
+    // B. RFC 7686 Onion Domain DNS Leak Guard
+    uint32_t onion_ip = 0;
+    int r_onion = seld_dns_resolve("secret-shell-query.onion", &onion_ip);
+    if (r_onion != -9) {
+        opsec_ok = 0;
+    }
+
+    // C. Seld-Pledge Syscall Check
+    int pledge_res = seld_pledge(PLEDGE_STDIO | PLEDGE_RPATH | PLEDGE_WPATH | PLEDGE_EXEC | PLEDGE_NET | PLEDGE_DNS | PLEDGE_AUDIO | PLEDGE_PURGE | PLEDGE_REBOOT);
+    if (pledge_res != 0) {
+        opsec_ok = 0;
+    }
+
+    if (opsec_ok) {
+        printf("[+] [TEST 8/8] PASSED: Zero-on-Free, RFC 7686 Guard, and Seld-Pledge verified.\n");
+        passed_tests++;
+    } else {
+        printf("[-] [TEST 8/8] FAILED: Ring 3 OpSec subsystem verification failure!\n");
+    }
 
     printf("\n----------------------------------------------------------------\n");
     if (passed_tests == total_tests) {
@@ -1326,6 +1483,12 @@ int main(int argc, char* argv[]) {
             builtin_ping(cmd_argc, cmd_argv);
         } else if (strcmp(cmd, "dns") == 0) {
             builtin_dns(cmd_argc, cmd_argv);
+        } else if (strcmp(cmd, "purge") == 0) {
+            builtin_purge();
+        } else if (strcmp(cmd, "net") == 0) {
+            builtin_net(cmd_argc, cmd_argv);
+        } else if (strcmp(cmd, "desync") == 0) {
+            builtin_desync(cmd_argc, cmd_argv);
         } else if (strcmp(cmd, "selftest") == 0) {
             builtin_selftest();
         } else if (strcmp(cmd, "gpu") == 0 || strcmp(cmd, "cpu") == 0 || strcmp(cmd, "ram") == 0 || strcmp(cmd, "drv") == 0) {

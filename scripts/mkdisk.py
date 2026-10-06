@@ -187,10 +187,13 @@ def main():
         "ps",
         "fm",
         "download",
+        "tor",
         "oracle",
         "fetch",
         "reboot",
-        "poweroff"
+        "poweroff",
+        "purge",
+        "stealth"
     ]
 
     files_to_write = []

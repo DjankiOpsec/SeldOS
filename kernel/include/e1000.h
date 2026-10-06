@@ -122,6 +122,7 @@ struct net_driver_stats {
 int  e1000_init(void);
 int  e1000_is_active(void);
 const uint8_t* e1000_get_mac(void);
+void e1000_randomize_mac(void);
 int  e1000_send_packet(const void* data, size_t len);
 int  e1000_poll_packet(void* buf, size_t max_len);
 struct net_driver_stats e1000_get_stats(void);

@@ -20,5 +20,6 @@ int selftest_scheduler(void);
 int selftest_spinlock(void);
 int selftest_user_buffer(void);
 int selftest_net(void);
+int selftest_opsec(void);
 
 #endif /* SELD_SELFTEST_H */

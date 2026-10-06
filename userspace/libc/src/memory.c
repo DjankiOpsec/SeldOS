@@ -158,6 +158,9 @@ void free(void* ptr) {
         return; /* Corrupted header or invalid pointer */
     }
 
+    // OpSec Zero-on-Free: erase payload to destroy residual cryptographic material & buffers
+    memset(ptr, 0, block->size);
+
     block->is_free = 1;
 
     /* Coalesce with forward adjacent block if free */

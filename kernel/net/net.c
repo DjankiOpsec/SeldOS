@@ -16,12 +16,84 @@
 #include "pit.h"
 #include "kmalloc.h"
 #include "seldfs.h"
+#include "rand.h"
 
 #define NIC_TYPE_NONE  0
 #define NIC_TYPE_E1000 1
 #define NIC_TYPE_PCNET 2
 
 static int s_nic_type = NIC_TYPE_NONE;
+
+/* Air-Gap On-Demand & Network Defense State */
+static int s_net_airgap_mode = NET_AIRGAP_ONDEMAND;
+static int s_net_leases = 0;
+
+/* In-Kernel TCP Desync & Anti-DPI State (TSPU Evasion) */
+static int s_net_desync_mode = NET_DESYNC_SPLIT;
+static uint32_t s_desync_splits = 0;
+static uint32_t s_desync_fakes = 0;
+
+void net_set_airgap(int mode) {
+    s_net_airgap_mode = mode;
+    if (s_net_airgap_mode == NET_AIRGAP_LOCKED) {
+        serial_puts("[+] OpSec: Air-Gap Shield ENGAGED (Strict Lockdown - all TX dropped).\n");
+    } else if (s_net_airgap_mode == NET_AIRGAP_ONDEMAND) {
+        serial_puts("[+] OpSec: Air-Gap Shield ON-DEMAND (Default-Deny, Leased access only).\n");
+    } else if (s_net_airgap_mode == NET_AIRGAP_STEALTH) {
+        serial_puts("[+] OpSec: Air-Gap Shield STEALTH (Silent mode - no raw UDP DNS, no ping, TCP desync enforced).\n");
+    } else {
+        serial_puts("[*] OpSec: Air-Gap Shield DISENGAGED (Network Clearnet open).\n");
+    }
+}
+
+int net_get_airgap(void) {
+    return s_net_airgap_mode;
+}
+
+void net_set_desync(int mode) {
+    s_net_desync_mode = mode;
+    if (mode == NET_DESYNC_SPLIT) {
+        serial_puts("[+] OpSec Anti-DPI: In-Kernel TCP Desync enabled (SNI Split mode).\n");
+    } else if (mode == NET_DESYNC_FAKE) {
+        serial_puts("[+] OpSec Anti-DPI: In-Kernel TCP Desync enabled (Fake Packet + Split mode).\n");
+    } else {
+        serial_puts("[*] OpSec Anti-DPI: In-Kernel TCP Desync disabled (Direct transmission).\n");
+    }
+}
+
+int net_get_desync(void) {
+    return s_net_desync_mode;
+}
+
+int net_get_desync_stats(uint32_t* splits, uint32_t* fakes) {
+    if (splits) *splits = s_desync_splits;
+    if (fakes) *fakes = s_desync_fakes;
+    return 0;
+}
+
+int net_abort_all_connections(void);
+
+void net_lease_acquire(void) {
+    s_net_leases++;
+    serial_puts("[+] OpSec: Network lease acquired (active leases: ");
+    serial_print_dec((uint64_t)s_net_leases);
+    serial_puts(")\n");
+}
+
+void net_lease_release(void) {
+    if (s_net_leases > 0) {
+        s_net_leases--;
+        serial_puts("[*] OpSec: Network lease released (remaining leases: ");
+        serial_print_dec((uint64_t)s_net_leases);
+        serial_puts(")\n");
+    }
+}
+
+int net_is_traffic_allowed(void) {
+    if (s_net_airgap_mode == NET_AIRGAP_UNLOCKED) return 1;
+    if (s_net_airgap_mode == NET_AIRGAP_LOCKED) return 0;
+    return (s_net_leases > 0);
+}
 
 static inline int nic_is_active(void) {
     if (s_nic_type == NIC_TYPE_E1000) return e1000_is_active();
@@ -30,6 +102,10 @@ static inline int nic_is_active(void) {
 }
 
 static inline int nic_send_packet(const void* data, size_t len) {
+    if (!net_is_traffic_allowed()) {
+        serial_puts("[-] AirGap: Outbound network blocked (Shield active)\n");
+        return -1;
+    }
     if (s_nic_type == NIC_TYPE_E1000) return e1000_send_packet(data, len);
     if (s_nic_type == NIC_TYPE_PCNET) return pcnet_send_packet(data, len);
     return -1;
@@ -480,7 +556,6 @@ struct tcp_socket {
 };
 
 static struct tcp_socket s_sockets[MAX_TCP_SOCKETS] = {0};
-static uint16_t s_local_ephemeral_port = 49152;
 
 static int net_send_tcp_packet_sock(struct tcp_socket* s, uint8_t flags, const void* payload, size_t payload_len) {
     if (!s) return -1;
@@ -893,6 +968,10 @@ int net_send_ip(uint32_t dest_ip, uint8_t protocol, const void* payload, size_t 
 
 int net_ping(uint32_t target_ip, uint16_t seq, uint32_t* rtt_ms) {
     if (!nic_is_active()) return -1;
+    if (s_net_airgap_mode == NET_AIRGAP_STEALTH) {
+        serial_puts("[!] OpSec Stealth Mode: ICMP Ping blocked (anti-tracking guard)\n");
+        return -5;
+    }
 
     // Reset ping reply tracker
     s_ping_state.replied = 0;
@@ -982,6 +1061,14 @@ int net_dns_resolve(const char* hostname, uint32_t* ip_out) {
     }
     if (clen == 0) return -1;
 
+    // RFC 7686 Guard: Strict prohibition of .onion domain resolution over clear UDP DNS
+    if ((clen >= 6 && strcmp(clean_host + clen - 6, ".onion") == 0) || strcmp(clean_host, "onion") == 0) {
+        serial_puts("[-] OpSec Block: RFC 7686 violation! Attempted clearnet DNS query for .onion domain: ");
+        serial_puts(clean_host);
+        serial_puts(" -> DROPPED\n");
+        return -9; // RFC 7686 EPERM
+    }
+
     // 1. Literal IPv4 check
     if (net_parse_ip(clean_host, ip_out) == 0) {
         return 0;
@@ -1008,6 +1095,13 @@ int net_dns_resolve(const char* hostname, uint32_t* ip_out) {
     if (strcmp(clean_host, "controld.com") == 0) {
         *ip_out = DNS_CONTROLD_P2_PRIMARY;
         return 0;
+    }
+
+    // OpSec Stealth Mode Guard: Prohibit raw UDP DNS queries to public port 53.
+    // In stealth mode, DNS resolution must be performed via DoT / TLS or inside encrypted tunnel.
+    if (s_net_airgap_mode == NET_AIRGAP_STEALTH) {
+        serial_puts("[!] OpSec Stealth Mode: Refused raw UDP DNS query (anti-telemetry leak guard)\n");
+        return -10; // DNS_ERR_STEALTH_BLOCKED
     }
 
     // 3. DNS Cache check (includes 0.0.0.0 sinkholed ads/trackers)
@@ -1121,7 +1215,10 @@ int net_dns_resolve(const char* hostname, uint32_t* ip_out) {
 }
 
 int net_tcp_socket_connect(uint32_t server_ip, uint16_t port) {
-    if (!nic_is_active()) return -1;
+    if (!nic_is_active() || !net_is_traffic_allowed()) {
+        serial_puts("[-] OpSec: TCP socket connection denied by Air-Gap Shield\n");
+        return -1;
+    }
 
     int sock_id = -1;
     for (int i = 0; i < MAX_TCP_SOCKETS; i++) {
@@ -1142,10 +1239,13 @@ int net_tcp_socket_connect(uint32_t server_ip, uint16_t port) {
     s->used = 1;
     s->state = TCP_STATE_SYN_SENT;
     s->remote_ip = server_ip;
-    s->remote_port = port;
-    s->local_port = s_local_ephemeral_port++;
-    if (s_local_ephemeral_port < 49152) s_local_ephemeral_port = 49152;
-    s->snd_nxt = 0x20000000 + (uint32_t)pit_get_uptime_ms();
+    // RFC 6056: Ephemeral port randomization (49152..65535) via CSPRNG
+    uint16_t port_range = 65535 - 49152 + 1;
+    s->local_port = (uint16_t)(49152 + (rng_get_u64() % port_range));
+
+    // OpenBSD-style: Cryptographically random Initial Sequence Number (ISN)
+    // Prevents system uptime leakage and TCP sequence prediction attacks
+    s->snd_nxt = (uint32_t)rng_get_u64();
     s->rcv_nxt = 0;
     s->rx_buf = rx_buf;
     s->rx_capacity = rx_cap;
@@ -1186,6 +1286,73 @@ int net_tcp_socket_send(int sock_id, const void* data, size_t len) {
     if (!s->used || s->state != TCP_STATE_ESTABLISHED || !data || len == 0) return -1;
 
     const uint8_t* p = (const uint8_t*)data;
+
+    // In-Kernel TCP Desync & Anti-DPI (TSPU / DPI Evasion)
+    if (s_net_desync_mode != NET_DESYNC_NONE && len > 64) {
+        int is_tls_ch = (p[0] == 0x16 && p[1] == 0x03 && p[5] == 0x01);
+        int is_http = (len > 32 && (memcmp(p, "GET ", 4) == 0 ||
+                                    memcmp(p, "POST ", 5) == 0 ||
+                                    memcmp(p, "HEAD ", 5) == 0));
+
+        if (is_tls_ch) {
+            // Split TLS ClientHello across two TCP segments.
+            // Segment 1 (64 bytes): TLS record header + client random + session id.
+            // SNI extension is located at >90 bytes, so Segment 1 contains NO hostname.
+            // TSPU DPI parser inspects Segment 1 and finds no SNI.
+            // Segment 2 contains the rest of the ClientHello, but lacks TLS Record header at offset 0.
+            size_t seg1_len = 64;
+            if (seg1_len > len) seg1_len = len;
+
+            if (s_net_desync_mode == NET_DESYNC_FAKE) {
+                // Send a fake segment to confuse DPI state machine
+                uint8_t fake[32];
+                memset(fake, 0x00, sizeof(fake));
+                net_send_tcp_packet_sock(s, TCP_FLAG_ACK, fake, sizeof(fake));
+                s_desync_fakes++;
+            }
+
+            int err1 = net_send_tcp_packet_sock(s, TCP_FLAG_ACK | TCP_FLAG_PSH, p, seg1_len);
+            if (err1 != 0) return -1;
+
+            pit_sleep_ms(2); // Ensure separate network frames reaching DPI
+
+            size_t seg2_len = len - seg1_len;
+            int err2 = net_send_tcp_packet_sock(s, TCP_FLAG_ACK | TCP_FLAG_PSH, p + seg1_len, seg2_len);
+            if (err2 != 0) return (int)seg1_len;
+
+            s_desync_splits++;
+            serial_puts("[+] OpSec Anti-DPI: In-Kernel TCP Desync split applied to TLS ClientHello (64B / ");
+            serial_print_dec((uint64_t)seg2_len);
+            serial_puts("B)\n");
+            return (int)len;
+        } else if (is_http) {
+            // Search for "Host:" or "host:" header to split across segments
+            size_t split_pos = 32;
+            for (size_t i = 0; i + 6 < len && i < 256; i++) {
+                if ((p[i] == 'H' || p[i] == 'h') &&
+                    (p[i+1] == 'o' || p[i+1] == 'O') &&
+                    (p[i+2] == 's' || p[i+2] == 'S') &&
+                    (p[i+3] == 't' || p[i+3] == 'T') &&
+                    p[i+4] == ':') {
+                    split_pos = i + 2; // split inside "Ho" and "st:"
+                    break;
+                }
+            }
+
+            int err1 = net_send_tcp_packet_sock(s, TCP_FLAG_ACK | TCP_FLAG_PSH, p, split_pos);
+            if (err1 != 0) return -1;
+
+            pit_sleep_ms(2);
+
+            int err2 = net_send_tcp_packet_sock(s, TCP_FLAG_ACK | TCP_FLAG_PSH, p + split_pos, len - split_pos);
+            if (err2 != 0) return (int)split_pos;
+
+            s_desync_splits++;
+            serial_puts("[+] OpSec Anti-DPI: In-Kernel TCP Desync split applied to HTTP Host header\n");
+            return (int)len;
+        }
+    }
+
     size_t remaining = len;
 
     while (remaining > 0) {
@@ -1270,6 +1437,29 @@ int net_tcp_socket_close(int sock_id) {
 int net_tcp_socket_is_connected(int sock_id) {
     if (sock_id < 0 || sock_id >= MAX_TCP_SOCKETS) return 0;
     return (s_sockets[sock_id].used && s_sockets[sock_id].state == TCP_STATE_ESTABLISHED);
+}
+
+int net_abort_all_connections(void) {
+    int aborted = 0;
+    for (int i = 0; i < MAX_TCP_SOCKETS; i++) {
+        if (s_sockets[i].used) {
+            if (s_sockets[i].state == TCP_STATE_ESTABLISHED || s_sockets[i].state == TCP_STATE_SYN_SENT) {
+                net_send_tcp_packet_sock(&s_sockets[i], TCP_FLAG_RST | TCP_FLAG_ACK, NULL, 0);
+            }
+            if (s_sockets[i].rx_buf) {
+                kfree(s_sockets[i].rx_buf);
+                s_sockets[i].rx_buf = NULL;
+            }
+            memset(&s_sockets[i], 0, sizeof(s_sockets[i]));
+            aborted++;
+        }
+    }
+    // Flush ARP cache
+    memset(s_arp_table, 0, sizeof(s_arp_table));
+    // Flush DNS cache
+    memset(s_dns_cache, 0, sizeof(s_dns_cache));
+    serial_puts("[+] OpSec: All TCP sockets severed and network caches purged.\n");
+    return aborted;
 }
 
 int net_http_get(uint32_t server_ip, uint16_t port, const char* path, const char* host,

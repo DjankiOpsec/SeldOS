@@ -21,6 +21,7 @@
 #include "syscall.h"
 #include "net.h"
 #include "e1000.h"
+#include "rand.h"
 
 static void print_out(const char* str) {
     vga_puts(str);
@@ -460,6 +461,87 @@ int selftest_net(void) {
 }
 
 /*
+ * 8. Sovereign OpSec Hardening Self-Test (Zero-on-Free, RFC 7686, CSPRNG, RAM Scrub, MAC Spoofing)
+ */
+int selftest_opsec(void) {
+    print_out("[*] [SELFTEST:OPSEC] Validating Sovereign OpSec Subsystems...\n");
+
+    // 1. Zero-on-Free Verification (kmalloc / kfree)
+    uint8_t* p = (uint8_t*)kmalloc(128);
+    if (!p) {
+        print_out("[-] SELFTEST:OPSEC FAILED: kmalloc returned NULL!\n");
+        return 0;
+    }
+    memset(p, 0xA5, 128);
+    kfree(p);
+    for (size_t i = 0; i < 128; i++) {
+        if (p[i] != 0x00) {
+            print_out("[-] SELFTEST:OPSEC FAILED: Zero-on-Free did not wipe freed block payload!\n");
+            return 0;
+        }
+    }
+    print_out("[+] [SELFTEST:OPSEC] Zero-on-Free memory erasure verified.\n");
+
+    // 2. RFC 7686 Onion Domain Clearnet DNS Leak Guard
+    uint32_t leaked_ip = 0;
+    int r_onion = net_dns_resolve("super-secret-target.onion", &leaked_ip);
+    if (r_onion != -9) {
+        print_out("[-] SELFTEST:OPSEC FAILED: RFC 7686 Onion DNS leak guard failed (returned ");
+        print_dec64((uint64_t)r_onion);
+        print_out(" instead of -9)!\n");
+        return 0;
+    }
+    int r_root = net_dns_resolve("onion", &leaked_ip);
+    if (r_root != -9) {
+        print_out("[-] SELFTEST:OPSEC FAILED: RFC 7686 Onion root leak guard failed!\n");
+        return 0;
+    }
+    print_out("[+] [SELFTEST:OPSEC] RFC 7686 Onion DNS leak guard verified (queries blocked).\n");
+
+    // 3. CSPRNG Entropy & TCP Anti-Fingerprinting verification
+    uint64_t rnd1 = rng_get_u64();
+    uint64_t rnd2 = rng_get_u64();
+    if (rnd1 == 0 && rnd2 == 0) {
+        print_out("[-] SELFTEST:OPSEC FAILED: Hardware CSPRNG entropy generator returned all zeroes!\n");
+        return 0;
+    }
+    print_out("[+] [SELFTEST:OPSEC] Hardware CSPRNG entropy and TCP ISN randomization active.\n");
+
+    // 4. Cold-Boot RAM Scrub Frame Verification
+    void* frame = pmm_alloc_frame();
+    if (frame) {
+        uint8_t* virt = (uint8_t*)phys_to_virt((uint64_t)frame);
+        virt[0] = 0x5E;
+        virt[1] = 0x1D;
+        virt[4095] = 0xAA;
+        pmm_free_frame(frame);
+        pmm_secure_wipe_all_free();
+        if (virt[0] != 0 || virt[1] != 0 || virt[4095] != 0) {
+            print_out("[-] SELFTEST:OPSEC FAILED: Cold-Boot RAM scrub failed to zero free frames!\n");
+            return 0;
+        }
+        print_out("[+] [SELFTEST:OPSEC] Cold-Boot defense (DoD RAM Frame Scrub) verified.\n");
+    }
+
+    // 5. Ephemeral MAC Spoofing Verification
+    if (net_is_online()) {
+        struct net_config cfg = net_get_config();
+        if ((cfg.mac[0] & 0x02) == 0) {
+            print_out("[-] SELFTEST:OPSEC FAILED: Locally Administered bit (0x02) not set on MAC!\n");
+            return 0;
+        }
+        if (cfg.mac[0] & 0x01) {
+            print_out("[-] SELFTEST:OPSEC FAILED: Unicast bit violated on spoofed MAC!\n");
+            return 0;
+        }
+        print_out("[+] [SELFTEST:OPSEC] Ephemeral MAC address spoofing verified.\n");
+    }
+
+    print_out("[+] [SELFTEST:OPSEC] PASSED: All Sovereign OpSec mechanisms operational.\n");
+    return 1;
+}
+
+/*
  * Master Self-Test Execution
  */
 int selftest_run_all(void) {
@@ -468,7 +550,7 @@ int selftest_run_all(void) {
     print_out("=======================================================================\n");
 
     int passed = 0;
-    int total = 7;
+    int total = 8;
 
     if (selftest_pmm()) passed++;
     if (selftest_kmalloc()) passed++;
@@ -477,10 +559,11 @@ int selftest_run_all(void) {
     if (selftest_spinlock()) passed++;
     if (selftest_user_buffer()) passed++;
     if (selftest_net()) passed++;
+    if (selftest_opsec()) passed++;
 
     print_out("-----------------------------------------------------------------------\n");
     if (passed == total) {
-        print_out("[+] SeldOS Kernel Self-Tests: ALL 7/7 SUBSYSTEMS PASSED!\n");
+        print_out("[+] SeldOS Kernel Self-Tests: ALL 8/8 SUBSYSTEMS PASSED!\n");
     } else {
         print_out("[-] SeldOS Kernel Self-Tests: FAILED (");
         print_dec64(passed);

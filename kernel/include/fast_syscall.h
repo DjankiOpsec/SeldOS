@@ -58,6 +58,23 @@
 #define SYS_NET_TCP_CLOSE   38
 #define SYS_NET_DNS_RESOLVE 39
 #define SYS_SELD            42
+#define SYS_IMMUNE_PURGE    45
+#define SYS_NET_SET_LOCK    46
+#define SYS_NET_GET_LOCK    47
+#define SYS_PLEDGE          48
+#define SYS_NET_SET_DESYNC  49
+#define SYS_NET_GET_DESYNC  50
+
+/* Seld-Pledge Capability Flags (OpenBSD-style Ring 3 Syscall Sandboxing) */
+#define PLEDGE_STDIO        (1 << 0)  /* Basic stdio, heap, exit, yield, uptime, screen, input */
+#define PLEDGE_RPATH        (1 << 1)  /* Filesystem read: open, read, stat, listdir, readfile */
+#define PLEDGE_WPATH        (1 << 2)  /* Filesystem write/delete: writefile, unlink */
+#define PLEDGE_EXEC         (1 << 3)  /* Process execution: spawn, exec */
+#define PLEDGE_NET          (1 << 4)  /* Networking: tcp_connect, tcp_send, tcp_recv, tcp_close, ping, arp */
+#define PLEDGE_DNS          (1 << 5)  /* Domain name resolution: dns_resolve */
+#define PLEDGE_AUDIO        (1 << 6)  /* Audio hardware: beep, audio_play */
+#define PLEDGE_PURGE        (1 << 7)  /* Immune system purge and air-gap shield controls */
+#define PLEDGE_REBOOT       (1 << 8)  /* Hardware reboot and poweroff */
 
 #define MAX_FD 32
 #define DEFAULT_USER_HEAP_BASE 0x0000000040000000ULL

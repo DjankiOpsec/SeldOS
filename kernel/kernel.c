@@ -122,7 +122,7 @@ void kernel_main(uint64_t mb_info_addr, uint64_t mb_magic) {
     boot_anim_step("NET", "Intel e1000 PCI Gigabit Network online", 13, 15);
 
     selftest_run_all();
-    boot_anim_step("SELFTEST", "All 7/7 kernel subsystem tests passed", 14, 15);
+    boot_anim_step("SELFTEST", "All 8/8 kernel subsystem tests passed", 14, 15);
 
     boot_anim_step("INIT", "Transferring execution to /bin/init (Ring 3 PID 1)", 15, 15);
     boot_anim_finish();

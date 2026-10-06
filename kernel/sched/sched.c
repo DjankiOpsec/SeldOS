@@ -308,3 +308,29 @@ int cpu_driver_disable(void) {
 int cpu_is_driver_enabled(void) {
     return s_cpu_drv_enabled;
 }
+
+int sched_purge_unauthorized_tasks(void) {
+    uint64_t rflags = spin_lock_irqsave(&sched_lock);
+    int killed = 0;
+    for (size_t i = 1; i < MAX_TASKS; i++) {
+        if (tasks[i].state != TASK_UNUSED && tasks[i].state != TASK_TERMINATED) {
+            if (strcmp(tasks[i].name, "/bin/init") != 0 &&
+                strcmp(tasks[i].name, "init") != 0 &&
+                strcmp(tasks[i].name, "/bin/sh") != 0 &&
+                strcmp(tasks[i].name, "sh") != 0) {
+                tasks[i].state = TASK_TERMINATED;
+                if (tasks[i].stack_base) {
+                    memset(tasks[i].stack_base, 0, TASK_STACK_SIZE);
+                }
+                killed++;
+                serial_puts("[+] OpSec: Terminated unauthorized background task PID ");
+                serial_print_dec((uint64_t)tasks[i].id);
+                serial_puts(" (");
+                serial_puts(tasks[i].name);
+                serial_puts(")\n");
+            }
+        }
+    }
+    spin_unlock_irqrestore(&sched_lock, rflags);
+    return killed;
+}

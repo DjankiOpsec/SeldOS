@@ -877,6 +877,11 @@ int main(int argc, char* argv[]) {
         return -2;
     }
 
+    // OpenBSD-style Seld-Pledge Sandboxing:
+    // Restrict browser process exclusively to stdio/heap, read-only filesystem, network sockets, and DNS.
+    // Tor Browser is strictly forbidden from modifying disk files, spawning binaries, or rebooting.
+    seld_pledge(PLEDGE_STDIO | PLEDGE_RPATH | PLEDGE_NET | PLEDGE_DNS);
+
     const char* start_url = "home";
     if (argc > 1 && argv[1] && argv[1][0]) {
         start_url = argv[1];

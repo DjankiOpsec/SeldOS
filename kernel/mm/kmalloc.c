@@ -162,6 +162,9 @@ void kfree(void* ptr) {
         return;
     }
 
+    // OpSec Zero-on-Free: erase payload to destroy residual keys and secrets
+    memset(ptr, 0, block->size);
+
     block->is_free = 1;
     if (active_allocs > 0) active_allocs--;
     merge_blocks(block);

@@ -287,3 +287,23 @@ int ram_driver_disable(void) {
 int ram_is_driver_enabled(void) {
     return s_ram_drv_enabled;
 }
+
+void pmm_secure_wipe_all_free(void) {
+    serial_puts("[+] OpSec: Initiating Cold-Boot defense (scrubbing unallocated RAM frames)...\n");
+    size_t scrubbed = 0;
+    for (size_t i = 0; i < total_frames; i++) {
+        if (!bitmap_test(i)) {
+            uint64_t pa = (uint64_t)i * PAGE_SIZE;
+            if (pa < 0x100000000ULL) { // within 4 GiB HHDM
+                uint8_t* virt = (uint8_t*)phys_to_virt(pa);
+                memset(virt, 0, PAGE_SIZE);
+                scrubbed++;
+            }
+        }
+    }
+    // Invalidate processor caches
+    __asm__ volatile ("wbinvd" ::: "memory");
+    serial_puts("[+] OpSec: RAM scrub complete: ");
+    serial_print_dec((uint64_t)scrubbed);
+    serial_puts(" free physical frames wiped.\n");
+}

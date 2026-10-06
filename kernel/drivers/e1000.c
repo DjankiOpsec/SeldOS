@@ -15,6 +15,7 @@
 #include "serial.h"
 #include "idt.h"
 #include "pit.h"
+#include "rand.h"
 
 static struct pci_device s_pci_dev;
 static uint8_t* s_mmio_base = NULL;
@@ -98,6 +99,24 @@ static void e1000_read_mac(void) {
         s_mac_addr[3] = 0x4C; // 'L'
         s_mac_addr[4] = 0x44; // 'D'
         s_mac_addr[5] = 0x01;
+    }
+}
+
+void e1000_randomize_mac(void) {
+    rng_get_bytes(s_mac_addr, 6);
+    // IEEE 802: Locally administered (bit 1 = 1), Unicast (bit 0 = 0)
+    s_mac_addr[0] = (s_mac_addr[0] | 0x02) & 0xFE;
+
+    if (s_mmio_base) {
+        uint32_t ral = (uint32_t)s_mac_addr[0] |
+                       ((uint32_t)s_mac_addr[1] << 8) |
+                       ((uint32_t)s_mac_addr[2] << 16) |
+                       ((uint32_t)s_mac_addr[3] << 24);
+        uint32_t rah = (uint32_t)s_mac_addr[4] |
+                       ((uint32_t)s_mac_addr[5] << 8) |
+                       (1U << 31);
+        e1000_write32(E1000_REG_RAL, ral);
+        e1000_write32(E1000_REG_RAH, rah);
     }
 }
 
@@ -188,9 +207,10 @@ int e1000_init(void) {
         e1000_write32(E1000_REG_MTA + (i * 4), 0);
     }
 
-    // Read MAC address
+    // Read MAC address and randomize/spoof for OpSec
     e1000_read_mac();
-    serial_puts("[+] e1000: Hardware MAC Address: ");
+    e1000_randomize_mac();
+    serial_puts("[+] e1000: OpSec Ephemeral MAC Address (Randomized/Spoofed): ");
     const char hex_chars[] = "0123456789ABCDEF";
     for (int i = 0; i < 6; i++) {
         serial_putchar(hex_chars[(s_mac_addr[i] >> 4) & 0x0F]);

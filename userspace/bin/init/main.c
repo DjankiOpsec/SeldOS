@@ -31,32 +31,52 @@ static int run_self_checks(void) {
     uint8_t spl = ss & 3;
 
     if (cpl != 3 || spl != 3) {
-        printf("[-] [init:CHECK 1/4] FAILED: Invalid hardware privilege level (CPL=%d, SPL=%d)\n", cpl, spl);
+        printf("[-] [init:CHECK 1/5] FAILED: Invalid hardware privilege level (CPL=%d, SPL=%d)\n", cpl, spl);
         return 0;
     }
-    printf("[+] [init:CHECK 1/4] CPU Privilege Level: CPL=3 (Unprivileged User Mode)\n");
+    printf("[+] [init:CHECK 1/5] CPU Privilege Level: CPL=3 (Unprivileged User Mode)\n");
 
     // 2. Fast Syscall Handshake
     long ping_res = seld_ping();
     if (ping_res != 0x5E1D5EC) {
-        printf("[-] [init:CHECK 2/4] FAILED: Kernel fast syscall handshake returned 0x%lx\n", ping_res);
+        printf("[-] [init:CHECK 2/5] FAILED: Kernel fast syscall handshake returned 0x%lx\n", ping_res);
         return 0;
     }
-    printf("[+] [init:CHECK 2/4] MSR LSTAR Fast Syscall Handshake: OK (0x5E1D5EC)\n");
+    printf("[+] [init:CHECK 2/5] MSR LSTAR Fast Syscall Handshake: OK (0x5E1D5EC)\n");
 
     // 3. Process & Timer State
     int pid = getpid();
     uint64_t ms = uptime();
-    printf("[+] [init:CHECK 3/4] PID: %d, System Chronometer: %lu ms\n", pid, ms);
+    printf("[+] [init:CHECK 3/5] PID: %d, System Chronometer: %lu ms\n", pid, ms);
 
     // 4. SeldFS Root Index & Shell Verification
     struct seld_stat st;
     if (stat("/bin/sh", &st) == 0) {
-        printf("[+] [init:CHECK 4/4] SeldFS Storage: /bin/sh verified (%u bytes, %u blocks)\n",
+        printf("[+] [init:CHECK 4/5] SeldFS Storage: /bin/sh verified (%u bytes, %u blocks)\n",
                st.size, st.block_count);
     } else {
-        printf("[*] [init:CHECK 4/4] SeldFS Storage: /bin/sh lookup (fallback enabled)\n");
+        printf("[*] [init:CHECK 4/5] SeldFS Storage: /bin/sh lookup (fallback enabled)\n");
     }
+
+    // 5. OpSec Ring 3 Memory Wipe & RFC 7686 Guard
+    uint8_t* sec_buf = (uint8_t*)malloc(64);
+    if (sec_buf) {
+        memset(sec_buf, 0x77, 64);
+        free(sec_buf);
+        for (int i = 0; i < 64; i++) {
+            if (sec_buf[i] != 0) {
+                printf("[-] [init:CHECK 5/5] FAILED: Userspace Zero-on-Free did not wipe heap!\n");
+                return 0;
+            }
+        }
+    }
+    uint32_t leaked_ip = 0;
+    int r_onion = seld_dns_resolve("test-hidden-service.onion", &leaked_ip);
+    if (r_onion != -9) {
+        printf("[-] [init:CHECK 5/5] FAILED: RFC 7686 Onion DNS leak guard not enforced!\n");
+        return 0;
+    }
+    printf("[+] [init:CHECK 5/5] OpSec Hardening: Zero-on-Free & RFC 7686 Onion Guard active.\n");
 
     printf("[+] [init] All userspace initialization self-checks PASSED.\n\n");
     return 1;

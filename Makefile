@@ -21,7 +21,8 @@ LIBC_SRCS = userspace/libc/src/syscall.c \
             userspace/libc/src/seld_x25519.c \
             userspace/libc/src/seld_aes128_gcm.c \
             userspace/libc/src/seld_hkdf.c \
-            userspace/libc/src/seld_tls.c
+            userspace/libc/src/seld_tls.c \
+            userspace/libc/src/seld_vless.c
 
 LIBC_OBJS = build/libc_syscall.o \
             build/libc_memory.o \
@@ -33,11 +34,12 @@ LIBC_OBJS = build/libc_syscall.o \
             build/libc_seld_x25519.o \
             build/libc_seld_aes128_gcm.o \
             build/libc_seld_hkdf.o \
-            build/libc_seld_tls.o
+            build/libc_seld_tls.o \
+            build/libc_seld_vless.o
 
 LIBSNL = build/libsnl.a
 
-UTILS = init sh ls cat echo rm sha256sum uname ps fm download tor oracle fetch reboot poweroff
+UTILS = init sh ls cat echo rm sha256sum uname ps fm download tor oracle fetch reboot poweroff purge stealth
 ALL_BINS = $(addprefix build/bin/, $(UTILS))
 
 DOOM_CFLAGS = $(USER_CFLAGS) -Iuserspace/doom -DNORMALUNIX -DLINUX -DSNDSERV -D_DEFAULT_SOURCE -w

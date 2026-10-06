@@ -436,44 +436,109 @@ int seldfs_delete_file(const char* filename) {
     return -1; // File not found
 }
 
+int seldfs_is_authorized_file(const char* filename) {
+    if (!filename) return 0;
+    const char* base = filename;
+    if (strncmp(base, "/bin/", 5) == 0) base += 5;
+    else if (base[0] == '/') base += 1;
+
+    static const char* const authorized[] = {
+        "init", "sh", "ls", "cat", "echo", "rm", "sha256sum",
+        "reboot", "poweroff", "fetch", "fm", "oracle", "ps",
+        "uname", "download", "tor", "torbrowser", "doom", "purge", "stealth",
+        "readme.txt", "opsec.txt", "oracle.txt", "doom1.wad", "pcmode",
+        NULL
+    };
+    for (int i = 0; authorized[i] != NULL; i++) {
+        if (strcmp(base, authorized[i]) == 0) return 1;
+    }
+    return 0;
+}
+
 int seldfs_verify_file(const char* filename) {
     if (!fs_mounted || !filename) return -1;
 
+    size_t target_idx = (size_t)-1;
     for (size_t i = 0; i < SELDFS_MAX_FILES; i++) {
-        if (sb.inodes[i].used && strcmp(sb.inodes[i].filename, filename) == 0) {
-            uint32_t file_size = sb.inodes[i].size;
-            uint32_t remaining = file_size;
-            uint8_t sector_buf[SELDFS_BLOCK_SIZE];
-            struct sha256_ctx ctx;
-            sha256_init(&ctx);
+        if (!sb.inodes[i].used) continue;
+        if (strcmp(sb.inodes[i].filename, filename) == 0) {
+            target_idx = i;
+            break;
+        }
+    }
+    if (target_idx == (size_t)-1) {
+        const char* base = filename;
+        if (strncmp(base, "/bin/", 5) == 0) base += 5;
+        else if (base[0] == '/') base += 1;
 
-            for (uint32_t b = 0; b < sb.inodes[i].block_count && remaining > 0; b++) {
-                if (bdev_read_sectors(sb.inodes[i].start_lba + b, 1, sector_buf) != 0) {
-                    serial_puts("[-] SeldFS: I/O read failure during integrity verification.\n");
-                    return -1;
-                }
-                uint32_t chunk = (remaining > SELDFS_BLOCK_SIZE) ? SELDFS_BLOCK_SIZE : remaining;
-                sha256_update(&ctx, sector_buf, chunk);
-                remaining -= chunk;
-            }
-
-            uint8_t computed_hash[32];
-            sha256_final(&ctx, computed_hash);
-
-            if (memcmp(computed_hash, sb.inodes[i].sha256, 32) == 0) {
-                serial_puts("[+] SeldFS: SHA-256 integrity check PASSED for: ");
-                serial_puts(filename);
-                serial_puts("\n");
-                return 0; // Verified OK
-            } else {
-                serial_puts("[-] SeldFS: SHA-256 integrity check FAILED for: ");
-                serial_puts(filename);
-                serial_puts(" (hash mismatch)\n");
-                return -2; // Hash mismatch
+        for (size_t i = 0; i < SELDFS_MAX_FILES; i++) {
+            if (!sb.inodes[i].used) continue;
+            const char* in_base = sb.inodes[i].filename;
+            if (strncmp(in_base, "/bin/", 5) == 0) in_base += 5;
+            else if (in_base[0] == '/') in_base += 1;
+            if (strcmp(in_base, base) == 0) {
+                target_idx = i;
+                break;
             }
         }
     }
-    return -1; // File not found
+    if (target_idx == (size_t)-1) return -1; // File not found
+
+    uint32_t file_size = sb.inodes[target_idx].size;
+    uint32_t remaining = file_size;
+    uint8_t sector_buf[SELDFS_BLOCK_SIZE];
+    struct sha256_ctx ctx;
+    sha256_init(&ctx);
+
+    for (uint32_t b = 0; b < sb.inodes[target_idx].block_count && remaining > 0; b++) {
+        if (bdev_read_sectors(sb.inodes[target_idx].start_lba + b, 1, sector_buf) != 0) {
+            serial_puts("[-] SeldFS: I/O read failure during integrity verification.\n");
+            return -1;
+        }
+        uint32_t chunk = (remaining > SELDFS_BLOCK_SIZE) ? SELDFS_BLOCK_SIZE : remaining;
+        sha256_update(&ctx, sector_buf, chunk);
+        remaining -= chunk;
+    }
+
+    uint8_t computed_hash[32];
+    sha256_final(&ctx, computed_hash);
+
+    if (memcmp(computed_hash, sb.inodes[target_idx].sha256, 32) == 0) {
+        return 0; // Verified OK
+    } else {
+        serial_puts("[-] SeldFS: SHA-256 integrity check FAILED for: ");
+        serial_puts(filename);
+        serial_puts(" (hash mismatch)\n");
+        return -2; // Hash mismatch
+    }
+}
+
+int seldfs_purge_untrusted(void) {
+    if (!fs_mounted) return 0;
+    int purged = 0;
+    uint8_t zero_block[SELDFS_BLOCK_SIZE];
+    memset(zero_block, 0, sizeof(zero_block));
+
+    for (size_t i = 0; i < SELDFS_MAX_FILES; i++) {
+        if (!sb.inodes[i].used) continue;
+
+        int is_auth = seldfs_is_authorized_file(sb.inodes[i].filename);
+        int verify_res = seldfs_verify_file(sb.inodes[i].filename);
+
+        if (!is_auth || verify_res != 0) {
+            serial_puts("[!] OpSec FS Purge: Removing rogue/tampered file '");
+            serial_puts(sb.inodes[i].filename);
+            serial_puts("'\n");
+
+            for (uint32_t b = 0; b < sb.inodes[i].block_count; b++) {
+                bdev_write_sectors(sb.inodes[i].start_lba + b, 1, zero_block);
+            }
+
+            seldfs_delete_file(sb.inodes[i].filename);
+            purged++;
+        }
+    }
+    return purged;
 }
 
 int seldfs_get_file_info(const char* filename, struct seldfs_inode* out_inode) {

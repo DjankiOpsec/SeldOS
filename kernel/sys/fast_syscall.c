@@ -40,6 +40,10 @@ uint64_t kernel_syscall_stack_top = (uint64_t)&syscall_stack[sizeof(syscall_stac
 /* Process user heap break address */
 static uint64_t user_current_brk = 0;
 
+/* Seld-Pledge Process Sandboxing State */
+static uint32_t current_pledge_mask = 0xFFFFFFFF;
+static uint8_t  current_pledge_enforced = 0;
+
 /* User-mode file descriptor table (0=stdin, 1=stdout, 2=stderr, 3..31=SeldFS files) */
 #define MAX_USER_FDS 32
 struct user_fd_entry {
@@ -165,6 +169,22 @@ int elf_load_and_run(const char* path, int argc, char* argv[]) {
     char resolved[SELDFS_MAX_FILENAME];
     resolve_seldfs_path(path, resolved);
 
+    // 1. Binary Gatekeeper: Authorization check
+    if (!seldfs_is_authorized_file(resolved)) {
+        serial_puts("[-] OpSec Binary Gatekeeper: Blocked unauthorized binary: '");
+        serial_puts(resolved);
+        serial_puts("'\n");
+        return -1;
+    }
+
+    // 2. Binary Gatekeeper: Cryptographic SHA-256 Attestation
+    if (seldfs_verify_file(resolved) != 0) {
+        serial_puts("[-] OpSec Binary Gatekeeper: SHA-256 verification FAILED for '");
+        serial_puts(resolved);
+        serial_puts("'. Tampered binary rejected!\n");
+        return -1;
+    }
+
     struct seldfs_inode inode;
     if (seldfs_get_file_info(resolved, &inode) != 0 || inode.size < sizeof(Elf64_Ehdr)) {
         serial_puts("[-] elf_load_and_run: File not found or too small: ");
@@ -253,8 +273,25 @@ int elf_load_and_run(const char* path, int argc, char* argv[]) {
     uint64_t saved_brk = user_current_brk;
     user_current_brk = DEFAULT_USER_HEAP_BASE;
 
+    uint32_t saved_pledge_mask = current_pledge_mask;
+    uint8_t  saved_pledge_enforced = current_pledge_enforced;
+    current_pledge_mask = 0xFFFFFFFF;
+    current_pledge_enforced = 0;
+
     uint64_t parent_cr3;
     __asm__ volatile ("mov %%cr3, %0" : "=r"(parent_cr3));
+
+    const char* base_bin = resolved;
+    if (strncmp(base_bin, "/bin/", 5) == 0) base_bin += 5;
+    else if (base_bin[0] == '/') base_bin += 1;
+
+    int is_net_tool = (strcmp(base_bin, "tor") == 0 ||
+                       strcmp(base_bin, "torbrowser") == 0 ||
+                       strcmp(base_bin, "download") == 0 ||
+                       strcmp(base_bin, "stealth") == 0);
+    if (is_net_tool) {
+        net_lease_acquire();
+    }
 
     int exit_code = jump_to_userspace_asm((void (*)(void))proc_entry,
                                           (void*)user_rsp,
@@ -262,11 +299,17 @@ int elf_load_and_run(const char* path, int argc, char* argv[]) {
                                           (uint64_t)k_argc,
                                           (void*)child_argv_va);
 
+    if (is_net_tool) {
+        net_lease_release();
+    }
+
     // Clean up child address space
     vmm_destroy_address_space(proc_pml4_virt);
 
     // Restore parent state
     user_current_brk = saved_brk;
+    current_pledge_mask = saved_pledge_mask;
+    current_pledge_enforced = saved_pledge_enforced;
 
     if (parent_cr3 && parent_cr3 != vmm_get_kernel_pml4()) {
         vmm_switch_pml4(parent_cr3);
@@ -279,6 +322,10 @@ static void system_reboot(void) __attribute__((noreturn));
 static void system_reboot(void) {
     serial_puts("[!] System reboot requested. Resetting CPU...\n");
     vga_puts("\n[!] Rebooting system...\n");
+
+    // OpSec: Sever network connections and perform Cold-Boot memory wipe
+    net_abort_all_connections();
+    pmm_secure_wipe_all_free();
 
     // 1. 8042 keyboard controller reset pulse
     for (int t = 0; t < 1000; t++) {
@@ -310,6 +357,11 @@ static void system_poweroff(void) {
     serial_puts("[!] System poweroff requested. Halting all processors...\n");
     vga_puts("\n[!] Powering off system...\n");
 
+    // OpSec: Sever network connections, scrub framebuffer, and wipe RAM
+    net_abort_all_connections();
+    vga_clear();
+    pmm_secure_wipe_all_free();
+
     // 1. QEMU / Bochs ACPI shutdown (port 0x604, value 0x2000)
     outw(0x604, 0x2000);
 
@@ -332,8 +384,119 @@ static void system_poweroff(void) {
     }
 }
 
+/* Seld-Pledge Capability Verification Engine */
+static int check_pledge(uint64_t sys_num, uint64_t a1) {
+    if (!current_pledge_enforced) return 0;
+
+    uint32_t req = 0;
+    switch (sys_num) {
+        case SYS_EXIT:
+        case SYS_YIELD:
+        case SYS_UPTIME:
+        case SYS_GETPID:
+        case SYS_SLEEP:
+        case SYS_BRK:
+        case SYS_CLEAR:
+        case SYS_POLLKEY:
+        case SYS_POLLMOUSE:
+        case SYS_FRAMEBUFFER:
+        case SYS_SET_CONSOLE_ROWS:
+        case SYS_MEMINFO:
+        case SYS_GETTASKS:
+        case SYS_PLEDGE:
+        case SYS_SELD:
+            req = PLEDGE_STDIO;
+            break;
+
+        case SYS_WRITE:
+            req = (a1 == 1 || a1 == 2) ? PLEDGE_STDIO : PLEDGE_WPATH;
+            break;
+
+        case SYS_READ:
+            req = (a1 == 0) ? PLEDGE_STDIO : PLEDGE_RPATH;
+            break;
+
+        case SYS_SELD_VERIFY:
+        case SYS_OPEN:
+        case SYS_CLOSE:
+        case 9:
+        case SYS_STAT:
+        case SYS_LISTDIR:
+        case SYS_READFILE:
+        case SYS_LSEEK:
+            req = PLEDGE_RPATH;
+            break;
+
+        case SYS_WRITEFILE:
+        case SYS_UNLINK:
+            req = PLEDGE_WPATH;
+            break;
+
+        case SYS_SPAWN:
+        case SYS_EXEC:
+            req = PLEDGE_EXEC;
+            break;
+
+        case SYS_NET_INFO:
+        case SYS_NET_PING:
+        case SYS_NET_ARP:
+        case SYS_NET_DOWNLOAD:
+        case SYS_NET_TCP_CONNECT:
+        case SYS_NET_TCP_SEND:
+        case SYS_NET_TCP_RECV:
+        case SYS_NET_TCP_CLOSE:
+        case SYS_NET_SET_DESYNC:
+        case SYS_NET_GET_DESYNC:
+            req = PLEDGE_NET;
+            break;
+
+        case SYS_NET_DNS_RESOLVE:
+            req = PLEDGE_DNS;
+            break;
+
+        case SYS_BEEP:
+        case SYS_AUDIO_PLAY:
+            req = PLEDGE_AUDIO;
+            break;
+
+        case SYS_IMMUNE_PURGE:
+        case SYS_NET_SET_LOCK:
+        case SYS_NET_GET_LOCK:
+            req = PLEDGE_PURGE;
+            break;
+
+        case SYS_REBOOT:
+        case SYS_POWEROFF:
+            req = PLEDGE_REBOOT;
+            break;
+
+        default:
+            req = 0;
+            break;
+    }
+
+    if (req && (current_pledge_mask & req) == 0) {
+        serial_puts("[-] OpSec PLEDGE VIOLATION: Syscall ");
+        serial_print_dec(sys_num);
+        serial_puts(" denied by active pledge mask 0x");
+        serial_print_hex((uint64_t)current_pledge_mask);
+        serial_puts(" (required 0x");
+        serial_print_hex((uint64_t)req);
+        serial_puts(")\n");
+        return -1;
+    }
+    return 0;
+}
+
 uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4) {
     (void)a4;
+
+    if (check_pledge(num, a1) != 0) {
+        serial_puts("[-] OpSec: Terminating rogue/compromised process breaching pledge contract.\n");
+        user_exit_to_kernel(134);
+        return (uint64_t)-1;
+    }
+
     switch (num) {
         case SYS_WRITE: {
             // a1 = fd, a2 = buffer, a3 = length
@@ -1089,6 +1252,52 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
             return 0x5E1D5EC;
         }
 
+        case SYS_IMMUNE_PURGE: {
+            int wiped_files = seldfs_purge_untrusted();
+            int killed_tasks = sched_purge_unauthorized_tasks();
+            int aborted_socks = net_abort_all_connections();
+            net_set_airgap(NET_AIRGAP_ONDEMAND);
+
+            serial_puts("[+] SYS_IMMUNE_PURGE: Filesystem, tasks and sockets sanitized.\n");
+            uint64_t summary = (uint64_t)(wiped_files & 0xFFFF) |
+                               ((uint64_t)(killed_tasks & 0xFF) << 16) |
+                               ((uint64_t)(aborted_socks & 0xFF) << 24);
+            return summary;
+        }
+
+        case SYS_NET_SET_LOCK: {
+            int mode = (int)a1;
+            if (mode == 0) {
+                net_set_airgap(NET_AIRGAP_UNLOCKED);
+            } else if (mode == 1) {
+                net_set_airgap(NET_AIRGAP_LOCKED);
+                net_abort_all_connections();
+            } else if (mode == 2) {
+                net_set_airgap(NET_AIRGAP_ONDEMAND);
+            } else if (mode == 3) {
+                net_lease_acquire();
+            } else if (mode == 4) {
+                net_lease_release();
+            } else if (mode == 5) {
+                net_set_airgap(NET_AIRGAP_STEALTH);
+            }
+            return 0;
+        }
+
+        case SYS_NET_GET_LOCK: {
+            return (uint64_t)net_get_airgap();
+        }
+
+        case SYS_NET_SET_DESYNC: {
+            int mode = (int)a1;
+            net_set_desync(mode);
+            return 0;
+        }
+
+        case SYS_NET_GET_DESYNC: {
+            return (uint64_t)net_get_desync();
+        }
+
         case SYS_REBOOT: {
             system_reboot();
             return 0;
@@ -1096,6 +1305,21 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
 
         case SYS_POWEROFF: {
             system_poweroff();
+            return 0;
+        }
+
+        case SYS_PLEDGE: {
+            uint32_t requested = (uint32_t)a1;
+            if (current_pledge_enforced) {
+                // Monotonic restriction: privileges can only be dropped, never escalated
+                current_pledge_mask &= requested;
+            } else {
+                current_pledge_mask = requested;
+                current_pledge_enforced = 1;
+            }
+            serial_puts("[+] OpSec: Active process pledge mask set to 0x");
+            serial_print_hex((uint64_t)current_pledge_mask);
+            serial_puts("\n");
             return 0;
         }
 

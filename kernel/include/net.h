@@ -201,4 +201,26 @@ int  net_tcp_socket_is_connected(int sock_id);
 int  net_send_udp(uint32_t dest_ip, uint16_t src_port, uint16_t dest_port, const void* payload, size_t payload_len);
 int  net_dns_resolve(const char* hostname, uint32_t* ip_out);
 
+/* Air-Gap On-Demand & Network Defense API */
+#define NET_AIRGAP_UNLOCKED 0
+#define NET_AIRGAP_LOCKED   1
+#define NET_AIRGAP_ONDEMAND 2
+#define NET_AIRGAP_STEALTH  3
+
+void net_set_airgap(int mode);
+int  net_get_airgap(void);
+void net_lease_acquire(void);
+void net_lease_release(void);
+int  net_is_traffic_allowed(void);
+int  net_abort_all_connections(void);
+
+/* In-Kernel TCP Desync & Anti-DPI (TSPU Evasion) API */
+#define NET_DESYNC_NONE   0
+#define NET_DESYNC_SPLIT  1
+#define NET_DESYNC_FAKE   2
+
+void net_set_desync(int mode);
+int  net_get_desync(void);
+int  net_get_desync_stats(uint32_t* splits, uint32_t* fakes);
+
 #endif /* SELD_NET_H */

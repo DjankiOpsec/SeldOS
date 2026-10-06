@@ -161,7 +161,6 @@ static const uint16_t s_libc_ona_to_freq[128] = {
 
 uint32_t seld_ona2freq(int8_t ona) {
     if (ona <= 0) return 0;
-    if (ona > 127) ona = 127;
     return (uint32_t)s_libc_ona_to_freq[(uint8_t)ona];
 }
 
@@ -487,6 +486,11 @@ int seld_dns_resolve_dot(const char* hostname, uint32_t* ip_out) {
     clean_host[clen] = '\0';
     if (clen == 0) return -1;
 
+    // RFC 7686 Guard: Onion domains must never be resolved via DNS
+    if ((clen >= 6 && strcmp(clean_host + clen - 6, ".onion") == 0) || strcmp(clean_host, "onion") == 0) {
+        return -9;
+    }
+
     // Fast bootstrap for Control D endpoints
     if (strcmp(clean_host, "p2.freedns.controld.com") == 0 ||
         strcmp(clean_host, "freedns.controld.com") == 0) {
@@ -643,6 +647,14 @@ int seld_dns_resolve(const char* hostname, uint32_t* ip_out) {
         *ip_out = 0;
         return -5; // Blocked by OpSec Filter
     }
+    if (res == -9) {
+        *ip_out = 0;
+        return -9; // Blocked by RFC 7686 Guard (.onion domain leak prevention)
+    }
+    if (res == -10) {
+        // Stealth mode: UDP DNS blocked, immediately fall back to DoT via TLS 1.3
+        return seld_dns_resolve_dot(hostname, ip_out);
+    }
 
     // 2. Encrypted fallback: DNS-over-TLS (p2.freedns.controld.com:853)
     return seld_dns_resolve_dot(hostname, ip_out);
@@ -661,10 +673,46 @@ int seld_poweroff(void) {
     return (int)seld_syscall(SYS_POWEROFF, 0, 0, 0);
 }
 
+int seld_immune_purge(void) {
+    return (int)seld_syscall(SYS_IMMUNE_PURGE, 0, 0, 0);
+}
+
+int seld_net_lock(int mode) {
+    long k_mode = (long)mode;
+    if (mode == SELD_AIRGAP_STEALTH) {
+        k_mode = 5;
+    }
+    return (int)seld_syscall(SYS_NET_SET_LOCK, k_mode, 0, 0);
+}
+
+int seld_net_get_lock(void) {
+    return (int)seld_syscall(SYS_NET_GET_LOCK, 0, 0, 0);
+}
+
+int seld_net_lease_acquire(void) {
+    return (int)seld_syscall(SYS_NET_SET_LOCK, NET_LEASE_ACQUIRE, 0, 0);
+}
+
+int seld_net_lease_release(void) {
+    return (int)seld_syscall(SYS_NET_SET_LOCK, NET_LEASE_RELEASE, 0, 0);
+}
+
+int seld_net_set_desync(int mode) {
+    return (int)seld_syscall(SYS_NET_SET_DESYNC, (long)mode, 0, 0);
+}
+
+int seld_net_get_desync(void) {
+    return (int)seld_syscall(SYS_NET_GET_DESYNC, 0, 0, 0);
+}
+
 void reboot(void) {
     seld_reboot();
 }
 
 void poweroff(void) {
     seld_poweroff();
+}
+
+int seld_pledge(uint32_t flags) {
+    return (int)seld_syscall(SYS_PLEDGE, (long)flags, 0, 0);
 }
