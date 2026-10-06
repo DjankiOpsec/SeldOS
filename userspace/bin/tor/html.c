@@ -241,7 +241,7 @@ void html_render(const char* html, uint32_t* backbuf, int screen_w, int screen_h
     int in_style = 0;
     int in_script = 0;
 
-    char cur_href[128] = {0};
+    char cur_href[512] = {0};
     uint32_t cur_col = COL_TEXT_LIGHT;
     const char* p = html;
 
@@ -399,6 +399,12 @@ void html_render(const char* html, uint32_t* backbuf, int screen_w, int screen_h
             } else if (strncasecmp(t, "a", 1) == 0 && (t[1] == ' ' || t[1] == '\0')) {
                 in_link = 1;
                 extract_attr(t, "href", cur_href, sizeof(cur_href));
+                char* amp = cur_href;
+                while ((amp = strstr(amp, "&amp;")) != NULL) {
+                    memmove(amp + 1, amp + 5, strlen(amp + 5) + 1);
+                    *amp = '&';
+                    amp++;
+                }
                 cur_col = COL_LINK_BLUE;
             } else if (strncasecmp(t, "/a", 2) == 0) {
                 in_link = 0;

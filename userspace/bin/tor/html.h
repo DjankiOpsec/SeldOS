@@ -18,7 +18,7 @@ struct html_link {
     int  y;
     int  w;
     int  h;
-    char href[128];
+    char href[512];
 };
 
 struct html_doc {

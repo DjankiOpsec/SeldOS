@@ -12,8 +12,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-static int parse_url(const char* url, char* host_out, size_t host_sz,
-                     uint16_t* port_out, char* path_out, size_t path_sz) {
+int parse_url(const char* url, char* host_out, size_t host_sz,
+              uint16_t* port_out, char* path_out, size_t path_sz) {
     if (!url) return -1;
     const char* p = url;
 
@@ -148,7 +148,7 @@ int http_fetch(const char* url, uint32_t proxy_ip, uint16_t proxy_port, struct h
 
     while (redirects++ < 3) {
         char host[128];
-        char path[256];
+        char path[512];
         uint16_t port = 80;
 
         if (parse_url(cur_url, host, sizeof(host), &port, path, sizeof(path)) != 0) {
@@ -164,79 +164,29 @@ int http_fetch(const char* url, uint32_t proxy_ip, uint16_t proxy_port, struct h
         struct seld_tls_conn* tls = NULL;
 
         if (is_onion) {
-            // Tor Onion Service via SOCKS5
+            // Tor Onion Service strictly via SOCKS5
             if (!s_tor_socks_down) {
                 sock = socks5_connect(proxy_ip, proxy_port, host, port);
                 if (sock >= 0) {
                     used_tor = 1;
-                    if (is_https) {
-                        tls = (struct seld_tls_conn*)malloc(sizeof(struct seld_tls_conn));
-                        if (!tls) {
-                            seld_tcp_close(sock);
-                            return -6;
-                        }
-
-                        int hs = seld_tls_handshake(tls, sock, host);
-                        if (hs != 0) {
-                            seld_tls_close(tls);
-                            free(tls);
-                            tls = NULL;
-                            return -8; // SeldTLS 1.3 handshake failed
-                        }
-
-                        seld_tls_get_cert(tls, &resp->cert);
-                    }
                 } else {
                     return -14; // Onion service unreachable / Tor daemon offline
                 }
             } else {
                 return -14;
             }
-        } else if (is_https) {
-            // Sovereign HTTPS: Direct TLS 1.3 negotiation inside SeldOS
-            uint32_t ip = parse_ipv4(host);
-            if (ip == 0) {
-                struct seld_net_info ninfo;
-                if (seld_net_info(&ninfo) == 0 && !ninfo.link_up) {
-                    return -15; // Network interface offline
-                }
-                int dns_err = seld_dns_resolve(host, &ip);
-                if (dns_err != 0 || ip == 0) {
-                    return (dns_err == -4) ? -15 : -3; // DNS resolution failed
-                }
-            }
-
-            sock = seld_tcp_connect(ip, port);
-            if (sock < 0) {
-                return -4; // TCP connection failed
-            }
-
-            tls = (struct seld_tls_conn*)malloc(sizeof(struct seld_tls_conn));
-            if (!tls) {
-                seld_tcp_close(sock);
-                return -6;
-            }
-
-            int hs = seld_tls_handshake(tls, sock, host);
-            if (hs != 0) {
-                seld_tls_close(tls);
-                free(tls);
-                return -8; // SeldTLS 1.3 handshake failed
-            }
-
-            seld_tls_get_cert(tls, &resp->cert);
-            used_tor = 2; // SeldTLS 1.3 Native Sovereign Connection
         } else {
-            // Standard Clearnet HTTP: Try Tor SOCKS5 first, then Native DNS & Direct TCP
+            // Clearnet: In sovereign Tor browser, route through Tor SOCKS5 first for WAN privacy
             if (!s_tor_socks_down) {
                 sock = socks5_connect(proxy_ip, proxy_port, host, port);
                 if (sock >= 0) {
                     used_tor = 1;
                 } else {
-                    s_tor_socks_down = 1; // SOCKS daemon not responding, use native clearnet
+                    s_tor_socks_down = 1; // SOCKS daemon not responding, fall back to native clearnet
                 }
             }
 
+            // Fallback: Native DNS & Direct TCP if Tor daemon is offline or refused
             if (sock < 0) {
                 uint32_t ip = parse_ipv4(host);
                 if (ip == 0 && (strcmp(host, "gateway") == 0 || strcmp(host, "localhost") == 0)) {
@@ -257,17 +207,37 @@ int http_fetch(const char* url, uint32_t proxy_ip, uint16_t proxy_port, struct h
                     }
                 }
 
-                if (sock < 0 && ip != 0) {
+                if (ip != 0) {
                     sock = seld_tcp_connect(ip, port);
                     if (sock >= 0) {
-                        used_tor = 0; // Direct Native Clearnet
+                        used_tor = (is_https ? 2 : 0);
                     }
                 }
             }
         }
 
-        if (sock < 0 && !tls) {
+        if (sock < 0) {
             return -4; // Connection failed
+        }
+
+        // Common TLS layer: negotiate SeldTLS 1.3 over established socket (Tor SOCKS5 or Direct TCP)
+        if (is_https) {
+            tls = (struct seld_tls_conn*)malloc(sizeof(struct seld_tls_conn));
+            if (!tls) {
+                seld_tcp_close(sock);
+                return -6;
+            }
+
+            int hs = seld_tls_handshake(tls, sock, host);
+            if (hs != 0) {
+                seld_tls_close(tls);
+                free(tls);
+                tls = NULL;
+                return -8; // SeldTLS 1.3 handshake failed
+            }
+
+            seld_tls_get_cert(tls, &resp->cert);
+            if (used_tor == 0) used_tor = 2;
         }
 
         resp->used_tor = used_tor;
@@ -385,9 +355,14 @@ int http_fetch(const char* url, uint32_t proxy_ip, uint16_t proxy_port, struct h
                         loc_len--;
                     }
                     if (loc[0] == '/') {
-                        snprintf(cur_url, sizeof(cur_url), "http%s://%s%.*s",
-                                 (port == 443 || used_tor == 2 || (is_https && used_tor == 1)) ? "s" : "",
-                                 host, (int)loc_len, loc);
+                        if (loc[1] == '/') {
+                            snprintf(cur_url, sizeof(cur_url), "http%s:%.*s",
+                                     (is_https) ? "s" : "", (int)loc_len, loc);
+                        } else {
+                            snprintf(cur_url, sizeof(cur_url), "http%s://%s%.*s",
+                                     (port == 443 || used_tor == 2 || (is_https && used_tor == 1)) ? "s" : "",
+                                     host, (int)loc_len, loc);
+                        }
                     } else if (loc_len < sizeof(cur_url)) {
                         memcpy(cur_url, loc, loc_len);
                         cur_url[loc_len] = '\0';

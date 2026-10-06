@@ -12,8 +12,8 @@
 #include <stddef.h>
 #include <seld_tls.h>
 
-#define HTTP_MAX_URL_LEN 256
-#define HTTP_MAX_RESP_LEN (128 * 1024) // 128 KiB HTML buffer
+#define HTTP_MAX_URL_LEN 512
+#define HTTP_MAX_RESP_LEN (256 * 1024) // 256 KiB HTML buffer
 #define DDG_ONION_HOST "duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion"
 
 struct http_response {
@@ -26,6 +26,12 @@ struct http_response {
     struct seld_tls_cert cert;
 };
 
+
+/*
+ * Parses a standard URL into host, port, and path components.
+ */
+int parse_url(const char* url, char* host_out, size_t host_sz,
+              uint16_t* port_out, char* path_out, size_t path_sz);
 
 /*
  * Fetches an HTTP resource via Tor SOCKS5 or direct fallback.

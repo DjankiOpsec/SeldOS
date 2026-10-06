@@ -338,6 +338,127 @@ static void draw_cursor(int x, int y, int click) {
     }
 }
 
+static void resolve_url(const char* base_url, const char* in_url, char* out_url, size_t out_sz) {
+    if (!in_url || !out_url || out_sz == 0) return;
+    while (*in_url == ' ' || *in_url == '\t' || *in_url == '\r' || *in_url == '\n') in_url++;
+    if (!*in_url) {
+        out_url[0] = '\0';
+        return;
+    }
+
+    // 1. DuckDuckGo tracking redirect unwrapping (uddg= parameter)
+    // E.g. /l/?uddg=https%3A%2F%2Fen.wikipedia.org%2Fwiki%2FLinux&rut=...
+    const char* uddg = strstr(in_url, "uddg=");
+    if (!uddg) uddg = strstr(in_url, "UDDG=");
+    if (uddg) {
+        uddg += 5;
+        char enc_val[HTTP_MAX_URL_LEN];
+        size_t ei = 0;
+        while (*uddg && *uddg != '&' && *uddg != ' ' && *uddg != '\r' && *uddg != '\n' &&
+               *uddg != '"' && *uddg != '\'' && ei + 1 < sizeof(enc_val)) {
+            enc_val[ei++] = *uddg++;
+        }
+        enc_val[ei] = '\0';
+
+        // URL-decode enc_val
+        char decoded[HTTP_MAX_URL_LEN];
+        size_t di = 0;
+        for (size_t si = 0; enc_val[si] && di + 1 < sizeof(decoded);) {
+            if (enc_val[si] == '%' && enc_val[si+1] && enc_val[si+2]) {
+                int h1 = -1, h2 = -1;
+                char c1 = enc_val[si+1], c2 = enc_val[si+2];
+                if (c1 >= '0' && c1 <= '9') h1 = c1 - '0';
+                else if (c1 >= 'a' && c1 <= 'f') h1 = c1 - 'a' + 10;
+                else if (c1 >= 'A' && c1 <= 'F') h1 = c1 - 'A' + 10;
+
+                if (c2 >= '0' && c2 <= '9') h2 = c2 - '0';
+                else if (c2 >= 'a' && c2 <= 'f') h2 = c2 - 'a' + 10;
+                else if (c2 >= 'A' && c2 <= 'F') h2 = c2 - 'A' + 10;
+
+                if (h1 >= 0 && h2 >= 0) {
+                    decoded[di++] = (char)((h1 << 4) | h2);
+                    si += 3;
+                    continue;
+                }
+            }
+            if (enc_val[si] == '+') decoded[di++] = ' ';
+            else decoded[di++] = enc_val[si];
+            si++;
+        }
+        decoded[di] = '\0';
+
+        if (strncmp(decoded, "http://", 7) == 0 ||
+            strncmp(decoded, "https://", 8) == 0 ||
+            strncmp(decoded, "onion://", 8) == 0) {
+            strncpy(out_url, decoded, out_sz - 1);
+            out_url[out_sz - 1] = '\0';
+            return;
+        }
+    }
+
+    // 2. Protocol-relative URL: //domain.com/path
+    if (in_url[0] == '/' && in_url[1] == '/') {
+        const char* scheme = "https:";
+        if (base_url && strncmp(base_url, "http://", 7) == 0) {
+            scheme = "http:";
+        }
+        snprintf(out_url, out_sz, "%s%s", scheme, in_url);
+        return;
+    }
+
+    // 3. Absolute URL with known scheme
+    if (strncmp(in_url, "http://", 7) == 0 ||
+        strncmp(in_url, "https://", 8) == 0 ||
+        strncmp(in_url, "onion://", 8) == 0) {
+        strncpy(out_url, in_url, out_sz - 1);
+        out_url[out_sz - 1] = '\0';
+        return;
+    }
+
+    // 4. Path-relative URL starting with '/' (e.g. /wiki/Terry_A._Davis)
+    if (in_url[0] == '/') {
+        if (base_url && strcmp(base_url, "home") != 0 && strchr(base_url, ':')) {
+            char host[128] = {0};
+            uint16_t port = 0;
+            char dummy_path[64];
+            if (parse_url(base_url, host, sizeof(host), &port, dummy_path, sizeof(dummy_path)) == 0 && host[0]) {
+                const char* scheme = (strncmp(base_url, "http://", 7) == 0) ? "http" : "https";
+                if (port != 80 && port != 443 && port != 0) {
+                    snprintf(out_url, out_sz, "%s://%s:%u%s", scheme, host, (unsigned)port, in_url);
+                } else {
+                    snprintf(out_url, out_sz, "%s://%s%s", scheme, host, in_url);
+                }
+                return;
+            }
+        }
+        // Default base host if no valid current page: DDG Onion
+        snprintf(out_url, out_sz, "https://" DDG_ONION_HOST "%s", in_url);
+        return;
+    }
+
+    // 5. Implicit Onion URL (contains .onion)
+    if (strstr(in_url, ".onion") != NULL) {
+        snprintf(out_url, out_sz, "https://%s", in_url);
+        return;
+    }
+
+    // 6. Implicit Domain name (contains a dot and no spaces, e.g. example.com, en.wikipedia.org)
+    if (strchr(in_url, '.') != NULL && strchr(in_url, ' ') == NULL) {
+        snprintf(out_url, out_sz, "https://%s", in_url);
+        return;
+    }
+
+    // 7. Unqualified search query (e.g. "Terry A. Davis", "linux", "crypto")
+    char query_enc[HTTP_MAX_URL_LEN];
+    size_t qi = 0;
+    for (const char* p = in_url; *p && qi + 4 < sizeof(query_enc); p++) {
+        if (*p == ' ') query_enc[qi++] = '+';
+        else query_enc[qi++] = *p;
+    }
+    query_enc[qi] = '\0';
+    snprintf(out_url, out_sz, "https://" DDG_ONION_HOST "/html/?q=%s", query_enc);
+}
+
 static void load_url(const char* url) {
     if (!url) return;
     while (*url == ' ' || *url == '\t' || *url == '\r' || *url == '\n') url++;
@@ -369,29 +490,7 @@ static void load_url(const char* url) {
     }
 
     char target_url[HTTP_MAX_URL_LEN];
-    if (strncmp(clean_url, "http://", 7) != 0 &&
-        strncmp(clean_url, "https://", 8) != 0 &&
-        strncmp(clean_url, "onion://", 8) != 0) {
-        if (strstr(clean_url, ".onion") != NULL) {
-            snprintf(target_url, sizeof(target_url), "https://%s", clean_url);
-        } else if (strchr(clean_url, '.') == NULL) {
-            // Unqualified word -> Route through DuckDuckGo .onion sovereign search engine!
-            char query_enc[HTTP_MAX_URL_LEN];
-            size_t qi = 0;
-            for (const char* p = clean_url; *p && qi + 4 < sizeof(query_enc); p++) {
-                if (*p == ' ') query_enc[qi++] = '+';
-                else query_enc[qi++] = *p;
-            }
-            query_enc[qi] = '\0';
-            snprintf(target_url, sizeof(target_url), "https://" DDG_ONION_HOST "/html/?q=%s", query_enc);
-        } else {
-            // Sovereign HTTPS-First default
-            snprintf(target_url, sizeof(target_url), "https://%s", clean_url);
-        }
-    } else {
-        strncpy(target_url, clean_url, sizeof(target_url) - 1);
-        target_url[sizeof(target_url) - 1] = '\0';
-    }
+    resolve_url(s_current_url, clean_url, target_url, sizeof(target_url));
 
     struct seld_net_info ninfo;
     uint32_t proxy_ip = 0;
