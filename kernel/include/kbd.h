@@ -30,4 +30,9 @@ int kbd_has_char(void);
 char kbd_getchar(void);
 int kbd_poll_event(struct kbd_event* ev);
 
+/* THL Keystroke Timing Obfuscation & Jitter Interface */
+void kbd_timer_tick(void);
+void kbd_set_jitter(int enable);
+int  kbd_get_jitter(void);
+
 #endif /* SELD_KBD_H */

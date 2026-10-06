@@ -621,6 +621,8 @@ static void builtin_help(void) {
     printf("  purge           OpSec Immune Purge: kill rogue tasks, zero-wipe threats, sever sockets\n");
     printf("  net [mode]      Air-Gap Shield: status, lock, unlock, ondemand, stealth, desync\n");
     printf("  desync [mode]   TSPU/DPI Evasion: split (SNI segmentation), fake, off\n");
+    printf("  jitter [on|off] THL Keystroke Timing Obfuscation & Jitter (50ms Quantization)\n");
+    printf("  unveil <p> <m>  Seld-Unveil Filesystem Sandboxing (OpenBSD unveil: r, w, x, c, lock)\n");
     printf("  selftest        Execute userspace Ring 3 verification test suite\n\n");
     printf("External Utilities in /bin/:\n");
     printf("  stealth [cmd]   Anti-TSPU/DPI Stealth Suite & Native C99 VLESS Client\n");
@@ -1202,6 +1204,59 @@ static void builtin_desync(int argc, char* argv[]) {
     }
 }
 
+static void builtin_jitter(int argc, char* argv[]) {
+    if (argc < 2 || strcmp(argv[1], "status") == 0) {
+        int j = seld_get_jitter();
+        printf("[*] THL Keystroke Timing Jitter: %s\n",
+               j ? "ENABLED (50ms Quantized PIT Batching)" : "DISABLED (Direct Low-Latency)");
+        printf("    Usage: jitter <on | off | status>\n");
+        return;
+    }
+    if (strcmp(argv[1], "on") == 0 || strcmp(argv[1], "1") == 0) {
+        seld_set_jitter(1);
+        printf("[+] THL Keystroke Timing Jitter ENABLED: Scancodes quantized to ~50ms CSPRNG batching.\n");
+    } else if (strcmp(argv[1], "off") == 0 || strcmp(argv[1], "0") == 0) {
+        seld_set_jitter(0);
+        printf("[*] THL Keystroke Timing Jitter DISABLED: Direct low-latency typing restored.\n");
+    } else {
+        printf("Usage: jitter <on | off | status>\n");
+    }
+}
+
+static void builtin_unveil(int argc, char* argv[]) {
+    if (argc < 2) {
+        printf("Seld-Unveil Path-Based Sandboxing (OpenBSD unveil(2))\n");
+        printf("Usage:\n");
+        printf("  unveil <path> <permissions>   Add unveil rule (e.g. unveil /bin rx)\n");
+        printf("  unveil lock                   Lock unveil configuration (irreversible)\n");
+        printf("Permissions:\n");
+        printf("  r - Read | w - Write | x - Execute | c - Create\n");
+        return;
+    }
+
+    if (strcmp(argv[1], "lock") == 0) {
+        int ret = seld_unveil(NULL, NULL);
+        if (ret == 0) {
+            printf("[+] Seld-Unveil configuration locked permanently for this session.\n");
+        } else {
+            printf("[-] Failed to lock unveil configuration (code %d)\n", ret);
+        }
+        return;
+    }
+
+    if (argc < 3) {
+        printf("Usage: unveil <path> <permissions>  (e.g. unveil /bin rx)\n");
+        return;
+    }
+
+    int ret = seld_unveil(argv[1], argv[2]);
+    if (ret == 0) {
+        printf("[+] Seld-Unveil rule registered: '%s' -> [%s]\n", argv[1], argv[2]);
+    } else {
+        printf("[-] Failed to register unveil rule for '%s' (code %d)\n", argv[1], ret);
+    }
+}
+
 static void builtin_selftest(void) {
     printf("\n[Ring 3] ========================================================\n");
     printf("[Ring 3]   SELD OS USERSPACE RUNTIME & TEST SUITE (Ring 3)\n");
@@ -1352,6 +1407,16 @@ static void builtin_selftest(void) {
         opsec_ok = 0;
     }
 
+    // D. THL Keystroke Timing Jitter Check
+    seld_set_jitter(1);
+    if (seld_get_jitter() != 1) {
+        opsec_ok = 0;
+    }
+    seld_set_jitter(0);
+    if (seld_get_jitter() != 0) {
+        opsec_ok = 0;
+    }
+
     if (opsec_ok) {
         printf("[+] [TEST 8/8] PASSED: Zero-on-Free, RFC 7686 Guard, and Seld-Pledge verified.\n");
         passed_tests++;
@@ -1489,6 +1554,10 @@ int main(int argc, char* argv[]) {
             builtin_net(cmd_argc, cmd_argv);
         } else if (strcmp(cmd, "desync") == 0) {
             builtin_desync(cmd_argc, cmd_argv);
+        } else if (strcmp(cmd, "jitter") == 0) {
+            builtin_jitter(cmd_argc, cmd_argv);
+        } else if (strcmp(cmd, "unveil") == 0) {
+            builtin_unveil(cmd_argc, cmd_argv);
         } else if (strcmp(cmd, "selftest") == 0) {
             builtin_selftest();
         } else if (strcmp(cmd, "gpu") == 0 || strcmp(cmd, "cpu") == 0 || strcmp(cmd, "ram") == 0 || strcmp(cmd, "drv") == 0) {

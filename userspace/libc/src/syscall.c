@@ -716,3 +716,20 @@ void poweroff(void) {
 int seld_pledge(uint32_t flags) {
     return (int)seld_syscall(SYS_PLEDGE, (long)flags, 0, 0);
 }
+
+int seld_unveil(const char* path, const char* permissions) {
+    return (int)seld_syscall(SYS_UNVEIL, (long)path, (long)permissions, 0);
+}
+
+int unveil(const char* path, const char* permissions) {
+    return seld_unveil(path, permissions);
+}
+
+int seld_set_jitter(int enable) {
+    return (int)seld_syscall(SYS_OPSEC_SET_JITTER, (long)enable, 0, 0);
+}
+
+int seld_get_jitter(void) {
+    return (int)seld_syscall(SYS_OPSEC_GET_JITTER, 0, 0, 0);
+}
+

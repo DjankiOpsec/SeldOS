@@ -44,6 +44,21 @@ static uint64_t user_current_brk = 0;
 static uint32_t current_pledge_mask = 0xFFFFFFFF;
 static uint8_t  current_pledge_enforced = 0;
 
+/* Seld-Unveil Process Filesystem Sandboxing State (OpenBSD unveil(2)) */
+#define MAX_UNVEIL_RULES 16
+#define UNVEIL_PATH_MAX  SELDFS_MAX_FILENAME
+
+struct unveil_rule {
+    char    path[UNVEIL_PATH_MAX];
+    uint8_t perms;
+    uint8_t is_dir;
+};
+
+static struct unveil_rule current_unveil_rules[MAX_UNVEIL_RULES];
+static size_t current_unveil_count = 0;
+static uint8_t current_unveil_enforced = 0;
+static uint8_t current_unveil_locked = 0;
+
 /* User-mode file descriptor table (0=stdin, 1=stdout, 2=stderr, 3..31=SeldFS files) */
 #define MAX_USER_FDS 32
 struct user_fd_entry {
@@ -159,6 +174,193 @@ static int resolve_seldfs_path(const char* path, char* out_resolved) {
     return 0;
 }
 
+/* Seld-Unveil Path Canonicalization Helper */
+static void normalize_unveil_path(const char* in, char* out, size_t max_len, int* out_is_dir) {
+    if (!in || !out || max_len == 0) return;
+    if (out_is_dir) *out_is_dir = 0;
+
+    if (in[0] == '.' && in[1] == '/') {
+        in += 2;
+    }
+
+    size_t in_len = strlen(in);
+    size_t o = 0;
+
+    if (in[0] != '/') {
+        if (o < max_len - 1) out[o++] = '/';
+    }
+
+    for (size_t i = 0; i < in_len && o < max_len - 1; i++) {
+        out[o++] = in[i];
+    }
+    out[o] = '\0';
+
+    if (o > 1 && out[o - 1] == '/') {
+        out[o - 1] = '\0';
+        o--;
+        if (out_is_dir) *out_is_dir = 1;
+    }
+
+    if (strcmp(out, "/bin") == 0 || strcmp(out, "/") == 0) {
+        if (out_is_dir) *out_is_dir = 1;
+    }
+}
+
+/* Seld-Unveil Registration Handler (SYS_UNVEIL, vector 51) */
+static int sys_unveil_handler(const char* user_path, const char* user_perms) {
+    if (!user_path && !user_perms) {
+        current_unveil_locked = 1;
+        serial_puts("[+] OpSec: Seld-Unveil configuration LOCKED (irreversible)\n");
+        return 0;
+    }
+
+    if (current_unveil_locked) {
+        serial_puts("[-] OpSec Violation: Attempt to modify unveil rules after unveil(NULL, NULL) lock!\n");
+        return -37; // EPERM
+    }
+
+    if (!user_path || !user_perms) {
+        return -1;
+    }
+
+    if (!validate_user_buffer(user_path, 1, 0) || !validate_user_buffer(user_perms, 1, 0)) {
+        return -1;
+    }
+
+    uint8_t perms = 0;
+    for (size_t i = 0; i < 16; i++) {
+        if (!validate_user_buffer(user_perms + i, 1, 0)) break;
+        char c = user_perms[i];
+        if (c == '\0') break;
+        if (c == 'r') perms |= UNVEIL_READ;
+        else if (c == 'w') perms |= UNVEIL_WRITE;
+        else if (c == 'x') perms |= UNVEIL_EXEC;
+        else if (c == 'c') perms |= UNVEIL_CREATE;
+    }
+
+    if (perms == 0) {
+        return -1;
+    }
+
+    char k_user_path[UNVEIL_PATH_MAX];
+    size_t ulen = 0;
+    while (ulen < UNVEIL_PATH_MAX - 1) {
+        if (!validate_user_buffer(user_path + ulen, 1, 0)) break;
+        char c = user_path[ulen];
+        if (c == '\0') break;
+        k_user_path[ulen++] = c;
+    }
+    k_user_path[ulen] = '\0';
+    if (ulen == 0) return -1;
+
+    char canon[UNVEIL_PATH_MAX];
+    int is_dir = 0;
+    normalize_unveil_path(k_user_path, canon, sizeof(canon), &is_dir);
+
+    for (size_t i = 0; i < current_unveil_count; i++) {
+        if (strcmp(current_unveil_rules[i].path, canon) == 0) {
+            current_unveil_rules[i].perms = perms;
+            current_unveil_rules[i].is_dir = is_dir;
+            current_unveil_enforced = 1;
+            serial_puts("[+] OpSec: Updated unveil rule '");
+            serial_puts(canon);
+            serial_puts("' perms=0x");
+            serial_print_hex((uint64_t)perms);
+            serial_puts("\n");
+            return 0;
+        }
+    }
+
+    if (current_unveil_count >= MAX_UNVEIL_RULES) {
+        serial_puts("[-] OpSec: Maximum unveil rules exceeded!\n");
+        return -1;
+    }
+
+    strncpy(current_unveil_rules[current_unveil_count].path, canon, UNVEIL_PATH_MAX - 1);
+    current_unveil_rules[current_unveil_count].perms = perms;
+    current_unveil_rules[current_unveil_count].is_dir = is_dir;
+    current_unveil_count++;
+    current_unveil_enforced = 1;
+
+    serial_puts("[+] OpSec: Unveiled '");
+    serial_puts(canon);
+    serial_puts("' (perms=0x");
+    serial_print_hex((uint64_t)perms);
+    serial_puts(")\n");
+    return 0;
+}
+
+/* Seld-Unveil Verification Gatekeeper */
+static int check_unveil(const char* target_path, uint8_t req_perm) {
+    if (!current_unveil_enforced) {
+        return 1;
+    }
+    if (!target_path) return 0;
+
+    char canon_target[UNVEIL_PATH_MAX];
+    int target_is_dir = 0;
+    normalize_unveil_path(target_path, canon_target, sizeof(canon_target), &target_is_dir);
+
+    // Also prepare alternate path with /bin prefix if not already starting with /bin
+    char canon_bin[UNVEIL_PATH_MAX];
+    canon_bin[0] = '\0';
+    if (strncmp(canon_target, "/bin/", 5) != 0 && strcmp(canon_target, "/bin") != 0) {
+        canon_bin[0] = '/';
+        canon_bin[1] = 'b';
+        canon_bin[2] = 'i';
+        canon_bin[3] = 'n';
+        strncpy(canon_bin + 4, canon_target, sizeof(canon_bin) - 5);
+        canon_bin[sizeof(canon_bin) - 1] = '\0';
+    }
+
+    int best_idx = -1;
+    size_t best_len = 0;
+
+    for (size_t i = 0; i < current_unveil_count; i++) {
+        struct unveil_rule* r = &current_unveil_rules[i];
+        if (strcmp(r->path, canon_target) == 0 || (canon_bin[0] && strcmp(r->path, canon_bin) == 0)) {
+            size_t l = strlen(r->path);
+            if (l >= best_len) {
+                best_len = l;
+                best_idx = (int)i;
+            }
+        } else if (strcmp(r->path, "/") == 0) {
+            if (1 > best_len) {
+                best_len = 1;
+                best_idx = (int)i;
+            }
+        } else if (r->is_dir) {
+            size_t rlen = strlen(r->path);
+            if ((strncmp(canon_target, r->path, rlen) == 0 && canon_target[rlen] == '/') ||
+                (canon_bin[0] && strncmp(canon_bin, r->path, rlen) == 0 && canon_bin[rlen] == '/')) {
+                if (rlen > best_len) {
+                    best_len = rlen;
+                    best_idx = (int)i;
+                }
+            }
+        }
+    }
+
+    if (best_idx >= 0) {
+        struct unveil_rule* r = &current_unveil_rules[best_idx];
+        if ((r->perms & req_perm) == req_perm) {
+            return 1;
+        } else {
+            serial_puts("[-] OpSec Unveil Block: Access denied (missing perms 0x");
+            serial_print_hex((uint64_t)req_perm);
+            serial_puts(") for '");
+            serial_puts(target_path);
+            serial_puts("'\n");
+            return 0;
+        }
+    }
+
+    serial_puts("[-] OpSec Unveil Block: Path not unveiled: '");
+    serial_puts(target_path);
+    serial_puts("'\n");
+    return 0;
+}
+
 #define MAX_ARG_COUNT 16
 #define MAX_ARG_LEN   128
 
@@ -168,6 +370,14 @@ int elf_load_and_run(const char* path, int argc, char* argv[]) {
 
     char resolved[SELDFS_MAX_FILENAME];
     resolve_seldfs_path(path, resolved);
+
+    // 0. Binary Gatekeeper: Unveil Execution check
+    if (!check_unveil(resolved, UNVEIL_EXEC)) {
+        serial_puts("[-] OpSec Unveil Gatekeeper: Execution denied by unveil contract for: '");
+        serial_puts(resolved);
+        serial_puts("'\n");
+        return -1;
+    }
 
     // 1. Binary Gatekeeper: Authorization check
     if (!seldfs_is_authorized_file(resolved)) {
@@ -278,6 +488,18 @@ int elf_load_and_run(const char* path, int argc, char* argv[]) {
     current_pledge_mask = 0xFFFFFFFF;
     current_pledge_enforced = 0;
 
+    struct unveil_rule saved_unveil_rules[MAX_UNVEIL_RULES];
+    memcpy(saved_unveil_rules, current_unveil_rules, sizeof(current_unveil_rules));
+    size_t saved_unveil_count = current_unveil_count;
+    uint8_t saved_unveil_enforced = current_unveil_enforced;
+    uint8_t saved_unveil_locked = current_unveil_locked;
+    if (!saved_unveil_enforced) {
+        memset(current_unveil_rules, 0, sizeof(current_unveil_rules));
+        current_unveil_count = 0;
+        current_unveil_enforced = 0;
+        current_unveil_locked = 0;
+    }
+
     uint64_t parent_cr3;
     __asm__ volatile ("mov %%cr3, %0" : "=r"(parent_cr3));
 
@@ -310,6 +532,10 @@ int elf_load_and_run(const char* path, int argc, char* argv[]) {
     user_current_brk = saved_brk;
     current_pledge_mask = saved_pledge_mask;
     current_pledge_enforced = saved_pledge_enforced;
+    memcpy(current_unveil_rules, saved_unveil_rules, sizeof(current_unveil_rules));
+    current_unveil_count = saved_unveil_count;
+    current_unveil_enforced = saved_unveil_enforced;
+    current_unveil_locked = saved_unveil_locked;
 
     if (parent_cr3 && parent_cr3 != vmm_get_kernel_pml4()) {
         vmm_switch_pml4(parent_cr3);
@@ -404,6 +630,9 @@ static int check_pledge(uint64_t sys_num, uint64_t a1) {
         case SYS_MEMINFO:
         case SYS_GETTASKS:
         case SYS_PLEDGE:
+        case SYS_UNVEIL:
+        case SYS_OPSEC_SET_JITTER:
+        case SYS_OPSEC_GET_JITTER:
         case SYS_SELD:
             req = PLEDGE_STDIO;
             break;
@@ -593,6 +822,17 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
             char filename[SELDFS_MAX_FILENAME];
             resolve_seldfs_path(path, filename);
 
+            uint8_t req_perm = UNVEIL_READ;
+            if (flags & (0x0001 /* O_WRONLY */ | 0x0002 /* O_RDWR */)) {
+                req_perm |= UNVEIL_WRITE;
+            }
+            if (flags & 0x0040 /* O_CREAT */) {
+                req_perm |= UNVEIL_CREATE;
+            }
+            if (!check_unveil(filename, req_perm)) {
+                return (uint64_t)-1;
+            }
+
             int target_fd = -1;
             for (int i = 3; i < MAX_USER_FDS; i++) {
                 if (!user_fds[i].used) {
@@ -647,6 +887,10 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
 
             char filename[SELDFS_MAX_FILENAME];
             resolve_seldfs_path(path, filename);
+
+            if (!check_unveil(filename, UNVEIL_READ)) {
+                return (uint64_t)-1;
+            }
 
             struct seldfs_inode inode;
             if (seldfs_get_file_info(filename, &inode) != 0) {
@@ -830,6 +1074,7 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
             if (!validate_user_buffer(path, 1, 0)) return (uint64_t)-1;
             char resolved[SELDFS_MAX_FILENAME];
             resolve_seldfs_path(path, resolved);
+            if (!check_unveil(resolved, UNVEIL_CREATE)) return (uint64_t)-1;
             return (uint64_t)seldfs_delete_file(resolved);
         }
 
@@ -890,6 +1135,10 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
             char resolved[SELDFS_MAX_FILENAME];
             resolve_seldfs_path(path, resolved);
 
+            if (!check_unveil(resolved, UNVEIL_READ)) {
+                return (uint64_t)-1;
+            }
+
             size_t out_len = 0;
             if (seldfs_read_file(resolved, buf, max_len, &out_len) != 0) {
                 return (uint64_t)-1;
@@ -907,6 +1156,10 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
 
             char resolved[SELDFS_MAX_FILENAME];
             resolve_seldfs_path(path, resolved);
+
+            if (!check_unveil(resolved, UNVEIL_WRITE)) {
+                return (uint64_t)-1;
+            }
 
             if (seldfs_write_file(resolved, buf, len) != 0) {
                 return (uint64_t)-1;
@@ -1321,6 +1574,23 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
             serial_print_hex((uint64_t)current_pledge_mask);
             serial_puts("\n");
             return 0;
+        }
+
+        case SYS_UNVEIL: {
+            const char* path = (const char*)a1;
+            const char* perms = (const char*)a2;
+            return (uint64_t)sys_unveil_handler(path, perms);
+        }
+
+        case SYS_OPSEC_SET_JITTER: {
+            kbd_set_jitter((int)a1);
+            serial_puts("[+] OpSec: Keyboard THL Timing Jitter ");
+            serial_puts((int)a1 ? "ENABLED (50ms Quantized PIT Batching)\n" : "DISABLED (Direct Low-Latency)\n");
+            return 0;
+        }
+
+        case SYS_OPSEC_GET_JITTER: {
+            return (uint64_t)kbd_get_jitter();
         }
 
         case SYS_EXIT: {

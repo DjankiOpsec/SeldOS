@@ -7,9 +7,11 @@
  */
 
 #include "kbd.h"
+#include "rand.h"
 
 #define KBD_BUFFER_SIZE 256
 #define KBD_EVENT_QUEUE_SIZE 128
+#define KBD_STAGE_SIZE 256
 
 static char kbd_buffer[KBD_BUFFER_SIZE];
 static volatile size_t buf_head = 0;
@@ -18,6 +20,19 @@ static volatile size_t buf_tail = 0;
 static struct kbd_event kbd_event_queue[KBD_EVENT_QUEUE_SIZE];
 static volatile size_t ev_head = 0;
 static volatile size_t ev_tail = 0;
+
+/* THL Keystroke Timing Obfuscation & Jitter Queues */
+static char kbd_stage_buf[KBD_STAGE_SIZE];
+static volatile size_t stage_head = 0;
+static volatile size_t stage_tail = 0;
+
+static struct kbd_event kbd_stage_events[KBD_STAGE_SIZE];
+static volatile size_t stage_ev_head = 0;
+static volatile size_t stage_ev_tail = 0;
+
+static volatile int s_kbd_jitter_enabled = 0;
+static volatile uint32_t s_jitter_ticks = 0;
+static volatile uint32_t s_jitter_target = 5; /* 50ms at 100 Hz PIT */
 
 static int shift_pressed = 0;
 static int caps_lock = 0;
@@ -42,13 +57,71 @@ static const char scancode_ascii_upper[128] = {
     0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
 };
 
+static void kbd_flush_staged(void) {
+    /* 1. Flush raw events */
+    while (stage_ev_tail != stage_ev_head) {
+        size_t next_ev = (ev_head + 1) % KBD_EVENT_QUEUE_SIZE;
+        if (next_ev != ev_tail) {
+            kbd_event_queue[ev_head] = kbd_stage_events[stage_ev_tail];
+            ev_head = next_ev;
+        }
+        stage_ev_tail = (stage_ev_tail + 1) % KBD_STAGE_SIZE;
+    }
+
+    /* 2. Flush translated ASCII buffer */
+    while (stage_tail != stage_head) {
+        size_t next = (buf_head + 1) % KBD_BUFFER_SIZE;
+        if (next != buf_tail) {
+            kbd_buffer[buf_head] = kbd_stage_buf[stage_tail];
+            buf_head = next;
+        }
+        stage_tail = (stage_tail + 1) % KBD_STAGE_SIZE;
+    }
+}
+
 void kbd_init(void) {
     buf_head = 0;
     buf_tail = 0;
     ev_head = 0;
     ev_tail = 0;
+    stage_head = 0;
+    stage_tail = 0;
+    stage_ev_head = 0;
+    stage_ev_tail = 0;
+    s_kbd_jitter_enabled = 0;
+    s_jitter_ticks = 0;
+    s_jitter_target = 5;
     shift_pressed = 0;
     caps_lock = 0;
+}
+
+void kbd_timer_tick(void) {
+    if (!s_kbd_jitter_enabled) {
+        if (stage_head != stage_tail || stage_ev_head != stage_ev_tail) {
+            kbd_flush_staged();
+        }
+        return;
+    }
+
+    s_jitter_ticks++;
+    if (s_jitter_ticks >= s_jitter_target) {
+        s_jitter_ticks = 0;
+        /* Dynamic micro-jitter: 4..6 ticks (40..60ms) using CSPRNG */
+        s_jitter_target = 4 + (uint32_t)(rng_get_u64() % 3);
+        kbd_flush_staged();
+    }
+}
+
+void kbd_set_jitter(int enable) {
+    s_kbd_jitter_enabled = enable ? 1 : 0;
+    s_jitter_ticks = 0;
+    if (!s_kbd_jitter_enabled) {
+        kbd_flush_staged();
+    }
+}
+
+int kbd_get_jitter(void) {
+    return s_kbd_jitter_enabled;
 }
 
 void kbd_handle_scancode(uint8_t scancode) {
@@ -60,11 +133,20 @@ void kbd_handle_scancode(uint8_t scancode) {
     uint8_t pressed = (scancode & 0x80) ? 0 : 1;
     uint8_t code = scancode & 0x7F;
 
-    size_t next_ev = (ev_head + 1) % KBD_EVENT_QUEUE_SIZE;
-    if (next_ev != ev_tail) {
-        kbd_event_queue[ev_head].scancode = code;
-        kbd_event_queue[ev_head].pressed = pressed;
-        ev_head = next_ev;
+    if (s_kbd_jitter_enabled) {
+        size_t next_ev = (stage_ev_head + 1) % KBD_STAGE_SIZE;
+        if (next_ev != stage_ev_tail) {
+            kbd_stage_events[stage_ev_head].scancode = code;
+            kbd_stage_events[stage_ev_head].pressed = pressed;
+            stage_ev_head = next_ev;
+        }
+    } else {
+        size_t next_ev = (ev_head + 1) % KBD_EVENT_QUEUE_SIZE;
+        if (next_ev != ev_tail) {
+            kbd_event_queue[ev_head].scancode = code;
+            kbd_event_queue[ev_head].pressed = pressed;
+            ev_head = next_ev;
+        }
     }
 
     // 2. ASCII translation for console/shell
@@ -95,10 +177,18 @@ void kbd_handle_scancode(uint8_t scancode) {
     }
 
     if (c != 0) {
-        size_t next = (buf_head + 1) % KBD_BUFFER_SIZE;
-        if (next != buf_tail) {
-            kbd_buffer[buf_head] = c;
-            buf_head = next;
+        if (s_kbd_jitter_enabled) {
+            size_t next = (stage_head + 1) % KBD_STAGE_SIZE;
+            if (next != stage_tail) {
+                kbd_stage_buf[stage_head] = c;
+                stage_head = next;
+            }
+        } else {
+            size_t next = (buf_head + 1) % KBD_BUFFER_SIZE;
+            if (next != buf_tail) {
+                kbd_buffer[buf_head] = c;
+                buf_head = next;
+            }
         }
     }
 }

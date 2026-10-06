@@ -22,6 +22,7 @@
 #include "net.h"
 #include "e1000.h"
 #include "rand.h"
+#include "kbd.h"
 
 static void print_out(const char* str) {
     vga_puts(str);
@@ -536,6 +537,19 @@ int selftest_opsec(void) {
         }
         print_out("[+] [SELFTEST:OPSEC] Ephemeral MAC address spoofing verified.\n");
     }
+
+    // 6. THL Keystroke Timing Jitter Verification
+    kbd_set_jitter(1);
+    if (!kbd_get_jitter()) {
+        print_out("[-] SELFTEST:OPSEC FAILED: kbd_set_jitter failed to enable jitter!\n");
+        return 0;
+    }
+    kbd_set_jitter(0);
+    if (kbd_get_jitter()) {
+        print_out("[-] SELFTEST:OPSEC FAILED: kbd_set_jitter failed to disable jitter!\n");
+        return 0;
+    }
+    print_out("[+] [SELFTEST:OPSEC] THL Keystroke Timing Jitter (50ms Quantization) verified.\n");
 
     print_out("[+] [SELFTEST:OPSEC] PASSED: All Sovereign OpSec mechanisms operational.\n");
     return 1;

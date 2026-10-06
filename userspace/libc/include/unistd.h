@@ -64,5 +64,6 @@ int      writefile(const char* path, const void* buf, size_t len);
 off_t    lseek(int fd, off_t offset, int whence);
 void     reboot(void);
 void     poweroff(void);
+int      unveil(const char* path, const char* permissions);
 
 #endif /* _UNISTD_H_ */

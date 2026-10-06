@@ -59,6 +59,15 @@
 #define SYS_PLEDGE          48
 #define SYS_NET_SET_DESYNC  49
 #define SYS_NET_GET_DESYNC  50
+#define SYS_UNVEIL          51
+#define SYS_OPSEC_SET_JITTER 52
+#define SYS_OPSEC_GET_JITTER 53
+
+/* Seld-Unveil Permission Flags (OpenBSD-style Ring 3 Filesystem Sandboxing) */
+#define UNVEIL_READ         0x01  /* Read file: open(O_RDONLY), readfile, stat */
+#define UNVEIL_WRITE        0x02  /* Write file: open(O_WRONLY/O_RDWR), writefile */
+#define UNVEIL_EXEC         0x04  /* Execute binary: spawn, exec */
+#define UNVEIL_CREATE       0x08  /* Create/delete file: open(O_CREAT), unlink */
 
 /* Seld-Pledge Capability Flags (OpenBSD-style Ring 3 Syscall Sandboxing) */
 #define PLEDGE_STDIO        (1 << 0)  /* Basic stdio, heap, exit, yield, uptime, screen, input */
@@ -248,5 +257,8 @@ int      seld_net_lease_release(void);
 int      seld_net_set_desync(int mode);
 int      seld_net_get_desync(void);
 int      seld_pledge(uint32_t flags);
+int      seld_unveil(const char* path, const char* permissions);
+int      seld_set_jitter(int enable);
+int      seld_get_jitter(void);
 
 #endif /* _SELD_H_ */
