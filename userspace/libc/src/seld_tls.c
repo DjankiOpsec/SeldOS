@@ -94,7 +94,7 @@ static void extract_san_dns(const uint8_t* der, size_t der_len, char* out_str, s
             while (p + 2 < limit) {
                 if (der[p] == 0x82) { // dNSName context tag
                     size_t dlen = der[p + 1];
-                    if (dlen > 0 && dlen <= 64 && p + 2 + dlen <= limit) {
+                    if (dlen > 0 && dlen <= 128 && p + 2 + dlen <= limit) {
                         int valid = 1;
                         for (size_t j = 0; j < dlen; j++) {
                             uint8_t c = der[p + 2 + j];
@@ -186,7 +186,7 @@ static void parse_server_certificate(struct seld_tls_conn* conn, const uint8_t* 
         while (*sp) {
             while (*sp == ' ' || *sp == ',') sp++;
             if (!*sp) break;
-            char token[64];
+            char token[128];
             size_t ti = 0;
             while (*sp && *sp != ',' && *sp != ' ' && ti < sizeof(token) - 1) {
                 token[ti++] = *sp++;
@@ -327,7 +327,7 @@ int seld_tls_handshake(struct seld_tls_conn* conn, int tcp_sock, const char* sni
 
     // 3. Receive ServerHello record
     uint8_t hdr[5];
-    int rlen = read_tls_record(tcp_sock, hdr, conn->rx_record_buf, sizeof(conn->rx_record_buf), 5000);
+    int rlen = read_tls_record(tcp_sock, hdr, conn->rx_record_buf, sizeof(conn->rx_record_buf), 15000);
     if (rlen <= 0 || hdr[0] != 0x16) return -3;
 
     // Update transcript with ServerHello Handshake message
@@ -402,7 +402,7 @@ int seld_tls_handshake(struct seld_tls_conn* conn, int tcp_sock, const char* sni
     size_t reasm_len = 0;
 
     while (!server_finished_done) {
-        rlen = read_tls_record(tcp_sock, hdr, conn->rx_record_buf, sizeof(conn->rx_record_buf), 8000);
+        rlen = read_tls_record(tcp_sock, hdr, conn->rx_record_buf, sizeof(conn->rx_record_buf), 15000);
         if (rlen <= 0) return -7;
         if (hdr[0] == 0x14) continue; // Ignore ChangeCipherSpec
         if (hdr[0] != 0x17) return -8;

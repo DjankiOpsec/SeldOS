@@ -93,7 +93,7 @@ static const char* s_home_html =
     "<li><a href=\"https://duckduckgo.com/lite/\">DuckDuckGo Lite (HTTPS)</a> - Sovereign Search Portal</li>"
     "<li><a href=\"https://en.wikipedia.org/wiki/TempleOS\">Wikipedia: TempleOS (HTTPS)</a> - Sovereign OS Article</li>"
     "<li><a href=\"https://en.wikipedia.org/wiki/Terry_A._Davis\">Wikipedia: Terry A. Davis (HTTPS)</a> - Legendary Engineer</li>"
-    "<li><a href=\"onion://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/html/?q=linux\">DuckDuckGo .onion Search</a> - Sovereign Onion Search</li>"
+    "<li><a href=\"https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/html/?q=linux\">DuckDuckGo .onion Search</a> - Sovereign Onion Search</li>"
     "<li><a href=\"http://example.com/\">http://example.com/</a> - Clearnet Domain</li>"
     "<li><a href=\"http://neverssl.com/\">http://neverssl.com/</a> - Clearnet HTTP Portal</li>"
     "<li><a href=\"http://info.cern.ch/hypertext/WWW/TheProject.html\">http://info.cern.ch/</a> - Original Web</li>"
@@ -373,7 +373,7 @@ static void load_url(const char* url) {
         strncmp(clean_url, "https://", 8) != 0 &&
         strncmp(clean_url, "onion://", 8) != 0) {
         if (strstr(clean_url, ".onion") != NULL) {
-            snprintf(target_url, sizeof(target_url), "onion://%s", clean_url);
+            snprintf(target_url, sizeof(target_url), "https://%s", clean_url);
         } else if (strchr(clean_url, '.') == NULL) {
             // Unqualified word -> Route through DuckDuckGo .onion sovereign search engine!
             char query_enc[HTTP_MAX_URL_LEN];
@@ -383,7 +383,7 @@ static void load_url(const char* url) {
                 else query_enc[qi++] = *p;
             }
             query_enc[qi] = '\0';
-            snprintf(target_url, sizeof(target_url), "onion://" DDG_ONION_HOST "/html/?q=%s", query_enc);
+            snprintf(target_url, sizeof(target_url), "https://" DDG_ONION_HOST "/html/?q=%s", query_enc);
         } else {
             // Sovereign HTTPS-First default
             snprintf(target_url, sizeof(target_url), "https://%s", clean_url);
@@ -511,7 +511,11 @@ static void draw_cert_modal(void) {
     if (s_used_tor == 2) {
         draw_text_5x7(mx + 110, ty, "TLSv1.3 (RFC 8446) / AES-128-GCM-SHA256 (Native SeldTLS)", COL_GREEN_SECURE);
     } else if (s_used_tor == 1) {
-        draw_text_5x7(mx + 110, ty, "Tor Onion Service (RFC 1928 SOCKS5 Remote Resolution)", COL_PURPLE_LIGHT);
+        if (s_last_cert.valid) {
+            draw_text_5x7(mx + 110, ty, "Tor Onion + SeldTLS 1.3 (RFC 8446 / SOCKS5 E2E)", COL_GREEN_SECURE);
+        } else {
+            draw_text_5x7(mx + 110, ty, "Tor Onion Service (RFC 1928 SOCKS5 Remote Resolution)", COL_PURPLE_LIGHT);
+        }
     } else {
         draw_text_5x7(mx + 110, ty, "Clearnet HTTP (Port 80 Plaintext)", COL_GOLD_ACCENT);
     }
@@ -600,8 +604,13 @@ static void render_page(void) {
         draw_rect(410, 4, 210, 18, COL_GREEN_SECURE, 0xFF052E16);
         draw_text_5x7(418, 9, "[* TLS 1.3: Cert Valid | 'C' *]", COL_GREEN_SECURE);
     } else if (s_used_tor == 1) {
-        draw_rect(420, 4, 180, 18, COL_PURPLE_LIGHT, 0xFF2A103D);
-        draw_text_5x7(430, 9, "[ Tor Onion | SOCKS5 E2E ]", COL_PURPLE_LIGHT);
+        if (s_last_cert.valid) {
+            draw_rect(400, 4, 220, 18, COL_GREEN_SECURE, 0xFF052E16);
+            draw_text_5x7(408, 9, "[* Tor E2E + TLS 1.3 | 'C' *]", COL_GREEN_SECURE);
+        } else {
+            draw_rect(420, 4, 180, 18, COL_PURPLE_LIGHT, 0xFF2A103D);
+            draw_text_5x7(430, 9, "[ Tor Onion | SOCKS5 E2E ]", COL_PURPLE_LIGHT);
+        }
     } else if (s_used_tor == 0) {
         draw_rect(420, 4, 180, 18, COL_GOLD_ACCENT, 0xFF3D2605);
         draw_text_5x7(430, 9, "[! HTTP Clearnet / Plaintext !]", COL_GOLD_ACCENT);
@@ -634,21 +643,21 @@ static void render_page(void) {
 
     // URL Address Bar
     uint32_t url_border = s_url_editing ? COL_URL_ACTIVE : COL_URL_BORDER;
-    draw_rect(72, 29, 416, 20, url_border, COL_URL_BG);
-    draw_text_5x7(78, 35, s_url_editing ? s_edit_url : s_current_url, COL_TEXT_LIGHT);
+    draw_rect(72, 29, 440, 20, url_border, COL_URL_BG);
+    draw_text_5x7(76, 35, s_url_editing ? s_edit_url : s_current_url, COL_TEXT_LIGHT);
     if (s_url_editing) {
-        int cx = 78 + (int)strlen(s_edit_url) * 6;
-        if (cx < 480) {
+        int cx = 76 + (int)strlen(s_edit_url) * 6;
+        if (cx < 508) {
             fill_rect(cx, 33, 2, 12, COL_GOLD_ACCENT);
         }
     }
 
     // [Go] / [New Tor Identity] Button
-    draw_rect(496, 29, 176, 20, COL_PURPLE_TOR, 0xFF3B1854);
+    draw_rect(518, 29, 154, 20, COL_PURPLE_TOR, 0xFF3B1854);
     if (s_url_editing) {
-        draw_text_5x7(520, 35, "[ Enter: Open URL ]", COL_GOLD_ACCENT);
+        draw_text_5x7(525, 35, "[ Enter: Open URL ]", COL_GOLD_ACCENT);
     } else {
-        draw_text_5x7(510, 35, "[ New Tor Identity ]", COL_GOLD_ACCENT);
+        draw_text_5x7(524, 35, "[ New Tor Identity ]", COL_GOLD_ACCENT);
     }
 
     // 4. Circuit Visualizer Bar
@@ -1072,7 +1081,7 @@ int main(int argc, char* argv[]) {
                     load_url("http://info.cern.ch/hypertext/WWW/TheProject.html");
                     needs_page_render = 1;
                 } else if (ch == '5' || ch == 'd' || ch == 'D' || ch == 's' || ch == 'S') {
-                    load_url("onion://" DDG_ONION_HOST "/html/?q=linux");
+                    load_url("https://" DDG_ONION_HOST "/html/?q=linux");
                     needs_page_render = 1;
                 } else if (ch == '6') {
                     load_url("https://duckduckgo.com/lite/");

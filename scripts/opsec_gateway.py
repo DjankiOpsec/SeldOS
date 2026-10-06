@@ -341,8 +341,13 @@ class OpSecGatewayHandler(BaseHTTPRequestHandler):
             self.serve_status_portal()
             return
 
-        # Tor Browser package: Strictly fetch from remote GitHub repository over the Internet
+        # Tor Browser package: Serve local build if present, otherwise fetch from GitHub
         if clean_path in ("tor", "bin/tor"):
+            local_tor = os.path.join(REPO_DIR, "tor")
+            if os.path.exists(local_tor):
+                log(f"SERVE LOCAL PACKAGE 'tor': {local_tor}")
+                self.serve_file(local_tor, "application/octet-stream")
+                return
             github_tor_url = "https://raw.githubusercontent.com/DjankiOpsec/SeldOS/main/build/bin/tor"
             log(f"FETCH PACKAGE 'tor' from official GitHub repository: {github_tor_url}")
             self.proxy_external_url(github_tor_url, is_head)

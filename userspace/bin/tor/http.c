@@ -148,7 +148,7 @@ int http_fetch(const char* url, uint32_t proxy_ip, uint16_t proxy_port, struct h
 
     while (redirects++ < 3) {
         char host[128];
-        char path[128];
+        char path[256];
         uint16_t port = 80;
 
         if (parse_url(cur_url, host, sizeof(host), &port, path, sizeof(path)) != 0) {
@@ -169,6 +169,23 @@ int http_fetch(const char* url, uint32_t proxy_ip, uint16_t proxy_port, struct h
                 sock = socks5_connect(proxy_ip, proxy_port, host, port);
                 if (sock >= 0) {
                     used_tor = 1;
+                    if (is_https) {
+                        tls = (struct seld_tls_conn*)malloc(sizeof(struct seld_tls_conn));
+                        if (!tls) {
+                            seld_tcp_close(sock);
+                            return -6;
+                        }
+
+                        int hs = seld_tls_handshake(tls, sock, host);
+                        if (hs != 0) {
+                            seld_tls_close(tls);
+                            free(tls);
+                            tls = NULL;
+                            return -8; // SeldTLS 1.3 handshake failed
+                        }
+
+                        seld_tls_get_cert(tls, &resp->cert);
+                    }
                 } else {
                     return -14; // Onion service unreachable / Tor daemon offline
                 }
@@ -297,10 +314,12 @@ int http_fetch(const char* url, uint32_t proxy_ip, uint16_t proxy_port, struct h
 
         size_t raw_len = 0;
         if (is_https && tls) {
+            uint32_t to_ms = used_tor ? 15000 : 8000;
             while (raw_len + 1 < buf_cap) {
-                int n = seld_tls_read(tls, (uint8_t*)raw_buf + raw_len, buf_cap - raw_len - 1, 8000);
+                int n = seld_tls_read(tls, (uint8_t*)raw_buf + raw_len, buf_cap - raw_len - 1, to_ms);
                 if (n > 0) {
                     raw_len += (size_t)n;
+                    to_ms = 4000;
                 } else if (n == 0) {
                     break; // EOF or TLS close_notify
                 } else {
@@ -310,6 +329,7 @@ int http_fetch(const char* url, uint32_t proxy_ip, uint16_t proxy_port, struct h
             seld_tls_close(tls);
             free(tls);
             tls = NULL;
+            sock = -1;
         } else {
             uint32_t first_timeout = used_tor ? 15000 : 5000;
             while (raw_len + 1 < buf_cap) {
@@ -356,13 +376,17 @@ int http_fetch(const char* url, uint32_t proxy_ip, uint16_t proxy_port, struct h
             if (!loc) loc = strstr(raw_buf, "location: ");
             if (loc) {
                 loc += 10;
+                while (*loc == ' ' || *loc == '\t') loc++;
                 char* loc_end = strstr(loc, "\r\n");
                 if (!loc_end) loc_end = strchr(loc, '\n');
                 if (loc_end) {
                     size_t loc_len = (size_t)(loc_end - loc);
+                    while (loc_len > 0 && (loc[loc_len - 1] == '\r' || loc[loc_len - 1] == ' ' || loc[loc_len - 1] == '\t')) {
+                        loc_len--;
+                    }
                     if (loc[0] == '/') {
                         snprintf(cur_url, sizeof(cur_url), "http%s://%s%.*s",
-                                 (port == 443 || used_tor == 2) ? "s" : "",
+                                 (port == 443 || used_tor == 2 || (is_https && used_tor == 1)) ? "s" : "",
                                  host, (int)loc_len, loc);
                     } else if (loc_len < sizeof(cur_url)) {
                         memcpy(cur_url, loc, loc_len);

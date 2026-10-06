@@ -13,10 +13,10 @@
 
 struct seld_tls_cert {
     int      valid;                  /* 1 if server certificate parsed */
-    char     subject_cn[64];         /* Subject Common Name (e.g. example.com) */
-    char     issuer_cn[64];          /* Issuer Common Name */
-    char     issuer_org[64];         /* Issuer Organization (e.g. Let's Encrypt / DigiCert) */
-    char     san[128];               /* Subject Alternative Names */
+    char     subject_cn[128];        /* Subject Common Name (e.g. example.com or .onion) */
+    char     issuer_cn[128];         /* Issuer Common Name */
+    char     issuer_org[128];        /* Issuer Organization (e.g. Let's Encrypt / DigiCert) */
+    char     san[256];               /* Subject Alternative Names */
     uint8_t  sha256[32];             /* SHA-256 fingerprint of DER certificate */
     char     sha256_hex[65];         /* SHA-256 hex string */
     int      domain_matched;         /* 1 if requested SNI matches Subject CN or SAN */
@@ -40,7 +40,7 @@ struct seld_tls_conn {
 
     uint8_t tx_buf[16384 + 256];
 
-    char sni_host[64];
+    char sni_host[128];
     struct seld_tls_cert peer_cert;
 };
 
