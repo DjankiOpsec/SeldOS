@@ -15,33 +15,39 @@ import time
 import threading
 from pathlib import Path
 
-MIN_FREQ = 215.0
-MAX_FREQ = 350.0
+MIN_FREQ = 290.0
+MAX_FREQ = 680.0
 SAMPLE_RATE = 44100
 
-# Solemn Requiem Minor Scale [220, 350] Hz:
-# 0: A3 (220.0 Hz) - Heavy dark root ground
-# 1: C4 (261.6 Hz) - Pure poignant minor third (eradicates 'весело')
-# 2: D4 (293.7 Hz) - Solemn subdominant
-# 3: E4 (329.6 Hz) - Resonant fifth
-# 4: F4 (349.2 Hz) - The weeping minor sixth (tragic bittersweet beauty)
-SCALE = [220.0, 261.6, 293.7, 329.6, 349.2]
+# Sacred Requiem Dorian/Aeolian Scale [294, 659] Hz (8 degrees):
+# 0: D4 (293.7 Hz) - Solemn foundation, noble weight ("тяжесть")
+# 1: E4 (329.6 Hz) - Solemn second
+# 2: F4 (349.2 Hz) - Minor third / poignant sorrow ("грусть")
+# 3: A4 (440.0 Hz) - Sacred resonant fifth / axis of purity
+# 4: Bb4 (466.2 Hz) - Weeping minor sixth / tears of sorrow
+# 5: C5 (523.3 Hz) - Minor seventh / yearning light
+# 6: D5 (587.3 Hz) - Celestial upper tonic / luminous paradise ("рай")
+# 7: E5 (659.3 Hz) - Angelic high ninth / ethereal crystalline peak
+SCALE = [293.7, 329.6, 349.2, 440.0, 466.2, 523.3, 587.3, 659.3]
 
-# Melodic voice leading transition matrix (classical Gregorian motion, guarantees deg != prev_deg)
+# Melodic voice leading transition matrix (classical sacred chant motion)
 TRANSITIONS = [
-    [1, 2, 3, 1], # From 0 (A3): rise to poignant 3rd (1), 4th (2), or 5th (3)
-    [0, 2, 3, 0], # From 1 (C4): fall to dark root (0), or step to 2, 3
-    [1, 3, 4, 0], # From 2 (D4): step to 1, 3, weep at 6th (4), or fall to root
-    [2, 4, 1, 0], # From 3 (E4): step to 2, weep at 6th (4), or drop to 1, 0
-    [3, 2, 1, 3]  # From 4 (F4): sorrowful resolution downwards to 3, 2, 1
+    [2, 3, 5, 6],  # From 0 (D4): F4, A4, C5, D5 (octave leap)
+    [0, 2, 3, 5],  # From 1 (E4): D4, F4, A4, C5
+    [1, 3, 4, 6],  # From 2 (F4): E4, A4, Bb4, D5 (celestial leap)
+    [2, 4, 6, 7],  # From 3 (A4): F4, Bb4, D5, E5 (angelic peak)
+    [2, 3, 5, 6],  # From 4 (Bb4): F4, A4, C5, D5
+    [3, 4, 6, 7],  # From 5 (C5): A4, Bb4, D5, E5
+    [2, 3, 5, 7],  # From 6 (D5): F4, A4, C5, E5
+    [3, 5, 6, 2]   # From 7 (E5): A4, C5, D5, F4
 ]
 
-PACE_SEC = 0.33  # Calm, solemn, steady pace (~3.0 words/sec)
+PACE_SEC = 0.16  # Rapid, seamless continuous chant (~6.25 words/sec)
 
 def play_oracle(words: list, seed: int = 12345):
     events = []
     rng = seed
-    prev_deg = seed % len(SCALE)
+    history = [-1, -1, -1, -1]
 
     for w in words:
         whash = 5381
@@ -49,21 +55,34 @@ def play_oracle(words: list, seed: int = 12345):
             whash = ((whash * 33) + ord(c)) & 0xFFFFFFFF
         rng = (rng * 6364136223846793005 + 1442695040888963407 + whash) & 0xFFFFFFFFFFFFFFFF
 
-        dur = PACE_SEC
+        choice = (rng >> 24) % 4
+        prev = history[0] if history[0] >= 0 else 3
+
         if any(c in w for c in '.!?'):
-            deg = 0  # Resolve to heavy dark root (220 Hz)
-            dur = PACE_SEC * 1.15
+            # Musical cadence resolving to upper tonic (6), sacred fifth (3), or ground (0)
+            cands = [6, 3, 5, 0] if prev >= 4 else [3, 6, 2, 0]
+            deg = cands[(rng >> 16) % len(cands)]
         elif any(c in w for c in ',;:'):
-            deg = 3 if prev_deg == 1 else 1  # Melancholic suspension on minor 3rd or 5th
-            dur = PACE_SEC * 1.05
+            # Melancholic suspension on poignant minor intervals
+            cands = [4, 5, 2, 7]
+            deg = cands[(rng >> 16) % len(cands)]
         else:
-            choice = (rng >> 24) % 4
-            deg = TRANSITIONS[prev_deg][choice]
+            deg = TRANSITIONS[prev][choice]
 
-        if deg == prev_deg:
-            deg = 1 if deg == 0 else 0
-        prev_deg = deg
+        # Invariants: strictly no consecutive duplicates, no 2-note alternating trills (A-B-A-B)
+        attempts = 0
+        while (deg == history[0] or deg == history[1] or (deg == history[2] and ((rng >> 8) & 1))) and attempts < 8:
+            deg = (deg + 1) % len(SCALE)
+            attempts += 1
+        if deg == history[0] or deg == history[1]:
+            deg = (deg + 2) % len(SCALE)
 
+        history[3] = history[2]
+        history[2] = history[1]
+        history[1] = history[0]
+        history[0] = deg
+
+        dur = PACE_SEC
         events.append({
             'word': w,
             'freq': SCALE[deg],
@@ -120,7 +139,7 @@ def play_oracle(words: list, seed: int = 12345):
         proc.wait()
         print("\n--- [AMEN] ---\n")
 
-def load_words(count: int, seed_str: str = "oracle"):
+def load_words(count: int, seed_val: int = 12345):
     corpus_file = Path(__file__).resolve().parent / "data" / "corpus.txt"
     if not corpus_file.exists():
         base = [
@@ -134,14 +153,12 @@ def load_words(count: int, seed_str: str = "oracle"):
     with open(corpus_file, "r", encoding="utf-8", errors="ignore") as f:
         all_words = [line.strip() for line in f if line.strip()]
 
-    seed = sum(ord(c) for c in seed_str)
-    start = (seed * 12345) % max(1, len(all_words) - count)
+    start = (seed_val * 12345) % max(1, len(all_words) - count)
     return all_words[start:start + count]
 
 if __name__ == "__main__":
-    # Default without count is 160 words (~1 minute of music)
     target_count = 160
-    seed_arg = "oracle"
+    seed_arg = None
 
     for arg in sys.argv[1:]:
         if arg.isdigit():
@@ -149,6 +166,10 @@ if __name__ == "__main__":
         else:
             seed_arg = arg
 
-    seed_val = sum(ord(c) for c in seed_arg)
-    words = load_words(target_count, seed_arg)
+    if seed_arg is None:
+        seed_val = int(time.time_ns()) & 0xFFFFFFFFFFFFFFFF
+    else:
+        seed_val = sum(ord(c) for c in seed_arg)
+
+    words = load_words(target_count, seed_val)
     play_oracle(words, seed_val)

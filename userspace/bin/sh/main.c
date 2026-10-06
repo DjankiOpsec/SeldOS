@@ -636,7 +636,7 @@ static void builtin_help(void) {
     printf("  fm              Seld Sovereign Graphical File Manager (SNL-FM)\n");
     printf("  download <url>  Fetch binary/package over network into SeldFS\n");
     printf("  tor             Sovereign Tor & SeldTLS 1.3 Web Browser\n");
-    printf("  oracle [X]      TempleOS-style Opsec Oracle (1-5 w/s, 215-325 Hz PC speaker)\n");
+    printf("  oracle [X]      TempleOS-style Opsec Oracle (fast chant, 290-680 Hz Dorian audio)\n");
     printf("  doom            Classic DOOM (download via 'download doom')\n");
     printf("  init            First userspace program (init system)\n\n");
     printf("Hardware Driver Control (Simulate Kernel Panic):\n");

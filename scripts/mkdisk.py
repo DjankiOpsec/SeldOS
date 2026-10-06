@@ -220,7 +220,7 @@ def main():
         "- 'pc' : Disables mobile touch controls & on-screen keyboard.\n"
         "- 'mobile' : Restores mobile touch HUD & virtual keyboard.\n"
         "- 'beep [freq] [dur]' : Play audio tone via PC speaker/soundcard.\n"
-        "- 'oracle [X]' : TempleOS-style Opsec Oracle (1-5 w/s, 215-325 Hz PC speaker).\n"
+        "- 'oracle [X]' : TempleOS-style Opsec Oracle (fast chant, 290-680 Hz Dorian audio).\n"
     ).encode("utf-8")
     files_to_write.append(("readme.txt", sample_readme))
 

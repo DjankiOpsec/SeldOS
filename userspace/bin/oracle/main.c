@@ -4,14 +4,16 @@
  * C99 Ring 3 Implementation for SeldOS Native Layer (SNL)
  *
  * Features:
- * - Sacred Requiem / Solemn Ethereal Aesthetic (Deep tragic weight, bittersweet sadness)
- * - Pure Minor Requiem Scale [220, 349] Hz:
- *     A3 (220 Hz) -> C4 (262 Hz) -> D4 (294 Hz) -> E4 (330 Hz) -> F4 (349 Hz)
- * - Completely uniform, steady floating pace (NO abrupt slowing down or speeding up)
+ * - Sacred Requiem / Celestial Ethereal Aesthetic (Paradise light, poignant sorrow, noble weight)
+ * - Pure Sacred Dorian/Aeolian Scale [294, 659] Hz (8 degrees):
+ *     D4 (294 Hz) -> E4 (330 Hz) -> F4 (349 Hz) -> A4 (440 Hz) ->
+ *     Bb4 (466 Hz) -> C5 (523 Hz) -> D5 (587 Hz) -> E5 (659 Hz)
+ * - Rapid seamless continuous pace (~160 ms / 6.25 words/sec) with NO pauses at punctuation
  * - 100% continuous tone legato via direct audio_play_tone (zero dead silence gaps)
  * - Natural paragraph text flow (spaces between words, auto 70-col wrap)
- * - Default execution without arguments plays ~1 minute of music (160 words)
- * - Syntax: oracle [X]
+ * - RDTSC high-entropy corpus seek preventing repetitive text openings
+ * - Anti-repetition voice leading engine preventing 2-note/3-note cyclic loops
+ * - Syntax: oracle [words] [seed]
  * GPLv3 Licensed.
  */
 
@@ -21,33 +23,39 @@
 #include "unistd.h"
 #include "seld.h"
 
-#define ORACLE_MIN_FREQ  215
-#define ORACLE_MAX_FREQ  350
+#define ORACLE_MIN_FREQ  290
+#define ORACLE_MAX_FREQ  680
 #define ORACLE_MAX_COLS  70
-#define ORACLE_PACE_MS   330
+#define ORACLE_PACE_MS   160
 
 /*
- * Solemn Requiem Minor Scale [220, 349] Hz:
- * - 0: 220 Hz (A3 - Heavy dark root ground)
- * - 1: 262 Hz (C4 - Pure poignant minor third - eradicates 'весело')
- * - 2: 294 Hz (D4 - Solemn subdominant)
- * - 3: 330 Hz (E4 - Resonant fifth)
- * - 4: 349 Hz (F4 - Weeping minor sixth - tragic bittersweet peak)
+ * Sacred Requiem Dorian/Aeolian Scale [294, 659] Hz (8 degrees):
+ * - 0: 294 Hz (D4 - Solemn foundation, noble weight / "тяжесть")
+ * - 1: 330 Hz (E4 - Solemn second)
+ * - 2: 349 Hz (F4 - Minor third / poignant sorrow / "грусть")
+ * - 3: 440 Hz (A4 - Sacred resonant fifth / axis of purity)
+ * - 4: 466 Hz (Bb4 - Weeping minor sixth / tears of sorrow)
+ * - 5: 523 Hz (C5 - Minor seventh / yearning light)
+ * - 6: 587 Hz (D5 - Celestial upper tonic / luminous paradise / "рай")
+ * - 7: 659 Hz (E5 - Angelic high ninth / ethereal crystalline peak)
  */
-static const uint32_t s_scale[5] = {
-    220, 262, 294, 330, 349
+static const uint32_t s_scale[8] = {
+    294, 330, 349, 440, 466, 523, 587, 659
 };
 
-/* Melodic voice leading transition matrix (classical Gregorian motion, guarantees deg != prev_deg) */
-static const uint8_t s_transitions[5][4] = {
-    { 1, 2, 3, 1 }, /* From 0 (A3): rise to poignant 3rd (1), 4th (2), or 5th (3) */
-    { 0, 2, 3, 0 }, /* From 1 (C4): fall to dark root (0), or step to 2, 3 */
-    { 1, 3, 4, 0 }, /* From 2 (D4): step to 1, 3, weep at 6th (4), or fall to root */
-    { 2, 4, 1, 0 }, /* From 3 (E4): step to 2, weep at 6th (4), or drop to 1, 0 */
-    { 3, 2, 1, 3 }  /* From 4 (F4): sorrowful resolution downwards to 3, 2, 1 */
+/* Melodic voice leading transition matrix (classical sacred chant motion) */
+static const uint8_t s_transitions[8][4] = {
+    { 2, 3, 5, 6 },  /* From 0 (D4): F4, A4, C5, D5 (octave leap) */
+    { 0, 2, 3, 5 },  /* From 1 (E4): D4, F4, A4, C5 */
+    { 1, 3, 4, 6 },  /* From 2 (F4): E4, A4, Bb4, D5 (celestial leap) */
+    { 2, 4, 6, 7 },  /* From 3 (A4): F4, Bb4, D5, E5 (angelic peak) */
+    { 2, 3, 5, 6 },  /* From 4 (Bb4): F4, A4, C5, D5 */
+    { 3, 4, 6, 7 },  /* From 5 (C5): A4, Bb4, D5, E5 */
+    { 2, 3, 5, 7 },  /* From 6 (D5): F4, A4, C5, E5 */
+    { 3, 5, 6, 2 }   /* From 7 (E5): A4, C5, D5, F4 */
 };
 
-static int s_prev_deg = 0;
+static int s_history[4] = { -1, -1, -1, -1 };
 static uint64_t s_music_rng = 0;
 static int s_line_col = 0;
 
@@ -90,23 +98,37 @@ static void utter_word(const char* word) {
     /* 2. Procedural note synthesis & voice leading */
     int deg;
     uint32_t dur_ms = ORACLE_PACE_MS;
+    int prev = (s_history[0] >= 0) ? s_history[0] : 3;
+    uint8_t choice = (uint8_t)((s_music_rng >> 24) % 4);
 
     if (has_period) {
-        deg = 0;      /* Dark root resolution on A3 (220 Hz) */
-        dur_ms = 370;
+        /* Musical cadence resolving to upper tonic (6), sacred fifth (3), or ground (0) */
+        static const uint8_t s_cadences_high[4] = { 6, 3, 5, 0 };
+        static const uint8_t s_cadences_low[4]  = { 3, 6, 2, 0 };
+        const uint8_t* cands = (prev >= 4) ? s_cadences_high : s_cadences_low;
+        deg = cands[(s_music_rng >> 16) % 4];
     } else if (has_comma) {
-        deg = (s_prev_deg == 1) ? 3 : 1; /* Melancholic suspension on C4 or E4 */
-        dur_ms = 345;
+        /* Melancholic suspension on poignant minor intervals */
+        static const uint8_t s_suspensions[4] = { 4, 5, 2, 7 };
+        deg = s_suspensions[(s_music_rng >> 16) % 4];
     } else {
-        uint8_t choice = (uint8_t)((s_music_rng >> 24) % 4);
-        deg = s_transitions[s_prev_deg][choice];
+        deg = s_transitions[prev][choice];
     }
 
-    /* Invariant: strictly no consecutive duplicate pitch */
-    if (deg == s_prev_deg) {
-        deg = (deg == 0) ? 1 : 0;
+    /* Invariants: strictly no consecutive duplicate pitch, no 2-note alternating trill */
+    int attempts = 0;
+    while ((deg == s_history[0] || deg == s_history[1] || (deg == s_history[2] && ((s_music_rng >> 8) & 1))) && attempts < 8) {
+        deg = (deg + 1) % 8;
+        attempts++;
     }
-    s_prev_deg = deg;
+    if (deg == s_history[0] || deg == s_history[1]) {
+        deg = (deg + 2) % 8;
+    }
+
+    s_history[3] = s_history[2];
+    s_history[2] = s_history[1];
+    s_history[1] = s_history[0];
+    s_history[0] = deg;
 
     uint32_t freq = s_scale[deg];
     if (freq < ORACLE_MIN_FREQ) freq = ORACLE_MIN_FREQ;
@@ -115,7 +137,7 @@ static void utter_word(const char* word) {
     /* 3. Start continuous tone at the EXACT instant the word appears */
     start_tone(freq);
 
-    /* 4. Natural text flow with column wrap */
+    /* 4. Natural text flow with column wrap (spaces between words) */
     if (s_line_col + len + 1 > ORACLE_MAX_COLS) {
         printf("\n");
         s_line_col = 0;
@@ -124,7 +146,7 @@ static void utter_word(const char* word) {
     fflush(stdout);
     s_line_col += len + 1;
 
-    /* 5. Fluid legato duration synchronized with word */
+    /* 5. 100% continuous legato duration without extra delays on punctuation */
     seld_sleep(dur_ms);
 }
 
@@ -143,7 +165,7 @@ static inline int read_char(int fd) {
 
 static void speak_from_file(int target_words, uint64_t seed) {
     s_music_rng = seed;
-    s_prev_deg = (int)(seed % 5);
+    for (int i = 0; i < 4; i++) s_history[i] = -1;
     s_io_pos = 0;
     s_io_len = 0;
 
@@ -219,9 +241,18 @@ static void speak_from_file(int target_words, uint64_t seed) {
     close(fd);
 }
 
+static inline uint64_t rdtsc_seed(void) {
+    uint32_t lo, hi;
+    __asm__ volatile ("rdtsc" : "=a"(lo), "=d"(hi));
+    return ((uint64_t)hi << 32) | lo;
+}
+
 int main(int argc, char* argv[]) {
-    int target_words = 160; /* Default ~1 minute of steady music */
-    uint64_t seed = seld_uptime();
+    int target_words = 160; /* Default fast steady chant */
+    uint64_t seed = rdtsc_seed() ^ ((uint64_t)seld_uptime() << 24);
+    seed ^= (seed >> 13);
+    seed *= 0xbf58476d1ce4e5b9ULL;
+    seed ^= (seed >> 27);
 
     if (argc >= 2) {
         int parsed = atoi(argv[1]);
