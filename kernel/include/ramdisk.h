@@ -20,6 +20,7 @@ struct ramdisk_info {
 };
 
 void ramdisk_init(uint64_t mb_magic, uint64_t mb_info_addr);
+void ramdisk_expand_in_ram(void);
 struct ramdisk_info* ramdisk_get_info(void);
 int ramdisk_read_sectors(uint32_t lba, uint32_t count, void* buffer);
 int ramdisk_write_sectors(uint32_t lba, uint32_t count, const void* buffer);

@@ -6,6 +6,7 @@
  */
 
 #include "ramdisk.h"
+#include "pmm.h"
 #include "vmm.h"
 #include "string.h"
 #include "serial.h"
@@ -77,6 +78,52 @@ void ramdisk_init(uint64_t mb_magic, uint64_t mb_info_addr) {
         serial_print_dec((uint32_t)(s_ramdisk.size / 1024));
         serial_puts(" KiB)\n");
     }
+}
+
+#define RAMDISK_EXPAND_CAPACITY (34 * 1024 * 1024) // 34 MiB capacity (65536 data blocks + 2081 metadata blocks)
+
+void ramdisk_expand_in_ram(void) {
+    if (!s_ramdisk.is_present || !s_ramdisk.virt_base || s_ramdisk.size >= RAMDISK_EXPAND_CAPACITY) {
+        return;
+    }
+
+    size_t target_size = RAMDISK_EXPAND_CAPACITY;
+    size_t target_frames = target_size / PAGE_SIZE;
+    void* new_phys = pmm_alloc_frames(target_frames);
+
+    if (!new_phys) {
+        // Fallback to 16 MiB if 34 MiB contiguous is not available
+        target_size = 16 * 1024 * 1024;
+        target_frames = target_size / PAGE_SIZE;
+        if (target_size > s_ramdisk.size) {
+            new_phys = pmm_alloc_frames(target_frames);
+        }
+    }
+
+    if (!new_phys) {
+        serial_puts("[-] Ramdisk: Unable to allocate expanded buffer, retaining packed image.\n");
+        return;
+    }
+
+    uint8_t* new_virt = (uint8_t*)phys_to_virt((uint64_t)new_phys);
+    memset(new_virt, 0, target_size);
+    memcpy(new_virt, s_ramdisk.virt_base, s_ramdisk.size);
+
+    // Free original frames if valid
+    if (s_ramdisk.phys_start != 0 && s_ramdisk.phys_end > s_ramdisk.phys_start) {
+        size_t old_start_frame = s_ramdisk.phys_start / PAGE_SIZE;
+        size_t old_count = (s_ramdisk.phys_end - s_ramdisk.phys_start + PAGE_SIZE - 1) / PAGE_SIZE;
+        pmm_free_frames((void*)(old_start_frame * PAGE_SIZE), old_count);
+    }
+
+    s_ramdisk.phys_start = (uint64_t)new_phys;
+    s_ramdisk.phys_end = (uint64_t)new_phys + target_size;
+    s_ramdisk.size = target_size;
+    s_ramdisk.virt_base = new_virt;
+
+    serial_puts("[+] Ramdisk: Expanded in RAM to ");
+    serial_print_dec((uint32_t)(target_size / (1024 * 1024)));
+    serial_puts(" MiB (Full SeldFS Read/Write capability online)\n");
 }
 
 struct ramdisk_info* ramdisk_get_info(void) {

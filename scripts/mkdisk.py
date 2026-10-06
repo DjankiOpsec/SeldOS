@@ -48,14 +48,22 @@ INODE_SIZE = struct.calcsize(INODE_FMT)  # 84 bytes
 # uint32_t free_data_lba;
 SB_FMT = "<IIIII"
 
-def create_seldfs_image(output_path, files_to_write):
+def create_seldfs_image(output_path, files_to_write, compact=True):
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
 
-    print(f"[*] Initializing {DISK_SIZE_BYTES // (1024 * 1024)} MiB SeldFS Raw Disk Image: {output_path}")
+    total_data_blocks = sum(max(1, (len(data) + SECTOR_SIZE - 1) // SECTOR_SIZE) for _, data in files_to_write)
+    needed_sectors = DATA_START_LBA + total_data_blocks
+
+    if compact:
+        disk_size = ((needed_sectors + 32) * SECTOR_SIZE + 0xFFFF) & ~0xFFFF
+        print(f"[*] Initializing Compact ({disk_size / (1024 * 1024):.2f} MiB) SeldFS Disk Image: {output_path}")
+    else:
+        disk_size = DISK_SIZE_BYTES
+        print(f"[*] Initializing {disk_size // (1024 * 1024)} MiB SeldFS Raw Disk Image: {output_path}")
 
     # Create raw image buffer initialized to zero
     with open(output_path, "wb") as f:
-        f.seek(DISK_SIZE_BYTES - 1)
+        f.seek(disk_size - 1)
         f.write(b"\0")
 
     # Open read/write
@@ -156,8 +164,15 @@ def create_seldfs_image(output_path, files_to_write):
 
 def main():
     output_disk = "build/disk.img"
-    if len(sys.argv) > 1:
-        output_disk = sys.argv[1]
+    compact = True
+
+    for arg in sys.argv[1:]:
+        if arg == "--compact":
+            compact = True
+        elif arg == "--full":
+            compact = False
+        elif not arg.startswith("-"):
+            output_disk = arg
 
     bin_dir = "build/bin"
     utilities = [
@@ -172,7 +187,10 @@ def main():
         "ps",
         "fm",
         "download",
-        "oracle"
+        "oracle",
+        "fetch",
+        "reboot",
+        "poweroff"
     ]
 
     files_to_write = []
@@ -217,7 +235,7 @@ def main():
         with open(corpus_path, "rb") as cf:
             files_to_write.append(("oracle.txt", cf.read()))
 
-    create_seldfs_image(output_disk, files_to_write)
+    create_seldfs_image(output_disk, files_to_write, compact=compact)
 
 if __name__ == "__main__":
     main()

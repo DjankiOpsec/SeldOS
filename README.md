@@ -131,6 +131,7 @@
   - Системный вызов `SYS_FRAMEBUFFER` (вектор 25) для прямого проецирования физической видеопамяти в Ring 3.
 - **Хранилище: Ramdisk (Initrd) & ATA PIO:**
   - **In-Memory Ramdisk (`kernel/drivers/ramdisk.c`):** Автоматический захват и чтение загрузочного диска из памяти через Multiboot 1/2 модуль на гигабайтных скоростях.
+  - **Динамическое расширение в RAM (`ramdisk_expand_in_ram`):** Ультракомпактный дистрибутивный ISO (~5.4 МБ) за счет упаковки только занятых секторов SeldFS (~4.38 МБ) и XZ-сжатия модулей GRUB. При старте ядра (`pmm_init`) образ диска прозрачно расширяется в физической памяти до 34 МБ (69 632 секторов), обеспечивая полную поддержку записи в SeldFS на лету (скачивание Tor, сохранение конфигураций и данных).
   - **ATA PIO Driver (`kernel/drivers/ata.c`):** Драйвер первичного IDE контроллера в режиме 28-bit LBA (I/O порты `0x1F0`–`0x1F7`) для физических накопителей.
 - **Файловая система SeldFS (`kernel/fs/seldfs.c`):**
   - Собственная компактная отказоустойчивая файловая система со структурой тома:
@@ -303,14 +304,17 @@ $$\text{Колонки} = \frac{680}{8} = 85, \quad \text{Строки} = \left\
   - `<stdio.h>`: Потоковый ввод/вывод (`FILE*`, `stdin`, `stdout`, `stderr`, `fopen`, `fclose`, `fread`, `fwrite`), форматированный вывод (`printf`, `snprintf` со спецификаторами целых чисел, строк, символов, плавающей точки `%f` и точности `.precision`), посимвольный ввод/вывод.
   - `<stdlib.h>`: Динамический аллокатор кучи (`malloc`, `free`, `realloc`, `calloc`) поверх `SYS_BRK`, конвертеры строк и чисел.
   - `<string.h>`: Полная реализация строковых и блочных функций (`strlen`, `strcpy`, `strchr`, `strstr`, `memcpy`, `memmove`, `memset`, `memcmp`).
-  - `<unistd.h>`: Системные интерфейсы `read`, `write`, `open`, `close`, `spawn`, `spawnv`, `listdir`, `stat`, `unlink`, `getpid`, `uptime`, `sleep`.
-  - `<seld.h>`: Нативные структуры и системные вызовы SeldOS (`seld_get_framebuffer`, `seld_poll_key`, `seld_poll_mouse`, `seld_uptime`, `seld_ping`, `seld_clear`, `seld_set_console_rows`, `seld_net_info`, `seld_tcp_connect`, `seld_tcp_send`, `seld_tcp_recv`, `seld_tcp_close`, `seld_dns_resolve`).
+  - `<unistd.h>`: Системные интерфейсы `read`, `write`, `open`, `close`, `spawn`, `spawnv`, `listdir`, `stat`, `unlink`, `getpid`, `uptime`, `sleep`, `reboot`, `poweroff`.
+  - `<seld.h>`: Нативные структуры и системные вызовы SeldOS (`seld_get_framebuffer`, `seld_poll_key`, `seld_poll_mouse`, `seld_uptime`, `seld_ping`, `seld_clear`, `seld_set_console_rows`, `seld_net_info`, `seld_tcp_connect`, `seld_tcp_send`, `seld_tcp_recv`, `seld_tcp_close`, `seld_dns_resolve`, `seld_reboot`, `seld_poweroff`).
 
 ### 4.2. Набор утилит SNL (`/bin/*`) и команды шелла
 Все утилиты скомпилированы в стандартный формат ELF-64 и размещены на диске SeldFS:
 | Утилита / Файл | Назначение |
 | :--- | :--- |
 | `/bin/init` | Первичный супервизор пространства пользователя (PID 1). Проверяет безопасность системы и запускает `/bin/sh` |
+| `/bin/fetch` | **Фирменный системный инфографический баннер SeldOS** с талисманом-пингвином и техническими метриками ядра/ОЗУ/видео |
+| `/bin/reboot` | **Перезагрузка рабочей станции** через системный вызов `SYS_REBOOT` (контроллер 8042 KBC, чипсет 0xCF9, triple-fault) |
+| `/bin/poweroff` | **Завершение работы и отключение питания** через вызов `SYS_POWEROFF` (ACPI D2A, APM, QEMU/Bochs shutoff) |
 | `/bin/doom` | **Полноценный 3D-шутер DOOM (doomgeneric)** с наэкранным сенсорным пультом и звуковым движком |
 | `doom1.wad` | **Оригинальные игровые ресурсы DOOM** (карты, спрайты, монстры, звуковые таблицы — 4.2 МБ) |
 | `/bin/sh` | Интерактивная командная оболочка SNL Sovereign Shell (`snl$ `) с сенсорным HUD и автоподхватом утилит |
@@ -364,6 +368,9 @@ $$\text{Колонки} = \frac{680}{8} = 85, \quad \text{Строки} = \left\
 * `gpu off` — диагностический триггер паники видеоподсистемы (GPU Panic).
 * `uptime` — время непрерывной работы системы по таймеру PIT.
 * `mem` — статистика физической памяти ядра и кучи.
+* `fetch` — вывод фирменного неонового баннера SeldOS, талисмана-пингвина и системной инфографики (как при загрузке системы).
+* `reboot` — программно-аппаратная перезагрузка рабочей станции через системный вызов `SYS_REBOOT`.
+* `poweroff` (или `shutdown`) — безопасное выключение питания компьютера через системный вызов `SYS_POWEROFF`.
 * `selftest` — запуск набора верификационных тестов пространства пользователя Ring 3.
 * `exit` — выход из оболочки.
 

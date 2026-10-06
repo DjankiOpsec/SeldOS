@@ -180,6 +180,8 @@ void pmm_init(uint64_t mb_magic, uint64_t mb_info_addr) {
         }
     }
 
+    ramdisk_expand_in_ram();
+
     serial_puts("[+] PMM Initialized: ");
     serial_print_dec(total_physical_memory / (1024 * 1024));
     serial_puts(" MiB Total (");

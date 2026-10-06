@@ -579,17 +579,38 @@ static int parse_args(char* line, char* argv[], int max_args) {
     return argc;
 }
 
+static void builtin_fetch(void) {
+    seld_clear();
+    print_banner();
+    if (s_mobile_mode) {
+        draw_shell_hud();
+    }
+}
+
+static void builtin_reboot(void) {
+    printf("[*] Rebooting SeldOS...\n");
+    seld_reboot();
+}
+
+static void builtin_poweroff(void) {
+    printf("[*] Powering off SeldOS...\n");
+    seld_poweroff();
+}
+
 static void builtin_help(void) {
     printf("SNL (Seld Not Linux) Sovereign Shell v0.1\n");
     printf("Autonomous Interactive Ring 3 Shell (GPLv3)\n\n");
     printf("Builtin Commands:\n");
     printf("  help            Display this help summary\n");
+    printf("  fetch           Display Sovereign system banner and mascot\n");
     printf("  colors          Display 39 Humboldt colors palette\n");
     printf("  pc [on|off]     Toggle PC mode (disable mobile touch HUD & keyboard)\n");
     printf("  mobile          Enable mobile touch HUD and virtual keyboard\n");
     printf("  clear           Clear screen buffer\n");
     printf("  echo [args..]   Output arguments to standard output\n");
     printf("  exit            Terminate shell session\n");
+    printf("  reboot          Reboot the system\n");
+    printf("  poweroff        Shut down and power off system (ACPI/QEMU)\n");
     printf("  uptime          Display system running time from PIT chronometer\n");
     printf("  beep [freq] [d] Play audio tone (default: 440 Hz, 150 ms)\n");
     printf("  snd [freq|off]  Continuous tone generator\n");
@@ -1309,6 +1330,12 @@ int main(int argc, char* argv[]) {
             builtin_selftest();
         } else if (strcmp(cmd, "gpu") == 0 || strcmp(cmd, "cpu") == 0 || strcmp(cmd, "ram") == 0 || strcmp(cmd, "drv") == 0) {
             builtin_drv_off(cmd_argc, cmd_argv);
+        } else if (strcmp(cmd, "fetch") == 0) {
+            builtin_fetch();
+        } else if (strcmp(cmd, "reboot") == 0) {
+            builtin_reboot();
+        } else if (strcmp(cmd, "poweroff") == 0 || strcmp(cmd, "shutdown") == 0) {
+            builtin_poweroff();
         } else {
             // External command execution from SeldFS (/bin/<cmd>)
             int res = spawnv(cmd, cmd_argv);

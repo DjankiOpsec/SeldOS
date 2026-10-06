@@ -27,6 +27,8 @@
 #include "net.h"
 #include "e1000.h"
 #include "panic.h"
+#include "io.h"
+#include "syscall.h"
 
 extern void syscall_entry_asm(void);
 extern int jump_to_userspace_asm(void (*user_func)(void), void* user_stack_top, uint64_t user_cr3, uint64_t argc, void* argv);
@@ -271,6 +273,63 @@ int elf_load_and_run(const char* path, int argc, char* argv[]) {
     }
 
     return exit_code;
+}
+
+static void system_reboot(void) __attribute__((noreturn));
+static void system_reboot(void) {
+    serial_puts("[!] System reboot requested. Resetting CPU...\n");
+    vga_puts("\n[!] Rebooting system...\n");
+
+    // 1. 8042 keyboard controller reset pulse
+    for (int t = 0; t < 1000; t++) {
+        uint8_t temp = inb(0x64);
+        if (temp & 1) inb(0x60);
+        if (!(temp & 2)) break;
+    }
+    outb(0x64, 0xFE);
+
+    // 2. ACPI/PCI hard reset port 0xCF9
+    outb(0xCF9, 0x02);
+    outb(0xCF9, 0x06);
+    outb(0xCF9, 0x0E);
+
+    // 3. Fast reset port 0x92
+    outb(0x92, (uint8_t)(inb(0x92) | 1));
+
+    // 4. Triple fault via corrupted IDT
+    struct { uint16_t limit; uint64_t base; } __attribute__((packed)) null_idt = {0, 0};
+    __asm__ volatile ("lidt %0; int $3" : : "m"(null_idt));
+
+    while (1) {
+        __asm__ volatile ("cli; hlt");
+    }
+}
+
+static void system_poweroff(void) __attribute__((noreturn));
+static void system_poweroff(void) {
+    serial_puts("[!] System poweroff requested. Halting all processors...\n");
+    vga_puts("\n[!] Powering off system...\n");
+
+    // 1. QEMU / Bochs ACPI shutdown (port 0x604, value 0x2000)
+    outw(0x604, 0x2000);
+
+    // 2. Older QEMU pc-piix4 (port 0xB004, value 0x2000)
+    outw(0xB004, 0x2000);
+
+    // 3. VirtualBox (port 0x4004, value 0x3400)
+    outw(0x4004, 0x3400);
+
+    // 4. QEMU debugcon exit (port 0x501, 0x31)
+    outb(0x501, 0x31);
+
+    // 5. APM shutdown via port 0xB2 (APM_CNT)
+    outb(0xB2, 0x00);
+
+    // Fallback: Disable interrupts and halt
+    serial_puts("[+] System halted. Safe to power off.\n");
+    while (1) {
+        __asm__ volatile ("cli; hlt");
+    }
 }
 
 uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4) {
@@ -1028,6 +1087,16 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
 
         case SYS_SELD: {
             return 0x5E1D5EC;
+        }
+
+        case SYS_REBOOT: {
+            system_reboot();
+            return 0;
+        }
+
+        case SYS_POWEROFF: {
+            system_poweroff();
+            return 0;
         }
 
         case SYS_EXIT: {

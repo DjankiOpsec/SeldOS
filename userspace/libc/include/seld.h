@@ -51,6 +51,8 @@
 #define SYS_NET_DNS_RESOLVE 39
 #define SYS_DRV_OFF         40
 #define SYS_SELD            42
+#define SYS_REBOOT          43
+#define SYS_POWEROFF        44
 
 /* File types */
 #define SELD_FILE_REGULAR 1
@@ -204,5 +206,7 @@ int      seld_tcp_close(int sock);
 int      seld_dns_resolve(const char* hostname, uint32_t* ip_out);
 int      seld_dns_resolve_dot(const char* hostname, uint32_t* ip_out);
 int      seld_drv_off(const char* driver_name);
+int      seld_reboot(void);
+int      seld_poweroff(void);
 
 #endif /* _SELD_H_ */

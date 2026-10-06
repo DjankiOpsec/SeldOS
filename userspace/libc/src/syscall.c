@@ -652,3 +652,19 @@ int seld_drv_off(const char* driver_name) {
     if (!driver_name) return -1;
     return (int)seld_syscall(SYS_DRV_OFF, (long)driver_name, 0, 0);
 }
+
+int seld_reboot(void) {
+    return (int)seld_syscall(SYS_REBOOT, 0, 0, 0);
+}
+
+int seld_poweroff(void) {
+    return (int)seld_syscall(SYS_POWEROFF, 0, 0, 0);
+}
+
+void reboot(void) {
+    seld_reboot();
+}
+
+void poweroff(void) {
+    seld_poweroff();
+}

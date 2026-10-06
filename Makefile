@@ -37,7 +37,7 @@ LIBC_OBJS = build/libc_syscall.o \
 
 LIBSNL = build/libsnl.a
 
-UTILS = init sh ls cat echo rm sha256sum uname ps fm download tor oracle
+UTILS = init sh ls cat echo rm sha256sum uname ps fm download tor oracle fetch reboot poweroff
 ALL_BINS = $(addprefix build/bin/, $(UTILS))
 
 DOOM_CFLAGS = $(USER_CFLAGS) -Iuserspace/doom -DNORMALUNIX -DLINUX -DSNDSERV -D_DEFAULT_SOURCE -w
@@ -121,11 +121,16 @@ $(KERNEL_BIN): $(USER_BIN) $(OBJS)
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
+GRUB_FLAGS = --locales="" --fonts="" --themes="" --compress=xz
+ifneq ($(wildcard /usr/lib/grub/i386-pc),)
+GRUB_FLAGS += -d /usr/lib/grub/i386-pc --install-modules="multiboot2 all_video gfxterm normal iso9660 biosdisk part_msdos"
+endif
+
 $(ISO_IMAGE): $(KERNEL_BIN) $(DISK_IMG)
 	@mkdir -p iso/boot/grub
 	cp $(KERNEL_BIN) iso/boot/kernel.bin
 	cp $(DISK_IMG) iso/boot/disk.img
-	grub-mkrescue -o $(ISO_IMAGE) iso
+	grub-mkrescue $(GRUB_FLAGS) -o $(ISO_IMAGE) iso
 
 $(DISK_IMG): $(ALL_BINS) scripts/mkdisk.py
 	@mkdir -p build
