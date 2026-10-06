@@ -11,22 +11,25 @@
 #include "string.h"
 #include "unistd.h"
 #include "seld.h"
+#include "banner_logo.h"
 
 #define MAX_LINE_LEN 256
 #define MAX_ARGS 16
 
+static void draw_banner_vector_logo(void);
+
 static void print_banner(void) {
     printf("=======================================================================\n");
-    printf("     _.-'''''-._\n");
-    printf("   .'  _     _  '.        SNL (Seld Not Linux) Sovereign Shell v0.1\n");
-    printf("  /   (o)   (o)   \\       Ring 3 Sovereign CLI Environment (GPLv3)\n");
-    printf(" |                 |      Humboldt Framebuffer 680x334 | 39-Color Palette\n");
-    printf(" |     <--V-->     |      x86_64 Long Mode Isolated Execution\n");
-    printf("  \\               /\n");
-    printf("   '.  '-----'  .'\n");
-    printf("     '-._____.-'\n");
+    printf("                          SNL (Seld Not Linux) Sovereign Shell v0.1\n");
+    printf("                          Ring 3 Sovereign CLI Environment (GPLv3)\n");
+    printf("                          Humboldt Framebuffer 680x334 | 39-Color Palette\n");
+    printf("                          x86_64 Long Mode Isolated Execution\n");
+    printf("\n");
+    printf("\n");
+    printf("\n");
     printf("=======================================================================\n");
     printf("Welcome to SNL Sovereign Shell. Type 'help' for available commands.\n");
+    draw_banner_vector_logo();
 }
 
 /* 5x7 ASCII bitmap font (ASCII 32 to 90) for UI buttons */
@@ -122,6 +125,42 @@ static void clear_touch_area(void) {
     for (int y = 200; y < (int)s_fb.height; y++) {
         for (int x = 0; x < (int)s_fb.width; x++) {
             fb[y * pitch_p + x] = 0x00000000;
+        }
+    }
+}
+
+static void draw_banner_vector_logo(void) {
+    if (!s_fb_checked) {
+        seld_get_framebuffer(&s_fb);
+        s_fb_checked = 1;
+    }
+    if (!s_fb.framebuffer || s_fb.bpp != 32) return;
+    uint32_t* fb = (uint32_t*)s_fb.framebuffer;
+    uint32_t pitch_p = s_fb.pitch / 4;
+    static const uint32_t palette39[39] = {
+        0x00000000, 0x000000AA, 0x0000AA00, 0x0000AAAA,
+        0x00AA0000, 0x00AA00AA, 0x00AA5500, 0x00AAAAAA,
+        0x00555555, 0x005555FF, 0x0055FF55, 0x0055FFFF,
+        0x00FF5555, 0x00FF55FF, 0x00FFFF55, 0x00FFFFFF,
+        0x0018181A, 0x002A2D34, 0x00F2F4F8, 0x00E5D9C5,
+        0x00FF6B8B, 0x00E84A5F, 0x002C3539, 0x00848B98,
+        0x003D3635, 0x009E2A2B, 0x00E0533C, 0x00001F3F,
+        0x00005B96, 0x00018E9A, 0x006497B1, 0x000B6623,
+        0x002E8B57, 0x0040E0D0, 0x00B0E0E6, 0x00D27D2D,
+        0x008B4513, 0x00C2B280, 0x005C6B73
+    };
+    int start_x = 44;
+    int start_y = 18;
+    for (int y = 0; y < BANNER_LOGO_H; y++) {
+        int py = start_y + y;
+        if (py >= (int)s_fb.height) break;
+        for (int x = 0; x < BANNER_LOGO_W; x++) {
+            int px = start_x + x;
+            if (px >= (int)s_fb.width) break;
+            uint8_t idx = s_banner_logo[y][x];
+            if (idx != 0xFF && idx < 39) {
+                fb[py * pitch_p + px] = palette39[idx];
+            }
         }
     }
 }
@@ -570,6 +609,7 @@ static void builtin_help(void) {
     printf("  fm              Seld Sovereign Graphical File Manager (SNL-FM)\n");
     printf("  download <url>  Fetch binary/package over network into SeldFS\n");
     printf("  tor             Sovereign Tor & SeldTLS 1.3 Web Browser\n");
+    printf("  oracle [X]      TempleOS-style Opsec Oracle (1-5 w/s, 215-325 Hz PC speaker)\n");
     printf("  doom            Classic DOOM (download via 'download doom')\n");
     printf("  init            First userspace program (init system)\n\n");
     printf("Hardware Driver Control (Simulate Kernel Panic):\n");

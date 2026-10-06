@@ -24,14 +24,13 @@
 static void print_banner(void) {
     vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
     vga_puts("=======================================================================\n");
-    vga_puts("     _.-'''''-._\n");
-    vga_puts("   .'  _     _  '.        SELD OS v0.1-sec (Humboldt Kernel)\n");
-    vga_puts("  /   (o)   (o)   \\       GNU General Public License v3\n");
-    vga_puts(" |                 |      Bare-Metal x86_64 Hardened Kernel\n");
-    vga_puts(" |     <--V-->     |      x86_64 Long Mode Architecture\n");
-    vga_puts("  \\               /\n");
-    vga_puts("   '.  '-----'  .'\n");
-    vga_puts("     '-._____.-'\n");
+    vga_puts("                          SELD OS v0.1-sec (Humboldt Kernel)\n");
+    vga_puts("                          GNU General Public License v3\n");
+    vga_puts("                          Bare-Metal x86_64 Hardened Kernel\n");
+    vga_puts("                          x86_64 Long Mode Architecture\n");
+    vga_puts("\n");
+    vga_puts("\n");
+    vga_puts("\n");
     vga_puts("=======================================================================\n");
 
     serial_puts("\n=======================================================================\n");

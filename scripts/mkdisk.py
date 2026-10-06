@@ -171,7 +171,8 @@ def main():
         "uname",
         "ps",
         "fm",
-        "download"
+        "download",
+        "oracle"
     ]
 
     files_to_write = []
@@ -198,6 +199,7 @@ def main():
         "- 'pc' : Disables mobile touch controls & on-screen keyboard.\n"
         "- 'mobile' : Restores mobile touch HUD & virtual keyboard.\n"
         "- 'beep [freq] [dur]' : Play audio tone via PC speaker/soundcard.\n"
+        "- 'oracle [X]' : TempleOS-style Opsec Oracle (1-5 w/s, 215-325 Hz PC speaker).\n"
     ).encode("utf-8")
     files_to_write.append(("readme.txt", sample_readme))
 
@@ -209,6 +211,11 @@ def main():
         "4. Cooperative Scheduler with Ring 0 / Ring 3 Privilege Gates\n"
     ).encode("utf-8")
     files_to_write.append(("opsec.txt", sample_opsec))
+
+    corpus_path = "tools/host_test/data/corpus.txt"
+    if os.path.exists(corpus_path):
+        with open(corpus_path, "rb") as cf:
+            files_to_write.append(("oracle.txt", cf.read()))
 
     create_seldfs_image(output_disk, files_to_write)
 

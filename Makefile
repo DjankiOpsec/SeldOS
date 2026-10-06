@@ -37,7 +37,7 @@ LIBC_OBJS = build/libc_syscall.o \
 
 LIBSNL = build/libsnl.a
 
-UTILS = init sh ls cat echo rm sha256sum uname ps fm download tor
+UTILS = init sh ls cat echo rm sha256sum uname ps fm download tor oracle
 ALL_BINS = $(addprefix build/bin/, $(UTILS))
 
 DOOM_CFLAGS = $(USER_CFLAGS) -Iuserspace/doom -DNORMALUNIX -DLINUX -DSNDSERV -D_DEFAULT_SOURCE -w
@@ -140,7 +140,7 @@ gateway-stop:
 gateway-status:
 	@python3 scripts/opsec_gateway.py --status
 
-QEMU_AUDIO ?= -audiodev pa,id=audio0 -machine pcspk-audiodev=audio0
+QEMU_AUDIO ?= -audiodev pa,id=audio0 -device AC97,audiodev=audio0 -machine pcspk-audiodev=audio0
 
 qemu: $(ISO_IMAGE)
 	qemu-system-x86_64 -cdrom $(ISO_IMAGE) -serial stdio -vga std -net nic,model=e1000 -net user $(QEMU_AUDIO)

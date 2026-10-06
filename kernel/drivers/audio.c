@@ -49,14 +49,22 @@ struct ac97_bdl_entry {
     uint16_t flags;        // 0x8000 = IOC, 0x4000 = BUP
 } __attribute__((packed));
 
+#define AC97_NUM_BLOCKS    8
+#define AC97_BLOCK_FRAMES  512
+#define AC97_BLOCK_BYTES   (AC97_BLOCK_FRAMES * 4) // 2048 bytes (half page)
+
 static struct audio_info s_audio_info = {0};
 static struct ac97_bdl_entry* s_ac97_bdl = NULL;
 static uint32_t s_ac97_bdl_phys = 0;
 static uint8_t* s_ac97_pcm_buf = NULL;
 static uint32_t s_ac97_pcm_buf_phys = 0;
-static uint32_t s_ac97_buf_frames = 24000;
-static uint32_t s_ac97_buf_bytes = 96000;
+static uint32_t s_ac97_buf_frames = (AC97_NUM_BLOCKS * AC97_BLOCK_FRAMES); // 4096 frames
+static uint32_t s_ac97_buf_bytes = (AC97_NUM_BLOCKS * AC97_BLOCK_BYTES);   // 16384 bytes (4 pages)
 static volatile int s_ac97_tone_active = 0;
+
+static uint32_t s_ac97_block_end_phase[AC97_NUM_BLOCKS] = {0};
+static uint32_t s_ac97_target_freq = 0;
+static uint8_t  s_ac97_last_civ = 0xFF;
 
 /*
  * Musical Semitone Note Frequency Table (1..127):
@@ -204,20 +212,20 @@ static void ac97_init(void) {
                         memset(s_ac97_bdl, 0, 4096);
                     }
 
-                    // Allocate 24 contiguous frames (96000 bytes = 24000 stereo frames at 48000 Hz)
-                    void* pcm_frames = pmm_alloc_frames(24);
+                    // Allocate 4 contiguous physical frames (16384 bytes = 4096 stereo frames)
+                    void* pcm_frames = pmm_alloc_frames(4);
                     if (pcm_frames) {
                         s_ac97_pcm_buf_phys = (uint32_t)(uint64_t)pcm_frames;
                         s_ac97_pcm_buf = (uint8_t*)phys_to_virt(s_ac97_pcm_buf_phys);
-                        s_ac97_buf_frames = 24000;
-                        s_ac97_buf_bytes = 96000;
+                        s_ac97_buf_frames = AC97_NUM_BLOCKS * AC97_BLOCK_FRAMES;
+                        s_ac97_buf_bytes = AC97_NUM_BLOCKS * AC97_BLOCK_BYTES;
                         memset(s_ac97_pcm_buf, 0, s_ac97_buf_bytes);
                     }
 
                     if (s_ac97_bdl && s_ac97_pcm_buf) {
                         for (int k = 0; k < 32; k++) {
-                            s_ac97_bdl[k].buffer_phys = s_ac97_pcm_buf_phys;
-                            s_ac97_bdl[k].sample_count = 48000; // 48000 16-bit words
+                            s_ac97_bdl[k].buffer_phys = s_ac97_pcm_buf_phys + (uint32_t)((k % AC97_NUM_BLOCKS) * AC97_BLOCK_BYTES);
+                            s_ac97_bdl[k].sample_count = AC97_BLOCK_FRAMES * 2; // 1024 words = 512 stereo frames
                             s_ac97_bdl[k].flags = 0;
                         }
                     }
@@ -246,10 +254,41 @@ static void ac97_init(void) {
     }
 }
 
+static volatile int s_speaker_active = 0;
+
+/*
+ * ac97_render_block:
+ * Synthesize 512 stereo frames into ring buffer block with 100% continuous phase.
+ * Prevents any phase discontinuity across block boundaries (eradicating AM sidebands/beating).
+ */
+static void ac97_render_block(uint8_t block_idx, uint32_t freq_hz) {
+    if (!s_ac97_pcm_buf || block_idx >= AC97_NUM_BLOCKS) return;
+
+    int16_t* dst = (int16_t*)(s_ac97_pcm_buf + (uint32_t)block_idx * AC97_BLOCK_BYTES);
+    uint8_t prev_idx = (block_idx + AC97_NUM_BLOCKS - 1) & (AC97_NUM_BLOCKS - 1);
+    uint32_t phase = s_ac97_block_end_phase[prev_idx];
+
+    for (uint32_t i = 0; i < AC97_BLOCK_FRAMES; i++) {
+        int16_t sample = 0;
+        if (freq_hz >= 20 && freq_hz <= 20000) {
+            // 25% duty cycle pulse wave (angelic crystalline timbre identical to host preview)
+            sample = (phase < 12000) ? 9500 : -9500;
+            phase += freq_hz;
+            if (phase >= 48000) {
+                phase -= 48000;
+            }
+        }
+        dst[i * 2]     = sample; // Left channel
+        dst[i * 2 + 1] = sample; // Right channel
+    }
+
+    s_ac97_block_end_phase[block_idx] = phase;
+}
+
 /*
  * audio_play_tone:
- * Simultaneous tone synthesis across all active audio backends:
- * - Intel AC'97 DMA PCM (VirtualBox & PCI hardware)
+ * Seamless tone synthesis across all active audio backends:
+ * - Intel AC'97 DMA PCM (VirtualBox & PCI hardware) with continuous phase ring buffer
  * - PC Speaker PIT Channel 2 + Port 0x61 (Universal x86)
  */
 void audio_play_tone(uint32_t freq_hz) {
@@ -258,25 +297,51 @@ void audio_play_tone(uint32_t freq_hz) {
         return;
     }
 
-    // 1. Synthesize square wave for AC'97 (VirtualBox & physical hardware)
+    // 1. Synthesize square wave for AC'97 without restarting DMA mid-play
     if ((s_audio_info.active_devices & AUDIO_DEV_AC97) && s_ac97_pcm_buf && s_ac97_bdl) {
-        int16_t* dst = (int16_t*)s_ac97_pcm_buf;
-        for (uint32_t i = 0; i < s_ac97_buf_frames; i++) {
-            uint32_t phase = ((uint64_t)i * freq_hz) % 48000;
-            int16_t sample = (phase < 24000) ? 16384 : -16384;
-            dst[i * 2]     = sample; // Left channel
-            dst[i * 2 + 1] = sample; // Right channel
-        }
+        // Ensure PC Speaker port 0x61 is muted so no acoustic crosstalk or dual-sound occurs
+        outb(SPEAKER_PORT_B, inb(SPEAKER_PORT_B) & ~3);
+        s_speaker_active = 0;
 
         uint16_t nabm = s_audio_info.ac97_nabmbar;
-        // Reset PCM Out channel to start immediately from descriptor 0
-        outb(nabm + AC97_PO_CR, 0x02); // RR
-        for (volatile int i = 0; i < 100; i++) inb(0x80);
-        outw(nabm + AC97_PO_SR, 0x001C);
-        outl(nabm + AC97_PO_BDBAR, s_ac97_bdl_phys);
-        outb(nabm + AC97_PO_LVI, 31);
-        outb(nabm + AC97_PO_CR, 0x01); // Run Bus Master
-        s_ac97_tone_active = 1;
+        s_ac97_target_freq = freq_hz;
+
+        if (!s_ac97_tone_active) {
+            for (int k = 0; k < 32; k++) {
+                s_ac97_bdl[k].buffer_phys = s_ac97_pcm_buf_phys + (uint32_t)((k % AC97_NUM_BLOCKS) * AC97_BLOCK_BYTES);
+                s_ac97_bdl[k].sample_count = AC97_BLOCK_FRAMES * 2;
+                s_ac97_bdl[k].flags = 0;
+            }
+
+            s_ac97_block_end_phase[AC97_NUM_BLOCKS - 1] = 0;
+            for (uint8_t b = 0; b < AC97_NUM_BLOCKS; b++) {
+                ac97_render_block(b, freq_hz);
+            }
+
+            outb(nabm + AC97_PO_CR, 0x02); // RR
+            for (volatile int i = 0; i < 100; i++) inb(0x80);
+            outw(nabm + AC97_PO_SR, 0x001C);
+            outl(nabm + AC97_PO_BDBAR, s_ac97_bdl_phys);
+            outb(nabm + AC97_PO_LVI, 16);
+            outb(nabm + AC97_PO_CR, 0x01); // Run Bus Master
+            s_ac97_tone_active = 1;
+            s_ac97_last_civ = 0;
+        } else {
+            // DMA is already streaming: seamlessly re-render upcoming blocks with new frequency
+            uint8_t civ = inb(nabm + AC97_PO_CIV) & 31;
+            for (uint8_t step = 1; step < AC97_NUM_BLOCKS; step++) {
+                uint8_t b = (civ + step) & (AC97_NUM_BLOCKS - 1);
+                ac97_render_block(b, freq_hz);
+            }
+            outb(nabm + AC97_PO_LVI, (civ + 16) & 31);
+
+            uint8_t cr = inb(nabm + AC97_PO_CR);
+            if (!(cr & 0x01)) {
+                outw(nabm + AC97_PO_SR, 0x001C);
+                outb(nabm + AC97_PO_CR, 0x01);
+            }
+        }
+        return; // Single active backend: never double-play on PC Speaker!
     }
 
     // 2. PIT Channel 2 square wave on Port 0x61 (Standard x86 PC Speaker)
@@ -284,14 +349,13 @@ void audio_play_tone(uint32_t freq_hz) {
     if (period < 2) period = 2;
     if (period > 65535) period = 65535;
 
-    // Mode 3 square wave generator on Channel 2
     outb(SPEAKER_PIT_CMD, 0xB6);
     outb(SPEAKER_PIT_DATA, (uint8_t)(period & 0xFF));
     outb(SPEAKER_PIT_DATA, (uint8_t)((period >> 8) & 0xFF));
 
-    // Turn on Speaker Gate (bit 0) and Speaker Data (bit 1)
     uint8_t cur = inb(SPEAKER_PORT_B);
     outb(SPEAKER_PORT_B, cur | 3);
+    s_speaker_active = 1;
 }
 
 /*
@@ -302,15 +366,21 @@ void audio_stop_tone(void) {
     // 1. PC Speaker off
     uint8_t cur = inb(SPEAKER_PORT_B);
     outb(SPEAKER_PORT_B, cur & ~3);
+    s_speaker_active = 0;
 
     // 2. AC'97 DMA pause and buffer mute
     if (s_audio_info.active_devices & AUDIO_DEV_AC97) {
         s_ac97_tone_active = 0;
+        s_ac97_target_freq = 0;
         uint16_t nabm = s_audio_info.ac97_nabmbar;
         outb(nabm + AC97_PO_CR, 0x00); // Pause Bus Master
         if (s_ac97_pcm_buf) {
             memset(s_ac97_pcm_buf, 0, s_ac97_buf_bytes);
         }
+        for (int i = 0; i < AC97_NUM_BLOCKS; i++) {
+            s_ac97_block_end_phase[i] = 0;
+        }
+        s_ac97_last_civ = 0xFF;
     }
 }
 
@@ -323,11 +393,25 @@ void audio_timer_tick(void) {
         return;
     }
     uint16_t nabm = s_audio_info.ac97_nabmbar;
-    uint8_t cr = inb(nabm + AC97_PO_CR);
-    // If DMA halted because it reached LVI (e.g. after 16s), restart it seamlessly
+    uint8_t civ = inb(nabm + AC97_PO_CIV) & 31;
+    uint8_t cr  = inb(nabm + AC97_PO_CR);
+
+    // Continuous circular streaming: maintain LVI ALWAYS 16 descriptors ahead so DMA NEVER halts!
+    outb(nabm + AC97_PO_LVI, (civ + 16) & 31);
+
+    // Auto-recover DMA if halted
     if (!(cr & 0x01)) {
-        outb(nabm + AC97_PO_LVI, 31);
+        outw(nabm + AC97_PO_SR, 0x001C);
         outb(nabm + AC97_PO_CR, 0x01);
+    }
+
+    // Continuously render upcoming blocks ahead of CIV
+    if (civ != s_ac97_last_civ) {
+        for (uint8_t step = 1; step <= 4; step++) {
+            uint8_t b = (civ + step) & (AC97_NUM_BLOCKS - 1);
+            ac97_render_block(b, s_ac97_target_freq);
+        }
+        s_ac97_last_civ = civ;
     }
 }
 
@@ -408,6 +492,7 @@ int audio_play_pcm(const uint8_t* samples, size_t len, uint32_t sample_rate) {
 
     // 1. AC'97 DMA streaming
     if ((s_audio_info.active_devices & AUDIO_DEV_AC97) && s_ac97_pcm_buf && s_ac97_bdl) {
+        s_ac97_tone_active = 0;
         size_t copy_sz = len > s_ac97_buf_frames ? s_ac97_buf_frames : len;
         int16_t* dst = (int16_t*)s_ac97_pcm_buf;
         for (size_t i = 0; i < copy_sz; i++) {

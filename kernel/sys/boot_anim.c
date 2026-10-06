@@ -111,7 +111,7 @@ void boot_anim_init(void) {
     uint32_t isize = 0;
     int valid_svgz = boot_anim_validate_svgz(&isize);
     if (valid_svgz) {
-        vga_draw_string_at(11, 2, "Logo: seldos_logo.svgz (GZIP SVG, 259895 -> 850875 bytes)", 29);
+        vga_draw_string_at(11, 2, "Logo: seldos_logo.svgz (GZIP SVG, 74726 -> 229623 bytes)", 29);
     } else {
         vga_draw_string_at(11, 2, "Logo: Humboldt Penguin Sovereign Vector Icon (SVGZ)", 29);
     }
