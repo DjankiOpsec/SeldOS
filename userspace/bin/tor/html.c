@@ -122,6 +122,7 @@ static const uint8_t font5x7[95][5] = {
 
 static void put_pixel_clip(uint32_t* buf, int sw, int sh, int x, int y, uint32_t col,
                            int cx1, int cy1, int cx2, int cy2) {
+    if (!buf) return;
     if (x < cx1 || x >= cx2 || y < cy1 || y >= cy2) return;
     if (x < 0 || x >= sw || y < 0 || y >= sh) return;
     buf[y * sw + x] = col;
@@ -129,6 +130,7 @@ static void put_pixel_clip(uint32_t* buf, int sw, int sh, int x, int y, uint32_t
 
 static void draw_char_5x7_clip(uint32_t* buf, int sw, int sh, int x, int y, char ch, uint32_t col,
                                int cx1, int cy1, int cx2, int cy2) {
+    if (!buf) return;
     if (ch < 32 || ch > 126) ch = ' ';
     const uint8_t* glyph = font5x7[ch - 32];
     for (int c = 0; c < 5; c++) {
@@ -148,6 +150,7 @@ static void draw_char_5x7(uint32_t* buf, int sw, int sh, int x, int y, char ch, 
 
 static int draw_utf8_char_clip(uint32_t* buf, int sw, int sh, int x, int y, uint32_t cp, uint32_t col,
                                int cx1, int cy1, int cx2, int cy2) {
+    if (!buf) return (cp == 0x2014) ? 7 : 6;
     if (cp >= 32 && cp <= 126) {
         draw_char_5x7_clip(buf, sw, sh, x, y, (char)cp, col, cx1, cy1, cx2, cy2);
         return 6;
@@ -191,6 +194,7 @@ static int draw_utf8_char_clip(uint32_t* buf, int sw, int sh, int x, int y, uint
 
 static void draw_char_8x16(uint32_t* buf, int sw, int sh, int x, int y, char ch, uint32_t col,
                            int cx1, int cy1, int cx2, int cy2) {
+    if (!buf) return;
     uint8_t u = (uint8_t)ch;
     for (int r = 0; r < 16; r++) {
         uint8_t bits = font8x16[u][r];

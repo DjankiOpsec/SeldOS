@@ -84,6 +84,36 @@ void pmm_init(uint64_t mb_magic, uint64_t mb_info_addr) {
     ramdisk_init(mb_magic, mb_info_addr);
     uint64_t highest_addr = 0x8000000; // Fallback: 128 MiB
 
+#if defined(__riscv)
+    highest_addr = 0x88000000ULL; // 128 MiB RAM from 0x80000000 to 0x88000000
+    total_physical_memory = 128 * 1024 * 1024;
+    total_frames = highest_addr / PAGE_SIZE;
+
+    uint64_t bitmap_phys = (((uint64_t)kernel_end - KERNEL_VIRT_OFFSET + 0x80000000ULL) + 4095) & ~4095ULL;
+    pmm_bitmap = (uint64_t*)phys_to_virt(bitmap_phys);
+
+    size_t bitmap_bytes = (total_frames / 8) + 1;
+    size_t bitmap_frames = (bitmap_bytes + PAGE_SIZE - 1) / PAGE_SIZE;
+
+    memset(pmm_bitmap, 0, bitmap_bytes);
+    used_frames = 0;
+
+    // Mark everything below RAM base (0x00000000 to 0x80000000) as used
+    size_t ram_start_frame = 0x80000000ULL / PAGE_SIZE;
+    for (size_t i = 0; i < ram_start_frame; i++) {
+        bitmap_set(i);
+        used_frames++;
+    }
+
+    // Mark OpenSBI + Kernel + Bitmap as used
+    size_t reserved_end_frame = (bitmap_phys / PAGE_SIZE) + bitmap_frames;
+    for (size_t i = ram_start_frame; i < reserved_end_frame; i++) {
+        if (!bitmap_test(i)) {
+            bitmap_set(i);
+            used_frames++;
+        }
+    }
+#else
     if (mb_magic == 0x36d76289 && mb_info_addr != 0) {
         // Multiboot 2
         uint8_t* tag_ptr = (uint8_t*)(mb_info_addr + 8);
@@ -166,6 +196,7 @@ void pmm_init(uint64_t mb_magic, uint64_t mb_info_addr) {
             used_frames++;
         }
     }
+#endif
 
     // Reserve In-Memory Ramdisk frames (if present)
     struct ramdisk_info* rd = ramdisk_get_info();
@@ -239,6 +270,10 @@ void* pmm_alloc_frames(size_t count) {
 
 void pmm_free_frame(void* ptr) {
     uint64_t addr = (uint64_t)ptr;
+    extern uint64_t kernel_pml4_phys;
+    if (kernel_pml4_phys && addr == kernel_pml4_phys) {
+        return; // Guard kernel root page table
+    }
     size_t frame = addr / PAGE_SIZE;
     if (frame < total_frames && bitmap_test(frame)) {
         bitmap_clear(frame);
@@ -294,15 +329,27 @@ void pmm_secure_wipe_all_free(void) {
     for (size_t i = 0; i < total_frames; i++) {
         if (!bitmap_test(i)) {
             uint64_t pa = (uint64_t)i * PAGE_SIZE;
+#if defined(__riscv)
+            if (pa >= 0x80000000ULL && pa < 0x100000000ULL) {
+                uint8_t* virt = (uint8_t*)phys_to_virt(pa);
+                memset(virt, 0, PAGE_SIZE);
+                scrubbed++;
+            }
+#else
             if (pa < 0x100000000ULL) { // within 4 GiB HHDM
                 uint8_t* virt = (uint8_t*)phys_to_virt(pa);
                 memset(virt, 0, PAGE_SIZE);
                 scrubbed++;
             }
+#endif
         }
     }
     // Invalidate processor caches
+#if defined(__riscv)
+    __asm__ volatile ("fence rw, rw" ::: "memory");
+#else
     __asm__ volatile ("wbinvd" ::: "memory");
+#endif
     serial_puts("[+] OpSec: RAM scrub complete: ");
     serial_print_dec((uint64_t)scrubbed);
     serial_puts(" free physical frames wiped.\n");

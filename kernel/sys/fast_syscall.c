@@ -70,6 +70,7 @@ struct user_fd_entry {
 };
 static struct user_fd_entry user_fds[MAX_USER_FDS];
 
+#if !defined(__riscv)
 static inline void wrmsr(uint32_t msr, uint64_t val) {
     uint32_t lo = (uint32_t)val;
     uint32_t hi = (uint32_t)(val >> 32);
@@ -81,8 +82,18 @@ static inline uint64_t rdmsr(uint32_t msr) {
     __asm__ volatile ("rdmsr" : "=a"(lo), "=d"(hi) : "c"(msr));
     return ((uint64_t)hi << 32) | lo;
 }
+#endif
 
 void syscall_init_fast(void) {
+#if defined(__riscv)
+    // 1. Initialize FD table (0, 1, 2 reserved)
+    memset(user_fds, 0, sizeof(user_fds));
+    user_fds[0].used = 1; // stdin
+    user_fds[1].used = 1; // stdout
+    user_fds[2].used = 1; // stderr
+
+    serial_puts("[+] SYSCALL: Fast system call extension enabled (RISC-V U-mode ECALL vector configured).\n");
+#else
     // 1. Enable SCE (System Call Extensions) and NXE (No-Execute) in EFER
     uint64_t efer = rdmsr(MSR_EFER);
     wrmsr(MSR_EFER, efer | (1ULL << 0) | (1ULL << 11));
@@ -109,6 +120,7 @@ void syscall_init_fast(void) {
     user_fds[2].used = 1; // stderr
 
     serial_puts("[+] SYSCALL: Fast system call extension enabled (MSR LSTAR configured).\n");
+#endif
 }
 
 /* SeldFS path resolution helper (supports symmetric lookup: 'sh' <-> '/bin/sh') */
@@ -387,19 +399,16 @@ int elf_load_and_run(const char* path, int argc, char* argv[]) {
         return -1;
     }
 
+    struct seldfs_inode inode;
+    if (seldfs_get_file_info(resolved, &inode) != 0 || inode.size < sizeof(Elf64_Ehdr)) {
+        return -1;
+    }
+
     // 2. Binary Gatekeeper: Cryptographic SHA-256 Attestation
     if (seldfs_verify_file(resolved) != 0) {
         serial_puts("[-] OpSec Binary Gatekeeper: SHA-256 verification FAILED for '");
         serial_puts(resolved);
         serial_puts("'. Tampered binary rejected!\n");
-        return -1;
-    }
-
-    struct seldfs_inode inode;
-    if (seldfs_get_file_info(resolved, &inode) != 0 || inode.size < sizeof(Elf64_Ehdr)) {
-        serial_puts("[-] elf_load_and_run: File not found or too small: ");
-        serial_puts(resolved);
-        serial_puts("\n");
         return -1;
     }
 
@@ -442,8 +451,8 @@ int elf_load_and_run(const char* path, int argc, char* argv[]) {
         k_argc = 1;
     }
 
-    // Map stack arguments into top of user stack page (virtual 0x00007FFFFFFFE000)
-    uint64_t stack_phys = vmm_get_mapping(proc_pml4_virt, 0x00007FFFFFFFE000ULL) & 0x000FFFFFFFFFF000ULL;
+    // Map stack arguments into top of user stack page (virtual USER_STACK_TOP)
+    uint64_t stack_phys = vmm_get_mapping(proc_pml4_virt, USER_STACK_TOP) & 0x000FFFFFFFFFF000ULL;
     if (!stack_phys) {
         vmm_destroy_address_space(proc_pml4_virt);
         return -1;
@@ -458,7 +467,7 @@ int elf_load_and_run(const char* path, int argc, char* argv[]) {
         size_t slen = strlen(k_args[i]) + 1;
         if (str_offset + slen > 4080) break;
         memcpy(k_stack_page + str_offset, k_args[i], slen);
-        user_str_vas[i] = 0x00007FFFFFFFE000ULL + str_offset;
+        user_str_vas[i] = USER_STACK_TOP + str_offset;
         str_offset += slen;
     }
 
@@ -469,10 +478,10 @@ int elf_load_and_run(const char* path, int argc, char* argv[]) {
     }
     user_argv_page[k_argc] = 0; // NULL terminator
 
-    uint64_t child_argv_va = 0x00007FFFFFFFE000ULL + 3200;
+    uint64_t child_argv_va = USER_STACK_TOP + 3200;
 
     // Stack pointer for entry (16-byte aligned): offset 3104 (0xC20)
-    uint64_t user_rsp = 0x00007FFFFFFFE000ULL + 3104;
+    uint64_t user_rsp = USER_STACK_TOP + 3104;
 
     // Provide argc and argv on stack for ABI fallback
     uint64_t* stack_header = (uint64_t*)(k_stack_page + 3104);
@@ -500,8 +509,7 @@ int elf_load_and_run(const char* path, int argc, char* argv[]) {
         current_unveil_locked = 0;
     }
 
-    uint64_t parent_cr3;
-    __asm__ volatile ("mov %%cr3, %0" : "=r"(parent_cr3));
+    uint64_t parent_cr3 = vmm_get_active_root();
 
     const char* base_bin = resolved;
     if (strncmp(base_bin, "/bin/", 5) == 0) base_bin += 5;
@@ -553,6 +561,17 @@ static void system_reboot(void) {
     net_abort_all_connections();
     pmm_secure_wipe_all_free();
 
+#if defined(__riscv)
+    *(volatile uint32_t*)(phys_to_virt(0x100000)) = 0x7777;
+    register long a0 __asm__("a0") = 1;
+    register long a1 __asm__("a1") = 0;
+    register long a6 __asm__("a6") = 0;
+    register long a7 __asm__("a7") = 0x53525354;
+    __asm__ volatile ("ecall" : : "r"(a0), "r"(a1), "r"(a6), "r"(a7));
+    while (1) {
+        __asm__ volatile ("wfi");
+    }
+#else
     // 1. 8042 keyboard controller reset pulse
     for (int t = 0; t < 1000; t++) {
         uint8_t temp = inb(0x64);
@@ -576,6 +595,7 @@ static void system_reboot(void) {
     while (1) {
         __asm__ volatile ("cli; hlt");
     }
+#endif
 }
 
 static void system_poweroff(void) __attribute__((noreturn));
@@ -588,6 +608,17 @@ static void system_poweroff(void) {
     vga_clear();
     pmm_secure_wipe_all_free();
 
+#if defined(__riscv)
+    *(volatile uint32_t*)(phys_to_virt(0x100000)) = 0x5555;
+    register long a0 __asm__("a0") = 0;
+    register long a1 __asm__("a1") = 0;
+    register long a6 __asm__("a6") = 0;
+    register long a7 __asm__("a7") = 0x53525354;
+    __asm__ volatile ("ecall" : : "r"(a0), "r"(a1), "r"(a6), "r"(a7));
+    while (1) {
+        __asm__ volatile ("wfi");
+    }
+#else
     // 1. QEMU / Bochs ACPI shutdown (port 0x604, value 0x2000)
     outw(0x604, 0x2000);
 
@@ -608,6 +639,15 @@ static void system_poweroff(void) {
     while (1) {
         __asm__ volatile ("cli; hlt");
     }
+#endif
+}
+
+void fast_sys_reboot(void) {
+    system_reboot();
+}
+
+void fast_sys_poweroff(void) {
+    system_poweroff();
 }
 
 /* Seld-Pledge Capability Verification Engine */
@@ -952,7 +992,7 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
                 return user_current_brk;
             }
 
-            if (a1 < DEFAULT_USER_HEAP_BASE || a1 >= 0x0000700000000000ULL) {
+            if (a1 < DEFAULT_USER_HEAP_BASE || a1 >= USER_HEAP_MAX) {
                 return (uint64_t)-1;
             }
 
@@ -960,8 +1000,7 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
                 if (!ram_is_driver_enabled()) {
                     kernel_panic("sys_brk failed: physical memory manager exhausted (out of memory)");
                 }
-                uint64_t cr3;
-                __asm__ volatile ("mov %%cr3, %0" : "=r"(cr3));
+                uint64_t cr3 = vmm_get_active_root();
                 uint64_t* user_pml4 = (uint64_t*)phys_to_virt(cr3);
 
                 uint64_t start_va = (user_current_brk + PAGE_SIZE - 1) & ~0xFFFULL;
@@ -1059,7 +1098,7 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
             if (a1 == 0) {
                 return 0x5E1D0001ULL;
             } else if (a1 == 1) {
-                return (a2 < 0x0000800000000000ULL && a2 >= 0x1000ULL) ? 1 : 0;
+                return (a2 < USER_SPACE_LIMIT && a2 >= 0x1000ULL) ? 1 : 0;
             }
             return a1 ^ 0x5E1D5E1DULL;
         }
@@ -1230,8 +1269,7 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
             if (fb_size == 0) fb_size = (uint64_t)kfb->width * kfb->height * (kfb->bpp / 8);
             if (fb_size < 680 * 334 * 4) fb_size = 680 * 334 * 4;
 
-            uint64_t cr3;
-            __asm__ volatile ("mov %%cr3, %0" : "=r"(cr3));
+            uint64_t cr3 = vmm_get_active_root();
             uint64_t* user_pml4 = (uint64_t*)phys_to_virt(cr3);
 
             for (uint64_t off = 0; off < fb_size; off += PAGE_SIZE) {

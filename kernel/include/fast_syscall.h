@@ -88,6 +88,20 @@
 #define MAX_FD 32
 #define DEFAULT_USER_HEAP_BASE 0x0000000040000000ULL
 
+#if defined(__riscv)
+#define USER_STACK_TOP    0x0000003FFFFFE000ULL
+#define USER_STACK_PAGE   0x0000003FFFFFF000ULL
+#define USER_STACK_BOTTOM 0x0000003FFFFF0000ULL
+#define USER_SPACE_LIMIT  0x0000003FFFFFF000ULL
+#define USER_HEAP_MAX     0x0000003000000000ULL
+#else
+#define USER_STACK_TOP    0x00007FFFFFFFE000ULL
+#define USER_STACK_PAGE   0x00007FFFFFFFF000ULL
+#define USER_STACK_BOTTOM 0x00007FFFFFFF0000ULL
+#define USER_SPACE_LIMIT  0x00007FFFFFFFF000ULL
+#define USER_HEAP_MAX     0x0000700000000000ULL
+#endif
+
 /* User-mode network structures */
 struct seld_net_info {
     uint32_t ip;
@@ -165,5 +179,7 @@ void syscall_init_fast(void);
 int jump_to_userspace(void (*user_func)(void), void* user_stack_top, uint64_t user_cr3);
 void user_exit_to_kernel(uint64_t exit_code);
 int elf_load_and_run(const char* path, int argc, char* argv[]);
+void fast_sys_reboot(void) __attribute__((noreturn));
+void fast_sys_poweroff(void) __attribute__((noreturn));
 
 #endif /* SELD_FAST_SYSCALL_H */

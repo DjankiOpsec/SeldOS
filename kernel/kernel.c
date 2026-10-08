@@ -21,13 +21,22 @@
 #include "boot_anim.h"
 #include "panic.h"
 
+#if defined(__riscv)
+extern void riscv_trap_init(void);
+#endif
+
 static void print_banner(void) {
     vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
     vga_puts("=======================================================================\n");
     vga_puts("                          SELD OS v0.1-sec (Humboldt Kernel)\n");
     vga_puts("                          GNU General Public License v3\n");
+#if defined(__riscv)
+    vga_puts("                          Bare-Metal RISC-V 64-bit (RV64GC) Hardened Kernel\n");
+    vga_puts("                          RISC-V Supervisor Mode (Sv39 Paging)\n");
+#else
     vga_puts("                          Bare-Metal x86_64 Hardened Kernel\n");
     vga_puts("                          x86_64 Long Mode Architecture\n");
+#endif
     vga_puts("\n");
     vga_puts("\n");
     vga_puts("\n");
@@ -35,13 +44,18 @@ static void print_banner(void) {
 
     serial_puts("\n=======================================================================\n");
     serial_puts(" SELD OS v0.1-sec (Humboldt Kernel) - GNU GPLv3 Free Software Foundation\n");
+#if defined(__riscv)
+    serial_puts(" Hardened RISC-V 64-bit (RV64GC) Supervisor Kernel Initialized\n");
+#else
     serial_puts(" Hardened x86_64 Long Mode Supervisor Kernel Initialized\n");
+#endif
     serial_puts("=======================================================================\n");
 }
 
 #include "pmm.h"
 #include "kmalloc.h"
 #include "ata.h"
+#include "ramdisk.h"
 #include "seldfs.h"
 #include "rand.h"
 #include "pit.h"
@@ -58,11 +72,17 @@ static void print_banner(void) {
 void kernel_main(uint64_t mb_info_addr, uint64_t mb_magic) {
     serial_init();
     vga_init();
+#if !defined(__riscv)
     vga_init_fb(mb_magic, mb_info_addr);
     kbd_init();
+#endif
 
     print_banner();
 
+#if defined(__riscv)
+    serial_puts("[+] Initializing RISC-V Supervisor Trap Vector & Interrupts...\n");
+    riscv_trap_init();
+#else
     vga_puts("[+] Initializing 64-bit GDT, User Segments, and TSS...\n");
     serial_puts("[+] Initializing 64-bit GDT, User Segments, and TSS...\n");
     gdt_init();
@@ -75,6 +95,7 @@ void kernel_main(uint64_t mb_info_addr, uint64_t mb_magic) {
 
     vga_puts("[+] IDT active, 8259 PIC remapped, IRQ handlers registered.\n");
     serial_puts("[+] IDT active, 8259 PIC remapped, IRQ handlers registered.\n");
+#endif
 
     vga_puts("[+] Initializing Physical Memory Manager (PMM)...\n");
     pmm_init(mb_magic, mb_info_addr);
@@ -85,7 +106,9 @@ void kernel_main(uint64_t mb_info_addr, uint64_t mb_magic) {
 
     vga_puts("[+] Initializing Higher-Half VMM & Memory Protection (W^X)...\n");
     vmm_init();
+#if !defined(__riscv)
     vga_enable_fb_console();
+#endif
 
     // Linux-Style Boot Animation with SVGZ Logo & Running Init Lines
     boot_anim_init();
@@ -100,8 +123,13 @@ void kernel_main(uint64_t mb_info_addr, uint64_t mb_magic) {
     kmalloc_init();
     boot_anim_step("KMALLOC", "Dynamic kernel heap pool online (1024 KiB pool)", 6, 15);
 
+#if defined(__riscv)
+    ramdisk_init(mb_magic, mb_info_addr);
+    boot_anim_step("RAMDISK", "Embedded SeldFS storage device online", 7, 15);
+#else
     ata_init();
     boot_anim_step("ATA", "PIO primary storage controller online", 7, 15);
+#endif
 
     seldfs_init();
     boot_anim_step("SELDFS", "Block filesystem mounted, root directory verified", 8, 15);
@@ -112,14 +140,22 @@ void kernel_main(uint64_t mb_info_addr, uint64_t mb_magic) {
     pit_init(100);
     boot_anim_step("PIT", "100 Hz chronometer timer online, IRQ0 active", 10, 15);
 
+#if !defined(__riscv)
     audio_init();
     boot_anim_step("AUDIO", "Sound architecture online (Speaker/AC97/SB16)", 11, 15);
+#else
+    boot_anim_step("AUDIO", "Audio hardware bypassed on RISC-V target", 11, 15);
+#endif
 
     sched_init();
     boot_anim_step("SCHED", "Supervisor cooperative scheduler initialized", 12, 15);
 
+#if !defined(__riscv)
     net_init();
     boot_anim_step("NET", "Intel e1000 PCI Gigabit Network online", 13, 15);
+#else
+    boot_anim_step("NET", "Network carrier bypassed on RISC-V target", 13, 15);
+#endif
 
     selftest_run_all();
     boot_anim_step("SELFTEST", "All 8/8 kernel subsystem tests passed", 14, 15);
@@ -153,6 +189,10 @@ void kernel_main(uint64_t mb_info_addr, uint64_t mb_magic) {
     seldshell_run();
 
     while (1) {
+#if defined(__riscv)
+        __asm__ volatile ("wfi");
+#else
         __asm__ volatile ("hlt");
+#endif
     }
 }

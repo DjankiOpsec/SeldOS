@@ -202,7 +202,11 @@ int kbd_has_char(void) {
 
 char kbd_getchar(void) {
     while (!kbd_has_char()) {
+#if defined(__riscv)
+        __asm__ volatile ("nop");
+#else
         __asm__ volatile ("pause");
+#endif
     }
     if (serial_has_char()) {
         return serial_getchar();
@@ -212,11 +216,54 @@ char kbd_getchar(void) {
     return c;
 }
 
-int kbd_poll_event(struct kbd_event* ev) {
-    if (ev_head == ev_tail || !ev) {
-        return 0;
+static uint8_t serial_char_to_scancode(char c) {
+    if (c == '\r' || c == '\n') return 0x1C;
+    if (c == '\b' || c == 0x7F) return 0x0E;
+    if (c == '\t') return 0x0F;
+    if (c == 27)   return 0x01;
+    if (c == ' ')  return 0x39;
+
+    for (uint8_t i = 0; i < 128; i++) {
+        if (scancode_ascii_lower[i] == c) return i;
     }
-    *ev = kbd_event_queue[ev_tail];
-    ev_tail = (ev_tail + 1) % KBD_EVENT_QUEUE_SIZE;
-    return 1;
+    if (c >= 'A' && c <= 'Z') {
+        char lower = c - 'A' + 'a';
+        for (uint8_t i = 0; i < 128; i++) {
+            if (scancode_ascii_lower[i] == lower) return i;
+        }
+    }
+    for (uint8_t i = 0; i < 128; i++) {
+        if (scancode_ascii_upper[i] == c) return i;
+    }
+    return 0;
 }
+
+int kbd_poll_event(struct kbd_event* ev) {
+    if (!ev) return 0;
+    if (ev_head != ev_tail) {
+        *ev = kbd_event_queue[ev_tail];
+        ev_tail = (ev_tail + 1) % KBD_EVENT_QUEUE_SIZE;
+        return 1;
+    }
+    if (serial_has_char()) {
+        char c = serial_getchar();
+        if (c == 27 && serial_has_char()) {
+            char c2 = serial_getchar();
+            if (c2 == '[' && serial_has_char()) {
+                char c3 = serial_getchar();
+                if (c3 == 'A') { ev->scancode = 0x48; ev->pressed = 1; return 1; } // Up
+                if (c3 == 'B') { ev->scancode = 0x50; ev->pressed = 1; return 1; } // Down
+                if (c3 == 'C') { ev->scancode = 0x4D; ev->pressed = 1; return 1; } // Right
+                if (c3 == 'D') { ev->scancode = 0x4B; ev->pressed = 1; return 1; } // Left
+            }
+        }
+        uint8_t sc = serial_char_to_scancode(c);
+        if (sc != 0) {
+            ev->scancode = sc;
+            ev->pressed = 1;
+            return 1;
+        }
+    }
+    return 0;
+}
+

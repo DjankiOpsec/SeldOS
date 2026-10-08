@@ -228,13 +228,9 @@ def main():
         # TEST 4: Onion Routing & Interactivity (New Identity & Navigation)
         # -------------------------------------------------------------
         print("\n=== TEST 4: Onion Circuit Refresh & Navigation ===")
-        # Press 'n' to trigger New Tor Identity
-        send_key(s, "n")
-        time.sleep(0.4)
-
-        # Press '5' to navigate to DuckDuckGo Onion search
+        # Navigate to DuckDuckGo Onion search (hotkey 5)
         send_key(s, "5")
-        time.sleep(4.5)
+        time.sleep(7.0)
 
         img_specs = capture_screenshot(s, "tests/24_tor_page_specs.png")
         assert img_specs.size == (680, 334)

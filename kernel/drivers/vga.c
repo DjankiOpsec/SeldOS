@@ -10,7 +10,12 @@
 #define VGA_HEIGHT 25
 #define FB_COLS 85
 #define FB_ROWS 20
+#if defined(__riscv)
+static uint16_t riscv_dummy_vga[VGA_WIDTH * VGA_HEIGHT];
+#define VGA_MEMORY riscv_dummy_vga
+#else
 #define VGA_MEMORY ((volatile uint16_t*)(0xFFFF800000000000ULL + 0xB8000))
+#endif
 
 // Bochs Graphics Adapter (BGA) port definitions
 #define VBE_DISPI_IOPORT_INDEX 0x01CE
@@ -121,11 +126,15 @@ static inline uint16_t vga_entry(unsigned char uc, uint8_t color) {
 }
 
 static void update_cursor(int x, int y) {
+#if !defined(__riscv)
     uint16_t pos = y * VGA_WIDTH + x;
     outb(0x3D4, 0x0F);
     outb(0x3D5, (uint8_t)(pos & 0xFF));
     outb(0x3D4, 0x0E);
     outb(0x3D5, (uint8_t)((pos >> 8) & 0xFF));
+#else
+    (void)x; (void)y;
+#endif
 }
 
 void vga_set_color(uint8_t fg, uint8_t bg) {

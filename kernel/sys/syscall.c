@@ -1,4 +1,5 @@
 #include "syscall.h"
+#include "fast_syscall.h"
 #include "vga.h"
 #include "serial.h"
 #include "kbd.h"
@@ -18,7 +19,7 @@ int validate_user_buffer(const void* user_ptr, size_t size, int write) {
     }
 
     // Must be strictly within canonical userspace boundary
-    if (uptr + (uint64_t)size > 0x00007FFFFFFFF000ULL) {
+    if (uptr + (uint64_t)size > USER_SPACE_LIMIT) {
         return 0;
     }
 

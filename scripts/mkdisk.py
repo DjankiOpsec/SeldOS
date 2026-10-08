@@ -165,16 +165,21 @@ def create_seldfs_image(output_path, files_to_write, compact=True):
 def main():
     output_disk = "build/disk.img"
     compact = True
+    bin_dir = "build/bin"
 
-    for arg in sys.argv[1:]:
+    i = 1
+    while i < len(sys.argv):
+        arg = sys.argv[i]
         if arg == "--compact":
             compact = True
         elif arg == "--full":
             compact = False
+        elif arg == "--bin-dir" and i + 1 < len(sys.argv):
+            bin_dir = sys.argv[i + 1]
+            i += 1
         elif not arg.startswith("-"):
             output_disk = arg
-
-    bin_dir = "build/bin"
+        i += 1
     utilities = [
         "init",
         "sh",
@@ -187,7 +192,6 @@ def main():
         "ps",
         "fm",
         "download",
-        "tor",
         "oracle",
         "fetch",
         "reboot",

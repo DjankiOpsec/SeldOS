@@ -16,6 +16,7 @@
 #include "pit.h"
 #include "string.h"
 #include "ksyms.h"
+#include "fast_syscall.h"
 
 #undef kernel_panic
 
@@ -144,6 +145,12 @@ static int is_valid_stack_addr(uint64_t addr) {
 
 static void panic_reboot(void) __attribute__((noreturn));
 static void panic_reboot(void) {
+#if defined(__riscv)
+    fast_sys_reboot();
+    while (1) {
+        __asm__ volatile ("wfi");
+    }
+#else
     // 1. 8042 keyboard controller reset pulse
     for (int t = 0; t < 1000; t++) {
         uint8_t temp = inb(0x64);
@@ -167,6 +174,7 @@ static void panic_reboot(void) {
     while (1) {
         __asm__ volatile ("hlt");
     }
+#endif
 }
 
 static int panic_draw_problem_wrapped(int start_row, const char* reason, uint8_t color) {
@@ -210,13 +218,22 @@ static int panic_draw_problem_wrapped(int start_row, const char* reason, uint8_t
 static void kernel_panic_extended(const char* file, int line, const char* func, const char* reason, struct interrupt_frame* frame, void* caller_rip) __attribute__((noreturn));
 
 static void kernel_panic_extended(const char* file, int line, const char* func, const char* reason, struct interrupt_frame* frame, void* caller_rip) {
+#if defined(__riscv)
+    __asm__ volatile ("csrci sstatus, 2");
+#else
     __asm__ volatile ("cli");
+#endif
     s_panic_in_progress = 1;
 
-    uint64_t rax, rbx, rcx, rdx, rsi, rdi, rbp, rsp, r8, r9, r10, r11, r12, r13, r14, r15;
+    uint64_t rax=0, rbx=0, rcx=0, rdx=0, rsi=0, rdi=0, rbp=0, rsp=0;
+    uint64_t r8=0, r9=0, r10=0, r11=0, r12=0, r13=0, r14=0, r15=0;
     uint64_t rflags = 0;
     void* rip = NULL;
 
+#if defined(__riscv)
+    (void)frame;
+    rip = caller_rip ? caller_rip : __builtin_return_address(0);
+#else
     if (frame != NULL) {
         rax = frame->rax;
         rbx = frame->rbx;
@@ -256,12 +273,20 @@ static void kernel_panic_extended(const char* file, int line, const char* func, 
         __asm__ volatile ("pushfq; pop %0" : "=r"(rflags));
         rip = caller_rip ? caller_rip : __builtin_return_address(0);
     }
+#endif
 
     uint64_t cr0 = 0, cr2 = 0, cr3 = 0, cr4 = 0;
+#if defined(__riscv)
+    __asm__ volatile ("csrr %0, sstatus" : "=r"(cr0));
+    __asm__ volatile ("csrr %0, stval"   : "=r"(cr2));
+    __asm__ volatile ("csrr %0, satp"    : "=r"(cr3));
+    __asm__ volatile ("csrr %0, scause"  : "=r"(cr4));
+#else
     __asm__ volatile ("mov %%cr0, %0" : "=r"(cr0));
     __asm__ volatile ("mov %%cr2, %0" : "=r"(cr2));
     __asm__ volatile ("mov %%cr3, %0" : "=r"(cr3));
     __asm__ volatile ("mov %%cr4, %0" : "=r"(cr4));
+#endif
 
     uint64_t uptime_ms = pit_get_uptime_ms();
 
@@ -705,6 +730,15 @@ static void kernel_panic_extended(const char* file, int line, const char* func, 
 
     // Interactive halt loop: Wait STRICTLY for physical keyboard ESC key (scancode 0x01)
     while (1) {
+#if defined(__riscv)
+        if (serial_has_char()) {
+            char c = serial_getchar();
+            if (c == 27 || c == 'r' || c == 'R') {
+                serial_puts("[+] Operator requested system reboot via serial [ESC]. Resetting hardware...\n");
+                panic_reboot();
+            }
+        }
+#else
         uint8_t status = inb(0x64);
         if (status & 0x01) {
             uint8_t sc = inb(0x60);
@@ -715,6 +749,7 @@ static void kernel_panic_extended(const char* file, int line, const char* func, 
                 panic_reboot();
             }
         }
+#endif
         for (volatile int i = 0; i < 50000; i++) {
             io_wait();
         }
@@ -732,7 +767,11 @@ void kernel_panic(const char* reason) {
 }
 
 void kernel_panic_exception(uint8_t vector, uint64_t err_code, struct interrupt_frame* frame) {
+#if defined(__riscv)
+    __asm__ volatile ("csrci sstatus, 2");
+#else
     __asm__ volatile ("cli");
+#endif
     s_panic_in_progress = 1;
 
     uint64_t offset = 0;
@@ -764,7 +803,11 @@ void kernel_panic_exception(uint8_t vector, uint64_t err_code, struct interrupt_
     if (vector == 14) {
         // Page Fault (#PF)
         uint64_t cr2 = 0;
+#if defined(__riscv)
+        __asm__ volatile ("csrr %0, stval" : "=r"(cr2));
+#else
         __asm__ volatile ("mov %%cr2, %0" : "=r"(cr2));
+#endif
         char cr2_hex[20];
         hex_to_str(cr2, cr2_hex);
         char err_hex[12];

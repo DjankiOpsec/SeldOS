@@ -19,12 +19,28 @@ static struct ramdisk_info s_ramdisk = {
     .is_present = 0
 };
 
+extern const uint8_t disk_blob_start[] __attribute__((weak));
+extern const uint8_t disk_blob_end[] __attribute__((weak));
+extern const uint64_t disk_blob_size __attribute__((weak));
+
 void ramdisk_init(uint64_t mb_magic, uint64_t mb_info_addr) {
     s_ramdisk.phys_start = 0;
     s_ramdisk.phys_end = 0;
     s_ramdisk.size = 0;
     s_ramdisk.virt_base = NULL;
     s_ramdisk.is_present = 0;
+
+    if (disk_blob_start && disk_blob_end > disk_blob_start) {
+        s_ramdisk.virt_base = (uint8_t*)disk_blob_start;
+        s_ramdisk.size = (uint64_t)(disk_blob_end - disk_blob_start);
+        s_ramdisk.phys_start = 0;
+        s_ramdisk.phys_end = s_ramdisk.size;
+        s_ramdisk.is_present = 1;
+        serial_puts("[+] Ramdisk: Embedded SeldFS storage blob active (Size: ");
+        serial_print_dec((uint32_t)(s_ramdisk.size / 1024));
+        serial_puts(" KiB)\n");
+        return;
+    }
 
     if (mb_info_addr == 0) return;
 

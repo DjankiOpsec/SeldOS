@@ -14,12 +14,22 @@ static int rdrand_available = 0;
 static uint64_t fallback_state = 0x5E1DCAFE5E1DCAFEULL;
 
 static inline uint64_t rdtsc(void) {
+#if defined(__riscv)
+    uint64_t val;
+    __asm__ volatile ("rdtime %0" : "=r"(val));
+    return val;
+#else
     uint32_t lo, hi;
     __asm__ volatile ("rdtsc" : "=a"(lo), "=d"(hi));
     return ((uint64_t)hi << 32) | lo;
+#endif
 }
 
 void rng_init(void) {
+#if defined(__riscv)
+    rdrand_available = 0;
+    serial_puts("[+] Crypto: RISC-V RDTIME timer entropy + SplitMix64 CSPRNG active.\n");
+#else
     uint32_t eax, ebx, ecx = 0, edx;
     __asm__ volatile ("cpuid"
         : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx)
@@ -34,6 +44,7 @@ void rng_init(void) {
         rdrand_available = 0;
         serial_puts("[!] Crypto: RDRAND not present, falling back to RDTSC SplitMix64 generator.\n");
     }
+#endif
 
     fallback_state ^= rdtsc();
 }
@@ -50,6 +61,7 @@ static uint64_t splitmix64(uint64_t* state) {
 }
 
 uint64_t rng_get_u64(void) {
+#if !defined(__riscv)
     if (rdrand_available) {
         uint64_t val;
         unsigned char ok;
@@ -64,6 +76,7 @@ uint64_t rng_get_u64(void) {
             }
         }
     }
+#endif
 
     // Fallback: entropy from cycle counter + SplitMix64
     fallback_state ^= rdtsc();

@@ -8,6 +8,43 @@
 #include "seld.h"
 #include <string.h>
 
+#if defined(__riscv)
+long seld_syscall(long num, long arg1, long arg2, long arg3) {
+    register long a7 __asm__("a7") = num;
+    register long a0 __asm__("a0") = arg1;
+    register long a1 __asm__("a1") = arg2;
+    register long a2 __asm__("a2") = arg3;
+    __asm__ volatile (
+        "ecall"
+        : "+r"(a0)
+        : "r"(a7), "r"(a1), "r"(a2)
+        : "memory"
+    );
+    return a0;
+}
+
+long seld_syscall4(long num, long arg1, long arg2, long arg3, long arg4) {
+    register long a7 __asm__("a7") = num;
+    register long a0 __asm__("a0") = arg1;
+    register long a1 __asm__("a1") = arg2;
+    register long a2 __asm__("a2") = arg3;
+    register long a3 __asm__("a3") = arg4;
+    __asm__ volatile (
+        "ecall"
+        : "+r"(a0)
+        : "r"(a7), "r"(a1), "r"(a2), "r"(a3)
+        : "memory"
+    );
+    return a0;
+}
+
+void seld_exit(int status) {
+    seld_syscall(SYS_EXIT, (long)status, 0, 0);
+    while (1) {
+        __asm__ volatile ("nop");
+    }
+}
+#else
 long seld_syscall(long num, long arg1, long arg2, long arg3) {
     long ret;
     register long r10 __asm__("r10") = 0;
@@ -38,6 +75,7 @@ void seld_exit(int status) {
         __asm__ volatile ("pause");
     }
 }
+#endif
 
 long seld_write(int fd, const void* buf, size_t count) {
     return seld_syscall(SYS_WRITE, (long)fd, (long)buf, (long)count);
@@ -364,22 +402,28 @@ int seld_https_download(const char* host, const char* path, const char* local_pa
 int seld_download_url(const char* url, const char* local_path) {
     if (!url || !local_path) return -1;
 
-    // Tor Browser package: Direct GitHub repo fetch over SeldTLS 1.3
+    // Tor Browser package: Local Gateway mirror first, fallback to GitHub over SeldTLS 1.3
     if (strcmp(url, "tor") == 0 || strcmp(url, "torbrowser") == 0) {
+        int r = seld_net_download(0, 8080, "/tor", local_path);
+        if (r == 0) return 0;
         return seld_https_download("raw.githubusercontent.com",
                                    "/DjankiOpsec/SeldOS/main/build/bin/tor",
                                    local_path);
     }
 
-    // DOOM package: Direct GitHub repo fetch over SeldTLS 1.3
+    // DOOM package: Local Gateway mirror first, fallback to GitHub over SeldTLS 1.3
     if (strcmp(url, "doom") == 0) {
+        int r = seld_net_download(0, 8080, "/doom", local_path);
+        if (r == 0) return 0;
         return seld_https_download("raw.githubusercontent.com",
                                    "/DjankiOpsec/SeldOS/main/build/bin/doom",
                                    local_path);
     }
 
-    // DOOM WAD game assets: Direct GitHub repo fetch over SeldTLS 1.3
+    // DOOM WAD game assets: Local Gateway mirror first, fallback to GitHub over SeldTLS 1.3
     if (strcmp(url, "wad") == 0 || strcmp(url, "doom1.wad") == 0) {
+        int r = seld_net_download(0, 8080, "/doom1.wad", local_path);
+        if (r == 0) return 0;
         return seld_https_download("raw.githubusercontent.com",
                                    "/DjankiOpsec/SeldOS/main/doom1.wad",
                                    local_path);

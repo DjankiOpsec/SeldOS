@@ -29,12 +29,19 @@ static int s_cpu_drv_enabled = 1;
 static inline void sched_update_tss(const struct task* t) {
     if (t->stack_base) {
         uint64_t rsp0 = ((uint64_t)t->stack_base + TASK_STACK_SIZE) & ~0xFULL;
+#if defined(__riscv)
+        kernel_syscall_stack_top = rsp0;
+#else
         tss_set_rsp0(rsp0);
+#endif
     } else {
+#if !defined(__riscv)
         tss_set_rsp0(kernel_syscall_stack_top);
+#endif
     }
 }
 
+#if !defined(__riscv)
 static void task_trampoline_helper(void) {
     void (*fn)(void);
     __asm__ volatile ("mov %%r15, %0" : "=r"(fn));
@@ -42,6 +49,7 @@ static void task_trampoline_helper(void) {
     if (fn) fn();
     sched_exit();
 }
+#endif
 
 void sched_init(void) {
     uint64_t rflags = spin_lock_irqsave(&sched_lock);
@@ -113,6 +121,15 @@ int sched_create_task(const char* name, void (*entry_fn)(void)) {
     // Align to 16 bytes
     sp = (uint64_t*)((uint64_t)sp & ~0xFULL);
 
+#if defined(__riscv)
+    // On RISC-V, task_switch_asm loads ra, s0..s11 from 0(sp)..96(sp) and adds 104
+    extern void task_trampoline_asm(void);
+    sp = (uint64_t*)((uint8_t*)sp - 104);
+    sp[0] = (uint64_t)task_trampoline_asm;   // ra
+    sp[1] = 0;                               // s0
+    sp[2] = (uint64_t)entry_fn;              // s1 (entry point passed to task_trampoline_asm)
+    for (int i = 3; i < 13; i++) sp[i] = 0;  // s2..s11
+#else
     // When task_switch_asm executes 'ret', it pops RIP.
     // We point RIP to task_trampoline_helper.
     *(--sp) = (uint64_t)task_trampoline_helper; // Return address (RIP)
@@ -126,6 +143,7 @@ int sched_create_task(const char* name, void (*entry_fn)(void)) {
     *(--sp) = 0;                 // r13
     *(--sp) = 0;                 // r14
     *(--sp) = (uint64_t)entry_fn; // r15 (top of stack, popped first into r15)
+#endif
 
     t->rsp = (uint64_t)sp;
 
@@ -226,7 +244,11 @@ void sched_yield(void) {
         if (tasks[current_task_idx].state == TASK_SLEEPING) {
             while (tasks[current_task_idx].state == TASK_SLEEPING) {
                 spin_unlock_irqrestore(&sched_lock, rflags);
+#if defined(__riscv)
+                __asm__ volatile ("wfi");
+#else
                 __asm__ volatile ("hlt");
+#endif
                 rflags = spin_lock_irqsave(&sched_lock);
                 if (pit_get_ticks() >= tasks[current_task_idx].sleep_until_ticks) {
                     tasks[current_task_idx].state = TASK_RUNNING;
@@ -254,6 +276,11 @@ void sched_yield(void) {
     task_switch_asm(&tasks[prev_idx].rsp, tasks[next_idx].rsp);
 
     // Restore interrupt flag saved by spin_lock_irqsave
+#if defined(__riscv)
+    if (rflags & 2) {
+        __asm__ volatile ("csrsi sstatus, 2" : : : "memory");
+    }
+#else
     __asm__ volatile (
         "push %0\n\t"
         "popfq"
@@ -261,6 +288,7 @@ void sched_yield(void) {
         : "r"(rflags)
         : "memory"
     );
+#endif
 }
 
 void sched_sleep(uint64_t ms) {
@@ -275,7 +303,11 @@ void sched_exit(void) {
     sched_yield();
 
     while (1) {
+#if defined(__riscv)
+        __asm__ volatile ("wfi");
+#else
         __asm__ volatile ("hlt");
+#endif
     }
 }
 

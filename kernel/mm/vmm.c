@@ -28,6 +28,169 @@ uint64_t vmm_get_kernel_pml4(void) {
     return kernel_pml4_phys;
 }
 
+#if defined(__riscv)
+
+#define RISCV_L2_INDEX(va) (((va) >> 30) & 0x1FF)
+#define RISCV_L1_INDEX(va) (((va) >> 21) & 0x1FF)
+#define RISCV_L0_INDEX(va) (((va) >> 12) & 0x1FF)
+
+#define RISCV_PTE_V (1ULL << 0)
+#define RISCV_PTE_R (1ULL << 1)
+#define RISCV_PTE_W (1ULL << 2)
+#define RISCV_PTE_X (1ULL << 3)
+#define RISCV_PTE_U (1ULL << 4)
+#define RISCV_PTE_G (1ULL << 5)
+#define RISCV_PTE_A (1ULL << 6)
+#define RISCV_PTE_D (1ULL << 7)
+
+#define RISCV_PTE_PA(pte) (((pte) >> 10) << 12)
+#define RISCV_PA_PTE(pa)  (((pa) >> 12) << 10)
+
+void vmm_switch_pml4(uint64_t phys_pml4) {
+    uint64_t satp = (8ULL << 60) | (phys_pml4 >> 12);
+    __asm__ volatile ("csrw satp, %0\n\tsfence.vma" : : "r"(satp) : "memory");
+}
+
+int vmm_map_page(uint64_t* pml4_virt, uint64_t virt, uint64_t phys, uint64_t flags) {
+    size_t l2_i = RISCV_L2_INDEX(virt);
+    size_t l1_i = RISCV_L1_INDEX(virt);
+    size_t l0_i = RISCV_L0_INDEX(virt);
+
+    if (!(pml4_virt[l2_i] & RISCV_PTE_V)) {
+        uint64_t new_table = (uint64_t)pmm_alloc_frame();
+        if (!new_table) return -1;
+        memset(phys_to_virt(new_table), 0, PAGE_SIZE);
+        pml4_virt[l2_i] = RISCV_PA_PTE(new_table) | RISCV_PTE_V;
+    }
+
+    uint64_t* l1_virt = (uint64_t*)phys_to_virt(RISCV_PTE_PA(pml4_virt[l2_i]));
+
+    if (!(l1_virt[l1_i] & RISCV_PTE_V)) {
+        uint64_t new_table = (uint64_t)pmm_alloc_frame();
+        if (!new_table) return -1;
+        memset(phys_to_virt(new_table), 0, PAGE_SIZE);
+        l1_virt[l1_i] = RISCV_PA_PTE(new_table) | RISCV_PTE_V;
+    }
+
+    uint64_t* l0_virt = (uint64_t*)phys_to_virt(RISCV_PTE_PA(l1_virt[l1_i]));
+
+    uint64_t pte_flags = RISCV_PTE_V | RISCV_PTE_R | RISCV_PTE_A | RISCV_PTE_D;
+    if (flags & VMM_FLAG_WRITABLE) pte_flags |= RISCV_PTE_W;
+    if (!(flags & VMM_FLAG_NO_EXECUTE)) pte_flags |= RISCV_PTE_X;
+    if (flags & VMM_FLAG_USER) pte_flags |= RISCV_PTE_U;
+
+    l0_virt[l0_i] = RISCV_PA_PTE(phys) | pte_flags;
+
+    __asm__ volatile ("sfence.vma %0, zero" : : "r"(virt) : "memory");
+    return 0;
+}
+
+int vmm_unmap_page(uint64_t* pml4_virt, uint64_t virt) {
+    size_t l2_i = RISCV_L2_INDEX(virt);
+    if (!(pml4_virt[l2_i] & RISCV_PTE_V)) return -1;
+
+    uint64_t* l1_virt = (uint64_t*)phys_to_virt(RISCV_PTE_PA(pml4_virt[l2_i]));
+    size_t l1_i = RISCV_L1_INDEX(virt);
+    if (!(l1_virt[l1_i] & RISCV_PTE_V)) return -1;
+
+    uint64_t* l0_virt = (uint64_t*)phys_to_virt(RISCV_PTE_PA(l1_virt[l1_i]));
+    size_t l0_i = RISCV_L0_INDEX(virt);
+
+    l0_virt[l0_i] = 0;
+    __asm__ volatile ("sfence.vma %0, zero" : : "r"(virt) : "memory");
+    return 0;
+}
+
+uint64_t vmm_get_mapping(uint64_t* pml4_virt, uint64_t virt) {
+    if (!pml4_virt) return 0;
+    size_t l2_i = RISCV_L2_INDEX(virt);
+    if (!(pml4_virt[l2_i] & RISCV_PTE_V)) return 0;
+
+    uint64_t* l1_virt = (uint64_t*)phys_to_virt(RISCV_PTE_PA(pml4_virt[l2_i]));
+    size_t l1_i = RISCV_L1_INDEX(virt);
+    if (!(l1_virt[l1_i] & RISCV_PTE_V)) return 0;
+
+    uint64_t* l0_virt = (uint64_t*)phys_to_virt(RISCV_PTE_PA(l1_virt[l1_i]));
+    size_t l0_i = RISCV_L0_INDEX(virt);
+    if (!(l0_virt[l0_i] & RISCV_PTE_V)) return 0;
+
+    return RISCV_PTE_PA(l0_virt[l0_i]);
+}
+
+uint64_t* vmm_create_address_space(void) {
+    uint64_t pml4_phys = (uint64_t)pmm_alloc_frame();
+    if (!pml4_phys) return NULL;
+
+    uint64_t* pml4_virt = (uint64_t*)phys_to_virt(pml4_phys);
+    memset(pml4_virt, 0, PAGE_SIZE);
+
+    // Guarantee kernel page table higher-half mappings are always intact
+    kernel_pml4_virt[256] = RISCV_PA_PTE(0x00000000ULL) | RISCV_PTE_V | RISCV_PTE_R | RISCV_PTE_W | RISCV_PTE_A | RISCV_PTE_D;
+    kernel_pml4_virt[258] = RISCV_PA_PTE(0x80000000ULL) | RISCV_PTE_V | RISCV_PTE_R | RISCV_PTE_W | RISCV_PTE_A | RISCV_PTE_D;
+    kernel_pml4_virt[510] = RISCV_PA_PTE(0x80000000ULL) | RISCV_PTE_V | RISCV_PTE_R | RISCV_PTE_W | RISCV_PTE_X | RISCV_PTE_A | RISCV_PTE_D;
+
+    for (size_t i = 256; i < 512; i++) {
+        pml4_virt[i] = kernel_pml4_virt[i];
+    }
+
+    // Explicitly guarantee essential supervisor Higher-Half mappings in child space
+    pml4_virt[256] = kernel_pml4_virt[256];
+    pml4_virt[258] = kernel_pml4_virt[258];
+    pml4_virt[510] = kernel_pml4_virt[510];
+
+    return pml4_virt;
+}
+
+void vmm_destroy_address_space(uint64_t* pml4_virt) {
+    if (!pml4_virt) return;
+
+    for (size_t i = 0; i < 256; i++) {
+        if ((pml4_virt[i] & RISCV_PTE_V) && !(pml4_virt[i] & (RISCV_PTE_R | RISCV_PTE_W | RISCV_PTE_X))) {
+            uint64_t* l1_virt = (uint64_t*)phys_to_virt(RISCV_PTE_PA(pml4_virt[i]));
+            for (size_t j = 0; j < 512; j++) {
+                if ((l1_virt[j] & RISCV_PTE_V) && !(l1_virt[j] & (RISCV_PTE_R | RISCV_PTE_W | RISCV_PTE_X))) {
+                    uint64_t* l0_virt = (uint64_t*)phys_to_virt(RISCV_PTE_PA(l1_virt[j]));
+                    for (size_t k = 0; k < 512; k++) {
+                        if (l0_virt[k] & RISCV_PTE_V) {
+                            uint64_t frame_phys = RISCV_PTE_PA(l0_virt[k]);
+                            if (frame_phys >= 0x80000000ULL && frame_phys < 0x100000000ULL) {
+                                memset(phys_to_virt(frame_phys), 0, PAGE_SIZE);
+                            }
+                            pmm_free_frame((void*)frame_phys);
+                        }
+                    }
+                    pmm_free_frame((void*)RISCV_PTE_PA(l1_virt[j]));
+                }
+            }
+            pmm_free_frame((void*)RISCV_PTE_PA(pml4_virt[i]));
+        }
+    }
+
+    pmm_free_frame((void*)virt_to_phys(pml4_virt));
+}
+
+void vmm_init(void) {
+    kernel_pml4_phys = (uint64_t)pmm_alloc_frame();
+    kernel_pml4_virt = (uint64_t*)phys_to_virt(kernel_pml4_phys);
+    memset(kernel_pml4_virt, 0, PAGE_SIZE);
+
+    // HHDM MMIO (0xFFFFFFC000000000 -> 0x00000000, 1 GiB)
+    kernel_pml4_virt[256] = RISCV_PA_PTE(0x00000000ULL) | RISCV_PTE_V | RISCV_PTE_R | RISCV_PTE_W | RISCV_PTE_A | RISCV_PTE_D;
+    // HHDM RAM (0xFFFFFFC080000000 -> 0x80000000, 1 GiB)
+    kernel_pml4_virt[258] = RISCV_PA_PTE(0x80000000ULL) | RISCV_PTE_V | RISCV_PTE_R | RISCV_PTE_W | RISCV_PTE_A | RISCV_PTE_D;
+    // Higher-half Kernel (0xFFFFFFFF80000000 -> 0x80000000, 1 GiB)
+    kernel_pml4_virt[510] = RISCV_PA_PTE(0x80000000ULL) | RISCV_PTE_V | RISCV_PTE_R | RISCV_PTE_W | RISCV_PTE_X | RISCV_PTE_A | RISCV_PTE_D;
+
+    vmm_switch_pml4(kernel_pml4_phys);
+    serial_puts("[+] VMM: RISC-V Sv39 Higher-Half Paging active. kernel_pml4_phys=");
+    serial_print_hex(kernel_pml4_phys);
+    serial_puts(" k510=");
+    serial_print_hex(kernel_pml4_virt[510]);
+    serial_puts("\n");
+}
+
+#else
+
 void vmm_switch_pml4(uint64_t phys_pml4) {
     __asm__ volatile ("mov %0, %%cr3" : : "r"(phys_pml4) : "memory");
 }
@@ -253,3 +416,4 @@ void vmm_init(void) {
 
     serial_puts("[+] VMM: Higher-Half paging active. Strict W^X protection enforced on kernel sections.\n");
 }
+#endif

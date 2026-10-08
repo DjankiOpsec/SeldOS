@@ -17,6 +17,7 @@
 #include "sha256.h"
 #include "sched.h"
 #include "vmm.h"
+#include "fast_syscall.h"
 #include "spinlock.h"
 #include "syscall.h"
 #include "net.h"
@@ -367,13 +368,13 @@ int selftest_user_buffer(void) {
     }
 
     // Valid user stack range must pass
-    if (validate_user_buffer((const void*)(0x00007FFFFFFFF000ULL - 64), 64, 1) != 1) {
+    if (validate_user_buffer((const void*)(USER_SPACE_LIMIT - 64), 64, 1) != 1) {
         print_out("[-] SELFTEST:USERBUF FAILED: Valid user stack range failed!\n");
         return 0;
     }
 
     // Exceeding userspace upper limit must fail
-    if (validate_user_buffer((const void*)0x00007FFFFFFFF000ULL, 1, 0) != 0) {
+    if (validate_user_buffer((const void*)USER_SPACE_LIMIT, 1, 0) != 0) {
         print_out("[-] SELFTEST:USERBUF FAILED: Out-of-bounds pointer validation succeeded!\n");
         return 0;
     }
@@ -391,12 +392,12 @@ int selftest_user_buffer(void) {
     }
 
     // HHDM address must fail
-    if (validate_user_buffer((const void*)0xFFFF800000000000ULL, 64, 0) != 0) {
+    if (validate_user_buffer((const void*)HHDM_VIRT_OFFSET, 64, 0) != 0) {
         print_out("[-] SELFTEST:USERBUF FAILED: HHDM address validation succeeded!\n");
         return 0;
     }
 
-    print_out("[+] [SELFTEST:USERBUF] PASSED: Canonical user limits (0 < ptr + sz <= 0x7FFFFFFFF000) enforced.\n");
+    print_out("[+] [SELFTEST:USERBUF] PASSED: Canonical user limits enforced.\n");
     return 1;
 }
 

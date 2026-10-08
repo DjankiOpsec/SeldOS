@@ -1039,7 +1039,6 @@ int net_send_udp(uint32_t dest_ip, uint16_t src_port, uint16_t dest_port, const 
 
 int net_dns_resolve(const char* hostname, uint32_t* ip_out) {
     if (!hostname || !ip_out) return -1;
-    if (!net_is_online()) return -4; // Network link offline
 
     // 0. Sanitize input hostname: strip leading spaces, protocol prefix, trailing slash/newline
     const char* p = hostname;
@@ -1068,6 +1067,8 @@ int net_dns_resolve(const char* hostname, uint32_t* ip_out) {
         serial_puts(" -> DROPPED\n");
         return -9; // RFC 7686 EPERM
     }
+
+    if (!net_is_online()) return -4; // Network link offline
 
     // 1. Literal IPv4 check
     if (net_parse_ip(clean_host, ip_out) == 0) {
@@ -1239,6 +1240,7 @@ int net_tcp_socket_connect(uint32_t server_ip, uint16_t port) {
     s->used = 1;
     s->state = TCP_STATE_SYN_SENT;
     s->remote_ip = server_ip;
+    s->remote_port = port;
     // RFC 6056: Ephemeral port randomization (49152..65535) via CSPRNG
     uint16_t port_range = 65535 - 49152 + 1;
     s->local_port = (uint16_t)(49152 + (rng_get_u64() % port_range));

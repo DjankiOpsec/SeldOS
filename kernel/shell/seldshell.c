@@ -118,6 +118,19 @@ static void cmd_license(int argc, char* argv[]) {
 
 static void cmd_creg(int argc, char* argv[]) {
     (void)argc; (void)argv;
+#if defined(__riscv)
+    uint64_t sstatus, satp, stvec, scause;
+    __asm__ volatile ("csrr %0, sstatus" : "=r"(sstatus));
+    __asm__ volatile ("csrr %0, satp" : "=r"(satp));
+    __asm__ volatile ("csrr %0, stvec" : "=r"(stvec));
+    __asm__ volatile ("csrr %0, scause" : "=r"(scause));
+
+    print_out("Supervisor CSR Status:\n");
+    print_out("  sstatus: "); print_hex64(sstatus); print_out(" [Supervisor Status]\n");
+    print_out("  satp:    "); print_hex64(satp);    print_out(" [Sv39 Page Table Root]\n");
+    print_out("  stvec:   "); print_hex64(stvec);   print_out(" [Trap Vector Address]\n");
+    print_out("  scause:  "); print_hex64(scause);  print_out(" [Last Exception Cause]\n");
+#else
     uint64_t cr0, cr2, cr3, cr4;
     __asm__ volatile ("mov %%cr0, %0" : "=r"(cr0));
     __asm__ volatile ("mov %%cr2, %0" : "=r"(cr2));
@@ -129,10 +142,15 @@ static void cmd_creg(int argc, char* argv[]) {
     print_out("  CR2: "); print_hex64(cr2); print_out(" [Last Page Fault Address]\n");
     print_out("  CR3: "); print_hex64(cr3); print_out(" [PML4 Physical Base Address]\n");
     print_out("  CR4: "); print_hex64(cr4); print_out(" [PAE, OSFXSR, OSXMMEXCPT]\n");
+#endif
 }
 
 static void cmd_cpuid(int argc, char* argv[]) {
     (void)argc; (void)argv;
+#if defined(__riscv)
+    print_out("CPU Architecture: RISC-V 64-bit (RV64GC)\n");
+    print_out("ISA Extensions: RV64IMAFDC (Base, Mul/Div, Atomics, Float, Double, Compressed)\n");
+#else
     uint32_t eax = 0, ebx = 0, ecx = 0, edx = 0;
     __asm__ volatile ("cpuid"
         : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx)
@@ -150,6 +168,7 @@ static void cmd_cpuid(int argc, char* argv[]) {
     print_out(" (Max basic CPUID leaf: ");
     print_dec64(eax);
     print_out(")\n");
+#endif
 }
 
 static void cmd_meminfo(int argc, char* argv[]) {
@@ -622,6 +641,9 @@ static void cmd_echo(int argc, char* argv[]) {
 
 static void cmd_reboot(int argc, char* argv[]) {
     (void)argc; (void)argv;
+#if defined(__riscv)
+    fast_sys_reboot();
+#else
     print_out("[!] Initiating ACPI/PS2 system reset...\n");
     uint8_t temp;
     do {
@@ -632,6 +654,7 @@ static void cmd_reboot(int argc, char* argv[]) {
     while (1) {
         __asm__ volatile ("hlt");
     }
+#endif
 }
 
 static void cmd_ifconfig(int argc, char* argv[]) {

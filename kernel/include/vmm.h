@@ -13,8 +13,13 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#if defined(__riscv)
+#define KERNEL_VIRT_OFFSET 0xFFFFFFFF80000000ULL
+#define HHDM_VIRT_OFFSET   0xFFFFFFC000000000ULL
+#else
 #define KERNEL_VIRT_OFFSET 0xFFFFFFFF80000000ULL
 #define HHDM_VIRT_OFFSET   0xFFFF800000000000ULL
+#endif
 
 #define VMM_FLAG_PRESENT    (1ULL << 0)
 #define VMM_FLAG_WRITABLE   (1ULL << 1)
@@ -29,6 +34,18 @@ static inline void* phys_to_virt(uint64_t phys) {
 // Convert HHDM virtual address to physical address
 static inline uint64_t virt_to_phys(void* virt) {
     return (uint64_t)virt - HHDM_VIRT_OFFSET;
+}
+
+static inline uint64_t vmm_get_active_root(void) {
+#if defined(__riscv)
+    uint64_t satp;
+    __asm__ volatile ("csrr %0, satp" : "=r"(satp));
+    return (satp & 0x00000FFFFFFFFFFFULL) << 12;
+#else
+    uint64_t cr3;
+    __asm__ volatile ("mov %%cr3, %0" : "=r"(cr3));
+    return cr3;
+#endif
 }
 
 void vmm_init(void);

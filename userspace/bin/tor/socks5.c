@@ -56,7 +56,7 @@ int socks5_connect(uint32_t proxy_ip, uint16_t proxy_port, const char* target_ho
 
     // Step 4: Await SOCKS5 Response Header (4 bytes: VER, REP, RSV, ATYP)
     uint8_t resp_hdr[4];
-    n = seld_tcp_recv(sock, resp_hdr, sizeof(resp_hdr), 5000);
+    n = seld_tcp_recv(sock, resp_hdr, sizeof(resp_hdr), 15000);
     if (n != 4 || resp_hdr[0] != 0x05) {
         seld_tcp_close(sock);
         return -12; // Invalid response

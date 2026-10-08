@@ -168,6 +168,10 @@ def main():
         # TEST 3: Launch DOOM & Verify Main Menu Presentation
         # -------------------------------------------------------------
         print("\n=== TEST 3: DOOM Launch & Immediate Main Menu ===")
+        send_string(s, "download doom\n")
+        time.sleep(4.0)
+        send_string(s, "download wad\n")
+        time.sleep(8.0)
         send_string(s, "doom\n")
         time.sleep(2.5) # Wait for DOOM initialization
 

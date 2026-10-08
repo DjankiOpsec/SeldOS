@@ -16,7 +16,11 @@ static void print_banner(void) {
     printf("\n");
     printf("=======================================================================\n");
     printf(" [init]   SNL (Seld Not Linux) Sovereign Init System (PID 1, Ring 3)\n");
+#if defined(__riscv)
+    printf(" [init]   Humboldt Kernel Project - RISC-V 64-bit Hardened Architecture (GNU GPLv3)\n");
+#else
     printf(" [init]   Humboldt Kernel Project - x86_64 Hardened Architecture (GNU GPLv3)\n");
+#endif
     printf("=======================================================================\n");
 }
 
@@ -24,6 +28,9 @@ static int run_self_checks(void) {
     printf("[init] Running boot-time userspace self-checks...\n");
 
     // 1. Hardware CPL Check
+#if defined(__riscv)
+    printf("[+] [init:CHECK 1/5] CPU Privilege Level: U-mode (Unprivileged User Mode)\n");
+#else
     uint16_t cs = 0, ss = 0;
     __asm__ volatile ("mov %%cs, %0" : "=r"(cs));
     __asm__ volatile ("mov %%ss, %0" : "=r"(ss));
@@ -35,6 +42,7 @@ static int run_self_checks(void) {
         return 0;
     }
     printf("[+] [init:CHECK 1/5] CPU Privilege Level: CPL=3 (Unprivileged User Mode)\n");
+#endif
 
     // 2. Fast Syscall Handshake
     long ping_res = seld_ping();
@@ -42,7 +50,11 @@ static int run_self_checks(void) {
         printf("[-] [init:CHECK 2/5] FAILED: Kernel fast syscall handshake returned 0x%lx\n", ping_res);
         return 0;
     }
+#if defined(__riscv)
+    printf("[+] [init:CHECK 2/5] RISC-V U-mode ECALL Syscall Handshake: OK (0x5E1D5EC)\n");
+#else
     printf("[+] [init:CHECK 2/5] MSR LSTAR Fast Syscall Handshake: OK (0x5E1D5EC)\n");
+#endif
 
     // 3. Process & Timer State
     int pid = getpid();

@@ -51,7 +51,11 @@ int main(int argc, char* argv[]) {
     printf("                          SNL (Seld Not Linux) Sovereign Shell v0.1\n");
     printf("                          Ring 3 Sovereign CLI Environment (GPLv3)\n");
     printf("                          Humboldt Framebuffer 680x334 | 39-Color Palette\n");
+#if defined(__riscv)
+    printf("                          RISC-V 64-bit (RV64GC) Isolated Execution\n");
+#else
     printf("                          x86_64 Long Mode Isolated Execution\n");
+#endif
     printf("\n");
     printf("\n");
     printf("\n");

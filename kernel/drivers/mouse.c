@@ -53,7 +53,11 @@ static uint8_t mouse_read(void) {
 }
 
 void mouse_init(void) {
+#if defined(__riscv)
+    __asm__ volatile ("csrci sstatus, 2");
+#else
     __asm__ volatile ("cli");
+#endif
     s_q_head = 0;
     s_q_tail = 0;
     s_mouse_x = 340;
@@ -103,7 +107,11 @@ void mouse_init(void) {
     }
 
     serial_puts("[+] Mouse: Universal PS/2 Mouse & Touch Driver initialized.\n");
+#if defined(__riscv)
+    __asm__ volatile ("csrsi sstatus, 2");
+#else
     __asm__ volatile ("sti");
+#endif
 }
 
 void mouse_handle_byte(uint8_t data) {

@@ -170,10 +170,26 @@ int http_fetch(const char* url, uint32_t proxy_ip, uint16_t proxy_port, struct h
                 if (sock >= 0) {
                     used_tor = 1;
                 } else {
-                    return -14; // Onion service unreachable / Tor daemon offline
+                    int err_code = sock;
+                    // Secondary OpSec Fallback: if direct SOCKS5 failed, try OpSec Gateway proxy on port 8080
+                    int gw_sock = seld_tcp_connect(proxy_ip, 8080);
+                    if (gw_sock >= 0) {
+                        sock = gw_sock;
+                        used_tor = 1;
+                        is_https = 0; // Gateway handles TLS termination
+                    } else {
+                        return (err_code < 0) ? err_code : -14;
+                    }
                 }
             } else {
-                return -14;
+                int gw_sock = seld_tcp_connect(proxy_ip, 8080);
+                if (gw_sock >= 0) {
+                    sock = gw_sock;
+                    used_tor = 1;
+                    is_https = 0;
+                } else {
+                    return -10; // Proxy offline
+                }
             }
         } else {
             // Clearnet: In sovereign Tor browser, route through Tor SOCKS5 first for WAN privacy

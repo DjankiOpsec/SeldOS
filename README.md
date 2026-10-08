@@ -10,7 +10,8 @@
 
 <p align="center">
   <a href="https://www.gnu.org/licenses/gpl-3.0"><img src="https://img.shields.io/badge/License-GPLv3-blue.svg?style=for-the-badge&logo=gnu&logoColor=white" alt="GPLv3 License"></a>
-  <img src="https://img.shields.io/badge/Architecture-x86__64%20Bare--Metal-red.svg?style=for-the-badge&logo=intel&logoColor=white" alt="x86_64 Long Mode">
+  <img src="https://img.shields.io/badge/Architecture-x86__64%20%7C%20RISC--V%2064-red.svg?style=for-the-badge&logo=intel&logoColor=white" alt="x86_64 & RISC-V 64">
+  <img src="https://img.shields.io/badge/ISA-RV64GC%20Supervisor-teal.svg?style=for-the-badge&logo=riscv&logoColor=white" alt="RISC-V RV64GC">
   <img src="https://img.shields.io/badge/Kernel-Higher--Half%20C99%2FNASM-purple.svg?style=for-the-badge&logo=c&logoColor=white" alt="Humboldt Kernel">
   <img src="https://img.shields.io/badge/Security-W%5EX%20%7C%20Pledge%20%7C%20Unveil-success.svg?style=for-the-badge&logo=openbsd&logoColor=white" alt="OpSec Hardened">
   <img src="https://img.shields.io/badge/Network-SeldTLS%201.3%20%7C%20Anti--DPI-critical.svg?style=for-the-badge&logo=torproject&logoColor=white" alt="SeldTLS 1.3">
@@ -1072,6 +1073,23 @@ python3 tests/verify_net.py              # Тест нативного TCP/IP с
 
 # 6. Очистка артефактов сборки
 make clean
+```
+
+### 9.3. Сборка и тестирование под RISC-V 64-bit (RV64GC):
+
+SeldOS поддерживает полнофункциональную кросс-компиляцию и исполнение под архитектуру **RISC-V 64-bit (RV64GC)** с аппаратной защитой памяти (Sv39 Paging), изоляцией пользовательского пространства (U-mode), быстрым `ecall` интерфейсом системных вызовов и монтированием файловой системы SeldFS.
+
+```bash
+# 1. Сборка ядра и диска под RISC-V 64-bit
+make riscv
+
+# 2. Интерактивный запуск в QEMU (S-mode через OpenSBI)
+make qemu-riscv
+# либо напрямую:
+qemu-system-riscv64 -M virt -m 128M -nographic -bios default -kernel build/kernel-riscv64.elf
+
+# 3. Запуск автоматизированного интеграционного набора тестов RISC-V
+python3 tests/verify_riscv.py
 ```
 
 ---

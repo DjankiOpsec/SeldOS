@@ -21,6 +21,55 @@
 static volatile uint64_t timer_ticks = 0;
 static uint32_t current_hz = PIT_TARGET_HZ;
 
+#if defined(__riscv)
+
+void pit_init(uint32_t frequency) {
+    if (frequency == 0) frequency = PIT_TARGET_HZ;
+    current_hz = frequency;
+    timer_ticks = 0;
+    serial_puts("[+] PIT: RISC-V 10 MHz hardware RDTIME timer initialized (100 Hz quantizer).\n");
+}
+
+void pit_handle_interrupt(void) {
+    timer_ticks++;
+    audio_timer_tick();
+    kbd_timer_tick();
+}
+
+uint64_t pit_get_ticks(void) {
+    uint64_t now;
+    __asm__ volatile ("rdtime %0" : "=r"(now));
+    return (now / 100000ULL); // 100 Hz at 10 MHz
+}
+
+uint64_t pit_get_uptime_ms(void) {
+    uint64_t now;
+    __asm__ volatile ("rdtime %0" : "=r"(now));
+    return (now / 10000ULL); // 10 MHz -> ms
+}
+
+uint64_t pit_get_uptime_sec(void) {
+    uint64_t now;
+    __asm__ volatile ("rdtime %0" : "=r"(now));
+    return (now / 10000000ULL); // 10 MHz -> sec
+}
+
+void pit_sleep_ms(uint64_t ms) {
+    if (ms == 0) return;
+    if (ms > 60000) ms = 60000;
+    uint64_t start;
+    __asm__ volatile ("rdtime %0" : "=r"(start));
+    uint64_t target = start + ms * 10000ULL;
+    while (1) {
+        uint64_t now;
+        __asm__ volatile ("rdtime %0" : "=r"(now));
+        if (now >= target) break;
+        __asm__ volatile ("nop");
+    }
+}
+
+#else
+
 void pit_init(uint32_t frequency) {
     if (frequency == 0) frequency = PIT_TARGET_HZ;
     current_hz = frequency;
@@ -75,3 +124,5 @@ void pit_sleep_ms(uint64_t ms) {
         __asm__ volatile ("hlt");
     }
 }
+
+#endif

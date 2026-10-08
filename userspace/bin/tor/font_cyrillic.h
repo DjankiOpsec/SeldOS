@@ -92,17 +92,23 @@ static inline const char* utf8_next_codepoint(const char* s, uint32_t* cp_out) {
         *cp_out = c0;
         return s;
     } else if ((c0 & 0xE0) == 0xC0) {
+        if (!*s) { *cp_out = c0; return s; }
         uint8_t c1 = (uint8_t)*s++;
         *cp_out = ((c0 & 0x1F) << 6) | (c1 & 0x3F);
         return s;
     } else if ((c0 & 0xF0) == 0xE0) {
+        if (!*s) { *cp_out = c0; return s; }
         uint8_t c1 = (uint8_t)*s++;
+        if (!*s) { *cp_out = c0; return s; }
         uint8_t c2 = (uint8_t)*s++;
         *cp_out = ((c0 & 0x0F) << 12) | ((c1 & 0x3F) << 6) | (c2 & 0x3F);
         return s;
     } else if ((c0 & 0xF8) == 0xF0) {
+        if (!*s) { *cp_out = c0; return s; }
         uint8_t c1 = (uint8_t)*s++;
+        if (!*s) { *cp_out = c0; return s; }
         uint8_t c2 = (uint8_t)*s++;
+        if (!*s) { *cp_out = c0; return s; }
         uint8_t c3 = (uint8_t)*s++;
         *cp_out = ((c0 & 0x07) << 18) | ((c1 & 0x3F) << 12) | ((c2 & 0x3F) << 6) | (c3 & 0x3F);
         return s;

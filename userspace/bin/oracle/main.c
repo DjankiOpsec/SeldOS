@@ -242,9 +242,15 @@ static void speak_from_file(int target_words, uint64_t seed) {
 }
 
 static inline uint64_t rdtsc_seed(void) {
+#if defined(__riscv)
+    uint64_t val;
+    __asm__ volatile ("rdtime %0" : "=r"(val));
+    return val;
+#else
     uint32_t lo, hi;
     __asm__ volatile ("rdtsc" : "=a"(lo), "=d"(hi));
     return ((uint64_t)hi << 32) | lo;
+#endif
 }
 
 int main(int argc, char* argv[]) {

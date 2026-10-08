@@ -878,9 +878,9 @@ int main(int argc, char* argv[]) {
     }
 
     // OpenBSD-style Seld-Pledge Sandboxing:
-    // Restrict browser process exclusively to stdio/heap, read-only filesystem, network sockets, and DNS.
+    // Restrict browser process exclusively to stdio/heap, read-only filesystem, network sockets, DNS, and audio.
     // Tor Browser is strictly forbidden from modifying disk files, spawning binaries, or rebooting.
-    seld_pledge(PLEDGE_STDIO | PLEDGE_RPATH | PLEDGE_NET | PLEDGE_DNS);
+    seld_pledge(PLEDGE_STDIO | PLEDGE_RPATH | PLEDGE_NET | PLEDGE_DNS | PLEDGE_AUDIO);
 
     const char* start_url = "home";
     if (argc > 1 && argv[1] && argv[1][0]) {
@@ -935,6 +935,9 @@ int main(int argc, char* argv[]) {
                         s_hist_idx--;
                         load_url(s_history[s_hist_idx]);
                         needs_page_render = 1;
+                        while (seld_poll_mouse(&mev) > 0);
+                        s_prev_mouse_btn = 0;
+                        break;
                     }
                 }
                 // Click [> Forward]
@@ -943,6 +946,9 @@ int main(int argc, char* argv[]) {
                         s_hist_idx++;
                         load_url(s_history[s_hist_idx]);
                         needs_page_render = 1;
+                        while (seld_poll_mouse(&mev) > 0);
+                        s_prev_mouse_btn = 0;
+                        break;
                     }
                 }
                 // Click [R Reload]
@@ -950,6 +956,9 @@ int main(int argc, char* argv[]) {
                     http_reset_tor_state();
                     load_url(s_current_url);
                     needs_page_render = 1;
+                    while (seld_poll_mouse(&mev) > 0);
+                    s_prev_mouse_btn = 0;
+                    break;
                 }
                 // Click URL Address Bar
                 else if (s_mouse_x >= 72 && s_mouse_x <= 488 && s_mouse_y >= 29 && s_mouse_y <= 49) {
@@ -963,6 +972,9 @@ int main(int argc, char* argv[]) {
                         s_url_editing = 0;
                         load_url(s_edit_url);
                         needs_page_render = 1;
+                        while (seld_poll_mouse(&mev) > 0);
+                        s_prev_mouse_btn = 0;
+                        break;
                     } else {
                         // Reset circuits & clear history
                         http_reset_tor_state();
@@ -971,6 +983,9 @@ int main(int argc, char* argv[]) {
                         s_hist_idx = -1;
                         load_url("home");
                         needs_page_render = 1;
+                        while (seld_poll_mouse(&mev) > 0);
+                        s_prev_mouse_btn = 0;
+                        break;
                     }
                 }
                 // Click Vertical Scrollbar Track / Thumb
@@ -1005,15 +1020,25 @@ int main(int argc, char* argv[]) {
                 else if (s_mouse_x >= VP_X && s_mouse_x <= VP_X + VP_W - 14 &&
                          s_mouse_y >= VP_Y && s_mouse_y <= VP_Y + VP_H) {
                     s_url_editing = 0;
+                    int link_clicked = 0;
                     for (int i = 0; i < s_doc.link_count; i++) {
                         struct html_link* l = &s_doc.links[i];
                         if (s_mouse_x >= l->x && s_mouse_x < l->x + l->w &&
                             s_mouse_y >= l->y && s_mouse_y < l->y + l->h) {
+                            char link_href[HTTP_MAX_URL_LEN];
+                            strncpy(link_href, l->href, sizeof(link_href) - 1);
+                            link_href[sizeof(link_href) - 1] = '\0';
                             seld_beep(1200, 30);
-                            load_url(l->href);
+                            load_url(link_href);
                             needs_page_render = 1;
+                            link_clicked = 1;
                             break;
                         }
+                    }
+                    if (link_clicked) {
+                        while (seld_poll_mouse(&mev) > 0);
+                        s_prev_mouse_btn = 0;
+                        break;
                     }
                 }
             } else if (btn_down && s_sb_dragging) {
