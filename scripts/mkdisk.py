@@ -197,7 +197,8 @@ def main():
         "reboot",
         "poweroff",
         "purge",
-        "stealth"
+        "stealth",
+        "diode"
     ]
 
     files_to_write = []
@@ -236,6 +237,14 @@ def main():
         "4. Cooperative Scheduler with Ring 0 / Ring 3 Privilege Gates\n"
     ).encode("utf-8")
     files_to_write.append(("opsec.txt", sample_opsec))
+
+    sample_secret = (
+        "CONFIDENTIAL AIR-GAP PAYLOAD\n"
+        "SeldOS Sovereign Optical & Acoustic Data Diode System.\n"
+        "Encrypted via AES-128-GCM, Key broadcast across acoustic air-gap.\n"
+        "Zero-Trust, Zero-Telemetry, Fail-Closed.\n"
+    ).encode("utf-8")
+    files_to_write.append(("secret.txt", sample_secret))
 
     corpus_path = "tools/host_test/data/corpus.txt"
     if os.path.exists(corpus_path):

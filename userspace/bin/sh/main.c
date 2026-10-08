@@ -629,6 +629,7 @@ static void builtin_help(void) {
     printf("  unveil <p> <m>  Seld-Unveil Filesystem Sandboxing (OpenBSD unveil: r, w, x, c, lock)\n");
     printf("  selftest        Execute userspace Ring 3 verification test suite\n\n");
     printf("External Utilities in /bin/:\n");
+    printf("  diode [cmd]     Air-Gap Optical & Acoustic Data Diode (keygen, send, beep, qr)\n");
     printf("  stealth [cmd]   Anti-TSPU/DPI Stealth Suite & Native C99 VLESS Client\n");
     printf("  ls              List files with size, blocks, and SHA-256 hash\n");
     printf("  cat <file>      Display contents of file\n");

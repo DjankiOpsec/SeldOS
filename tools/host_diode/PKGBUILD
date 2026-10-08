@@ -1,0 +1,34 @@
+# Maintainer: SeldOS Sovereign Team <opsec@seldos.org>
+pkgname=seld-airgap
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Sovereign Optical & Acoustic Air-Gap Receiver for SeldOS (Zero-BadUSB Data Diode)"
+arch=('any')
+url="https://github.com/DjankiOpsec/SeldOS"
+license=('GPL3')
+depends=(
+    'python'
+    'python-cryptography'
+    'python-numpy'
+)
+optdepends=(
+    'grim: Fast native Wayland screen capture (Hyprland / Sway) for QEMU'
+    'python-opencv: Fast QR code detection and image processing'
+    'python-sounddevice: Low-latency live audio capture'
+    'alsa-utils: Fallback live audio recording via arecord'
+    'ffmpeg: Fallback webcam, screen, and audio stream processing'
+)
+source=(
+    'seld_diode_receiver.py'
+    'README.md'
+)
+sha256sums=(
+    'SKIP'
+    'SKIP'
+)
+
+package() {
+    install -Dm755 "${srcdir}/seld_diode_receiver.py" "${pkgdir}/usr/bin/seld-diode-receiver"
+    ln -sf /usr/bin/seld-diode-receiver "${pkgdir}/usr/bin/seld-airgap"
+    install -Dm644 "${srcdir}/README.md" "${pkgdir}/usr/share/doc/${pkgname}/README.md"
+}

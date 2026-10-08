@@ -16,7 +16,7 @@ LIBC_SRCS = userspace/libc/src/syscall.c \
             userspace/libc/src/seld_tls.c \
             userspace/libc/src/seld_vless.c
 
-UTILS = init sh ls cat echo rm sha256sum uname ps fm download oracle fetch reboot poweroff purge stealth
+UTILS = init sh ls cat echo rm sha256sum uname ps fm download oracle fetch reboot poweroff purge stealth diode
 
 # ---------------------------------------------------------------------------
 # x86_64 Architecture Definitions
@@ -91,9 +91,9 @@ RV_ALL_KOBJS = $(RV_C_KOBJS) $(RV_ASM_KOBJS)
 # Target Dispatch
 # ---------------------------------------------------------------------------
 ifeq ($(filter $(ARCH),riscv riscv64),)
-all: $(X86_ISO_IMAGE) $(X86_DISK_IMG) build/bin/tor build/bin/doom
+all: $(X86_ISO_IMAGE) $(X86_DISK_IMG) build/bin/tor build/bin/doom build/bin/diode
 else
-all: $(RV_KERNEL_ELF) $(RV_DISK_IMG) $(RV_BIN)/tor
+all: $(RV_KERNEL_ELF) $(RV_DISK_IMG) $(RV_BIN)/tor $(RV_BIN)/diode
 endif
 
 # x86_64 Targets
@@ -124,6 +124,15 @@ build/obj_tor_%.o: userspace/bin/tor/%.c userspace/bin/tor/*.h userspace/libc/in
 build/bin/tor: $(X86_USER_CRT0) $(addprefix build/obj_tor_, main.o socks5.o http.o html.o) $(X86_LIBSNL) userspace/linker.ld
 	@mkdir -p build/bin
 	ld -T userspace/linker.ld -nostdlib -o $@ $(X86_USER_CRT0) $(addprefix build/obj_tor_, main.o socks5.o http.o html.o) --whole-archive $(X86_LIBSNL) --no-whole-archive
+
+build/obj_diode_%.o: userspace/bin/diode/%.c userspace/bin/diode/*.h userspace/libc/include/*.h
+	@mkdir -p build
+	$(CC) $(X86_USER_CFLAGS) -Iuserspace/bin/diode -c $< -o $@
+
+build/bin/diode: $(X86_USER_CRT0) $(addprefix build/obj_diode_, main.o diode_crypto.o fsk.o qrcodegen.o) $(X86_LIBSNL) userspace/linker.ld
+	@mkdir -p build/bin
+	ld -T userspace/linker.ld -nostdlib -o $@ $(X86_USER_CRT0) $(addprefix build/obj_diode_, main.o diode_crypto.o fsk.o qrcodegen.o) --whole-archive $(X86_LIBSNL) --no-whole-archive
+
 
 build/obj_doom_%.o: userspace/doom/%.c
 	@mkdir -p build
@@ -177,16 +186,20 @@ kernel/net/%.o: kernel/net/%.c
 kernel/shell/%.o: kernel/shell/%.c
 	$(CC) $(X86_CFLAGS) -c $< -o $@
 
-GRUB_FLAGS = --locales="" --fonts="" --themes="" --compress=xz
-ifneq ($(wildcard /usr/lib/grub/i386-pc),)
-GRUB_FLAGS += -d /usr/lib/grub/i386-pc --install-modules="multiboot2 all_video gfxterm normal iso9660 biosdisk part_msdos"
-endif
-
 $(X86_ISO_IMAGE): $(X86_KERNEL_BIN) $(X86_DISK_IMG)
-	@mkdir -p iso/boot/grub
+	@mkdir -p iso/boot/grub/i386-pc
 	cp $(X86_KERNEL_BIN) iso/boot/kernel.bin
 	cp $(X86_DISK_IMG) iso/boot/disk.img
-	grub-mkrescue $(GRUB_FLAGS) -o $(X86_ISO_IMAGE) iso
+	@if command -v grub-mkimage >/dev/null 2>&1 && [ -f /usr/lib/grub/i386-pc/boot_hybrid.img ]; then \
+		grub-mkimage -O i386-pc-eltorito -o iso/boot/grub/i386-pc/eltorito.img -p /boot/grub iso9660 biosdisk normal multiboot2 all_video gfxterm part_msdos && \
+		xorriso -as mkisofs -graft-points \
+			-b boot/grub/i386-pc/eltorito.img \
+			-no-emul-boot -boot-load-size 4 -boot-info-table \
+			--grub2-boot-info --grub2-mbr /usr/lib/grub/i386-pc/boot_hybrid.img \
+			-o $(X86_ISO_IMAGE) -r iso; \
+	else \
+		grub-mkrescue -o $(X86_ISO_IMAGE) iso; \
+	fi
 
 $(X86_DISK_IMG): $(X86_ALL_BINS) scripts/mkdisk.py
 	@mkdir -p build
@@ -220,6 +233,15 @@ $(RV_DIR)/obj_tor_%.o: userspace/bin/tor/%.c userspace/bin/tor/*.h userspace/lib
 $(RV_BIN)/tor: $(RV_CRT0) $(addprefix $(RV_DIR)/obj_tor_, main.o socks5.o http.o html.o) $(RV_LIBSNL) userspace/linker_riscv64.ld
 	@mkdir -p $(RV_BIN)
 	$(LD_RV) -T userspace/linker_riscv64.ld -nostdlib -o $@ $(RV_CRT0) $(addprefix $(RV_DIR)/obj_tor_, main.o socks5.o http.o html.o) --whole-archive $(RV_LIBSNL) --no-whole-archive
+
+$(RV_DIR)/obj_diode_%.o: userspace/bin/diode/%.c userspace/bin/diode/*.h userspace/libc/include/*.h
+	@mkdir -p $(RV_DIR)
+	$(CC_RV) $(RV_USER_CFLAGS) -Iuserspace/bin/diode -c $< -o $@
+
+$(RV_BIN)/diode: $(RV_CRT0) $(addprefix $(RV_DIR)/obj_diode_, main.o diode_crypto.o fsk.o qrcodegen.o) $(RV_LIBSNL) userspace/linker_riscv64.ld
+	@mkdir -p $(RV_BIN)
+	$(LD_RV) -T userspace/linker_riscv64.ld -nostdlib -o $@ $(RV_CRT0) $(addprefix $(RV_DIR)/obj_diode_, main.o diode_crypto.o fsk.o qrcodegen.o) --whole-archive $(RV_LIBSNL) --no-whole-archive
+
 
 $(RV_BIN)/%: $(RV_CRT0) $(RV_DIR)/obj_bin_%.o $(RV_LIBSNL) userspace/linker_riscv64.ld
 	@mkdir -p $(RV_BIN)

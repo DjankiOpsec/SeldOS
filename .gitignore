@@ -3,3 +3,6 @@ scripts/__pycache__/
 __pycache__/
 *.ppm
 *.tmp
+tools/host_diode/src/
+tools/host_diode/pkg/
+iso/boot/grub/i386-pc/

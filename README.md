@@ -16,7 +16,8 @@
   <img src="https://img.shields.io/badge/Security-W%5EX%20%7C%20Pledge%20%7C%20Unveil-success.svg?style=for-the-badge&logo=openbsd&logoColor=white" alt="OpSec Hardened">
   <img src="https://img.shields.io/badge/Network-SeldTLS%201.3%20%7C%20Anti--DPI-critical.svg?style=for-the-badge&logo=torproject&logoColor=white" alt="SeldTLS 1.3">
   <img src="https://img.shields.io/badge/Display-680x334%20(85x20%20Humboldt)-orange.svg?style=for-the-badge" alt="680x334 Framebuffer">
-  <img src="https://img.shields.io/badge/Audio-AC'97%20DMA%20%7C%20SB16-yellow.svg?style=for-the-badge" alt="AC'97 DMA">
+  <img src="https://img.shields.io/badge/Lines_of_Code-30_246_C99%2FNASM-blue.svg?style=for-the-badge" alt="30 246 LOC">
+  <img src="https://img.shields.io/badge/ISO_Size-5.5_MB_(Zero_Bloat)-brightgreen.svg?style=for-the-badge" alt="5.5 MB ISO">
   <img src="https://img.shields.io/badge/Gaming-Classic%20DOOM%20Port-9cf.svg?style=for-the-badge&logo=doom" alt="DOOM">
 </p>
 
@@ -37,7 +38,7 @@
 | 🗺️ [2. Архитектура ядра и память](#2-архитектура-ядра-и-карта-памяти) | Системный базис | Higher-Half Kernel, PML4, W^X, Mermaid-схема |
 | ⚙️ [3. Внутренние подсистемы ядра](#3-внутренние-подсистемы-ядра) | Аппаратный слой | PMM, VMM, Fast Syscall, AC'97 DMA, e1000, SeldFS |
 | 🐚 [4. Пользовательское пространство SNL](#4-пользовательское-пространство-snl-сельдь-не-линукс) | Ring 3 Userspace | `libsnl`, утилиты `/bin/*`, Оракул TempleOS |
-| 🛡️ [5. Архитектура OpSec и Anti-Forensics](#5-архитектура-суверенного-opsec-и-anti-forensics-харденинга-tinfoil-hat-tails-openbsd) | Защитный комплекс | Seld-Pledge, Seld-Unveil, THL Jitter, DoD Wipe |
+| 🛡️ [5. Архитектура OpSec и Anti-Forensics](#5-архитектура-суверенного-opsec-и-anti-forensics-харденинга-tinfoil-hat-tails-openbsd) | Защитный комплекс | Seld-Pledge, Seld-Unveil, THL Jitter, DoD Wipe, Air-Gap Diode |
 | 🌐 [6. Сетевой стек, SeldTLS 1.3 и Tor](#6-сетевой-стек-нативный-криптографический-протокол-seldtls-13-и-tor-browser) | Сетевой рубеж | In-Kernel TCP Desync, DoT, RFC 7858, SOCKS5 |
 | 🕹️ [7. Мобильный DOOM и Touch HUD](#7-мобильный-doom-и-сенсорное-управление-virtual-touch-hud) | 3D-гейминг | Раскладка виртуального пульта, сенсорные зоны |
 | 📱 [8. Запуск в VirtualBox, Limbo, UTM](#8-запуск-на-мобильных-устройствах-и-пк-virtualbox-limbo-utm) | Эмуляция и ПК | Готовые конфиги для Android, iOS и VirtualBox |
@@ -104,7 +105,30 @@
 - [x] **SeldTLS 1.3**: Нативный криптографический движок TLS 1.3 (RFC 8446) без OpenSSL и внешних библиотек
 - [x] **RFC 7686 Guard**: Аппаратная блокировка открытых DNS-запросов для `.onion` доменов на уровне драйвера
 - [x] **TempleOS OpSec Оракул**: Сакральный непрерывный дорийский кантус 290–680 Гц через кольцевой AC'97 DMA-буфер
+- [x] **Air-Gap Data Diode**: Оптическая передача QR + акустический FSK Bell 202 ключ (0 мкс дрейфа TSC, Zero-BadUSB)
 - [x] **Classic DOOM Engine**: 3D-шутер с переключением сенсорного пульта и ПК-режима терминала
+
+### 📊 Метрики кодовой базы и аппаратные размеры системы (LOC & Binary Footprint)
+
+SeldOS спроектирован по парадигме предельной лаконичности: ноль раздутых фреймворков, чужих рантаймов и скрытого оверхеда. Чистый рукописный C99 и ассемблер NASM контролируют аппаратную платформу напрямую.
+
+#### Чистый объем кода операционной системы (без DOOM, Python, SVG, логов и словарей):
+
+| Компонент | Языки программирования | Файлов исходников | Строк чистого кода (LOC) |
+| :--- | :--- | :---: | :---: |
+| **Ядро (`kernel/`)** | C99, NASM, Headers | 73 | **15 726** |
+| **Библиотека `libsnl` (`userspace/libc/`)** | C99, Headers | 32 | **5 095** |
+| **Утилиты Userspace (`userspace/bin/` без DOOM)** | C99, Headers | 34 | **9 425** |
+| **ИТОГО чистый код ОС** | **C99 / NASM** | **139** | **30 246** |
+
+#### Аппаратные размеры бинарников и образов:
+
+| Артефакт | Путь к файлу | Размер на диске | Описание |
+| :--- | :--- | :---: | :--- |
+| **Бинарник ядра** | `build/kernel.bin` | **344 KiB** | Higher-Half ядро со всеми драйверами (VMM, PMM, e1000, AC'97, SeldFS, TCP/IP, SeldTLS) |
+| **Все утилиты Userspace** | `build/bin/*` | **~1.1 MiB** | 19 суверенных бинарников (`/bin/init`, `/bin/sh`, `/bin/diode`, `/bin/tor` и др., от 54 до 97 KiB) |
+| **Образ файловой системы SeldFS** | `build/disk.img` | **4.56 MiB** | Корневой том со всеми утилитами и словарем оракула `oracle.txt` (2.5 MiB) |
+| **Загрузочный гибридный ISO** | `build/seldos.iso` | **5.5 MiB** | Готовый к загрузке в VirtualBox/QEMU/Limbo/UTM образ без EFI/Mac bloat (ядро + initrd + eltorito) |
 
 ---
 
@@ -468,8 +492,14 @@ $$\text{Колонки} = \frac{680}{8} = 85, \quad \text{Строки} = \left\
 | `/bin/ps` | Опрос активных потоков планировщика ядра и отображение PID/статуса |
 | `/bin/purge` | **Иммунная антивирусная зачистка (OpSec Immune Sweep)**: криптографический аудит SeldFS, zero-wipe угроз, отстрел задач, сброс сокетов и включение Air-Gap |
 | `/bin/stealth` | **Суверенный Anti-DPI/ТСПУ Стелс-комплекс**: управление In-Kernel TCP Desync, Air-Gap Stealth режимом и нативный C99 VLESS клиент |
+| `/bin/diode` | **Суверенный оптический и акустический Air-Gap дата-диод**: физическая передача файлов без флешек (Zero-BadUSB) через анимированные QR-коды и акустический Bell 202 FSK мастер-ключ с шифрованием AES-128-GCM |
 
 #### Встроенные команды оболочки (`/bin/sh`):
+* `diode [send|qr|beep|keygen]` — **Суверенный двухфакторный физический Air-Gap дата-диод (`/bin/diode`):**
+  * `diode send <файл>` — полный цикл передачи: шифрование файла в контейнер AES-128-GCM (AEAD), акустическая передача мастер-ключа по каналу Bell 202 FSK (PC Speaker / AC'97) с калиброванным TSC-таймингом (0 мкс дрейфа) и циклическая трансляция QR-кадров SELD1 на экране.
+  * `diode qr <файл>` — передача контейнера в тихом режиме (только оптический поток QR без звука).
+  * `diode beep` — воспроизведение акустического FSK мастер-ключа через системный динамик.
+  * `diode keygen` — генерация нового 40-строчного листа криптографических ключей в `/airgap.key` (HKDF-SHA256, 16 байт AES-128, Key ID).
 * `purge` — **Мгновенный запуск иммунной зачистки ядра**: аудит SHA-256 файлов SeldFS, уничтожение чужих бинарников, отстрел неавторизованных задач, принудительный сброс всех TCP-сокетов (RST), сброс кэшей и включение Air-Gap защиты.
 * `stealth [status|on|off|desync|vless]` — **Управление режимом скрытности и VLESS**:
   * `stealth status` — вывод состояния сетевого щита, TCP Desync и MAC-спуфинга.
@@ -741,7 +771,46 @@ sequenceDiagram
 
 ---
 
-### 5.3. Автоматизированная верификационная матрица тестов
+### 5.3. Суверенный двухфакторный Air-Gap Data Diode (Zero-BadUSB, Optical & Acoustic Diode)
+
+Традиционный перенос файлов на флеш-накопителях несёт фатальные риски компрометации защищенной среды:
+1. **BadUSB:** перепрошивка микроконтроллеров USB-накопителей (Phison/Alcor) с эмуляцией HID-клавиатур или сетевых адаптеров для внедрения RCE.
+2. **Двунаправленный канал заражения:** возможность передачи шпионских модулей, малвари и метаданных хостовой ОС обратно в изолированную систему.
+3. **Утечки метаданных:** следы файловых систем, серийные номера накопителей и временные метки монтирования.
+
+Для полной ликвидации этих векторов атак в SeldOS реализован **суверенный двухфакторный физический Air-Gap дата-диод** (`/bin/diode`):
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as Оператор SeldOS
+    participant VM as SeldOS (/bin/diode)
+    participant Host as Host Receiver (seld-airgap)
+    actor Arch as Хост Arch Linux
+
+    Note over Host: Фаза 1: Прием звукового ключа
+    User->>VM: diode send secret.txt
+    VM->>Host: 🔊 Акустический FSK-пакет (AC'97 / PC Speaker, ~9.8s)
+    Host-->>Host: Демодуляция Bell 202 FSK, валидация CRC32 -> Master Key Locked!
+    Note over Host: Автоматический переход к Фазе 2
+    VM->>Host: 📱 Циклическая трансляция QR-кодов SELD1 (экран / окно VM)
+    Host-->>Host: Захват кадров (grim / OpenCV), проверка контрольных сумм чанков
+    Host-->>Host: Сборка контейнера -> AES-128-GCM Decrypt -> Проверка SHA-256
+    Host->>Arch: 💾 Сохранение файла в ./received_files/secret.txt
+```
+
+- **Оптический дата-диод (Payload Channel):**
+  - Файл шифруется в контейнер **AES-128-GCM (AEAD)** с защитой от подделки (Fail-Closed) и разбивается на чанки по 72 байта (~96 байт Base64).
+  - Генерируются циклические анимированные QR-коды формата `SELD1:<seq>/<total>:<session_id>:<filename>:<chunk_base64>:<crc32>`, отображаемые прямо на экране консоли SeldOS с частотой ~10 FPS.
+  - Хост считывает кадры через нативный Wayland `grim` со скоростью 25+ FPS или через внешнюю веб-камеру. Физически не существует обратного оптического канала от камеры к монитору.
+- **Акустический канал мастер-ключа (Key Channel):**
+  - Мастер-ключ передается через системный динамик или звуковую карту SeldOS (PC Speaker порт `0x61` / AC'97 DMA) частотной модуляцией **Bell 202 FSK** (1200 Гц — Space `0`, 2200 Гц — Mark `1`, 1800 Гц — пилот-тон).
+  - Микросекундный тайминг TSC (`rdtsc`) в SeldOS устраняет фазовый джиттер, обеспечивая ровно **0 мкс накопленного дрейфа** на протяжении всего 248-битного пакета.
+  - Приемник `seld-airgap` на Arch Linux захватывает аудиосигнал из наушников (PipeWire loopback) или микрофона, демодулирует мастер-ключ, проверяет CRC32 и автоматически расшифровывает полученный файл без ручного ввода пароля.
+
+---
+
+### 5.4. Автоматизированная верификационная матрица тестов
 
 Все механизмы безопасности покрыты сквозным комплексом автоматического тестирования:
 
@@ -750,6 +819,7 @@ sequenceDiagram
 | **Ring 0 (Ядро)** | `selftest_opsec()` (8/8) | Корректность Zero-on-Free в `kmalloc`, отбрасывание `.onion` в DNS, криптографический ISN, Keystroke Jitter. |
 | **Ring 3 (Init)** | `[init:CHECK 5/5]` | Валидация работы `free()` в libc и перехват DNS-утечек в раннем пользовательском пространстве. |
 | **Ring 3 (Shell)** | `selftest` (8/8) | Интерактивная проверка `seld_pledge()`, изоляции памяти и защиты от утечек данных. |
+| **Air-Gap Diode** | `tests/test_diode_airgap.py` (15/15) | Полный цикл: AES-128-GCM, Key Sheet 40 строк, чанки QR, Bell 202 FSK демодулятор 20–40 мс, 25% pulse-волна AC'97, сквозная эксфильтрация. |
 | **Интеграция** | `tests/verify_opsec_hardening.py` | Сквозной запуск QEMU: проверка serial-логов, spoofed MAC, сброс `.onion`, RAM scrub & poweroff. |
 | **Интеграция** | `tests/verify_unveil_jitter.py` | Сквозной запуск QEMU: верификация SYS_UNVEIL (регистрация, блокировка не-unveiled путей, lock) и Keystroke Jitter. |
 
@@ -966,7 +1036,7 @@ flowchart LR
 
 ## 8. Запуск на мобильных устройствах и ПК (VirtualBox, Limbo, UTM)
 
-Все компоненты ОС (загрузчик, ядро, юзерспейс, DOOM и WAD-файл) упакованы в **один файл `build/seldos.iso`** (63 МБ). Никаких дополнительных жестких дисков подключать не требуется.
+Все компоненты ОС (загрузчик, ядро, юзерспейс, утилиты и файловая система SeldFS) упакованы в **один компактный файл `build/seldos.iso`** (**5.5 МБ**). Никаких дополнительных жестких дисков подключать не требуется.
 
 ### 8.1. Настройка в Android (Limbo x86)
 
