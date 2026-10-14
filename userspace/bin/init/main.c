@@ -21,6 +21,8 @@ static void print_banner(void) {
 #else
     printf(" [init]   Humboldt Kernel Project - x86_64 Hardened Architecture (GNU GPLv3)\n");
 #endif
+    printf(" [init]   [OPSEC ALERT] ЗАЖИМАЙ SHIFT! (DEAD MAN'S GRIP ACTIVE)\n");
+    printf(" [init]   Сессия защищена удержанием. Отпустишь - сброс и вайп ОЗУ!\n");
     printf("=======================================================================\n");
 }
 

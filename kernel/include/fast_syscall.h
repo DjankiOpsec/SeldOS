@@ -67,6 +67,8 @@
 #define SYS_UNVEIL          51
 #define SYS_OPSEC_SET_JITTER 52
 #define SYS_OPSEC_GET_JITTER 53
+#define SYS_OPSEC_SET_DEADMAN 54
+#define SYS_OPSEC_GET_DEADMAN 55
 
 /* Seld-Unveil Permission Flags (OpenBSD-style Ring 3 Filesystem Sandboxing) */
 #define UNVEIL_READ         0x01  /* Read file: open(O_RDONLY), readfile, stat */

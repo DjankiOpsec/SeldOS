@@ -37,9 +37,10 @@ static void print_banner(void) {
     vga_puts("                          Bare-Metal x86_64 Hardened Kernel\n");
     vga_puts("                          x86_64 Long Mode Architecture\n");
 #endif
-    vga_puts("\n");
-    vga_puts("\n");
-    vga_puts("\n");
+    vga_set_color(VGA_LIGHT_RED, VGA_BLACK);
+    vga_puts("                          [!] OPSEC: ЗАЖИМАЙ SHIFT! (DEAD MAN'S GRIP)\n");
+    vga_puts("                          (Сессия в RAM: отпустишь - сброс и вайп!)\n");
+    vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
     vga_puts("=======================================================================\n");
 
     serial_puts("\n=======================================================================\n");
@@ -49,6 +50,8 @@ static void print_banner(void) {
 #else
     serial_puts(" Hardened x86_64 Long Mode Supervisor Kernel Initialized\n");
 #endif
+    serial_puts(" [!] OPSEC ALERT: ЗАЖИМАЙ SHIFT! (DEAD MAN'S GRIP ACTIVE)\n");
+    serial_puts("     Release scancode triggers instant DoD RAM wipe and CPU reset.\n");
     serial_puts("=======================================================================\n");
 }
 

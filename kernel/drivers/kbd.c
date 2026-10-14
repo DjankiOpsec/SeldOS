@@ -8,10 +8,17 @@
 
 #include "kbd.h"
 #include "rand.h"
+#include "io.h"
+#include "pmm.h"
+#include "serial.h"
 
 #define KBD_BUFFER_SIZE 256
 #define KBD_EVENT_QUEUE_SIZE 128
 #define KBD_STAGE_SIZE 256
+
+/* OpSec Dead Man's Grip (Shift Latch) Interlock State */
+static volatile int s_deadman_enabled = 1; /* Enabled by default as Sovereign Defense */
+static volatile int s_deadman_armed = 0;   /* Armed once Shift is first latched */
 
 static char kbd_buffer[KBD_BUFFER_SIZE];
 static volatile size_t buf_head = 0;
@@ -124,6 +131,65 @@ int kbd_get_jitter(void) {
     return s_kbd_jitter_enabled;
 }
 
+static void opsec_deadman_trigger_wipe(void) {
+    serial_puts("\n[!] ========================================================\n");
+    serial_puts("[!] OPSEC EMERGENCY: DEAD MAN'S GRIP BROKEN (SHIFT RELEASED)!\n");
+    serial_puts("[!] Physical contact severed. Hostile seizure detected!\n");
+    serial_puts("[!] Executing Instant DoD RAM Scrubbing & CPU Hardware Reset...\n");
+    serial_puts("[!] ========================================================\n");
+
+    // 1. DoD wipe of physical memory
+    pmm_secure_wipe_all_free();
+
+    // 2. Write-back and invalidate all CPU L1/L2/L3 caches
+    __asm__ volatile ("wbinvd" ::: "memory");
+
+#if defined(__riscv)
+    *(volatile uint32_t*)(phys_to_virt(0x100000)) = 0x7777;
+    while (1) {
+        __asm__ volatile ("wfi");
+    }
+#else
+    // 3. Fast reset port 0x92
+    outb(0x92, (uint8_t)(inb(0x92) | 1));
+
+    // 4. ACPI/PCI hard reset port 0xCF9
+    outb(0xCF9, 0x02);
+    outb(0xCF9, 0x06);
+    outb(0xCF9, 0x0E);
+
+    // 5. 8042 keyboard controller reset pulse
+    for (int t = 0; t < 1000; t++) {
+        uint8_t temp = inb(0x64);
+        if (temp & 1) inb(0x60);
+        if (!(temp & 2)) break;
+    }
+    outb(0x64, 0xFE);
+
+    // 6. Halt execution permanently
+    while (1) {
+        __asm__ volatile ("cli; hlt");
+    }
+#endif
+}
+
+void kbd_set_deadman(int enable) {
+    s_deadman_enabled = enable ? 1 : 0;
+    if (!s_deadman_enabled) {
+        s_deadman_armed = 0;
+    } else if (shift_pressed) {
+        s_deadman_armed = 1;
+    }
+}
+
+int kbd_get_deadman(void) {
+    return s_deadman_enabled;
+}
+
+int kbd_is_deadman_armed(void) {
+    return s_deadman_armed;
+}
+
 void kbd_handle_scancode(uint8_t scancode) {
     if (scancode == 0xE0) {
         return;
@@ -152,10 +218,16 @@ void kbd_handle_scancode(uint8_t scancode) {
     // 2. ASCII translation for console/shell
     if (scancode == 0x2A || scancode == 0x36) { // Left/Right shift press
         shift_pressed = 1;
+        if (s_deadman_enabled) {
+            s_deadman_armed = 1;
+        }
         return;
     }
     if (scancode == 0xAA || scancode == 0xB6) { // Left/Right shift release
         shift_pressed = 0;
+        if (s_deadman_enabled && s_deadman_armed) {
+            opsec_deadman_trigger_wipe();
+        }
         return;
     }
     if (scancode == 0x3A) { // Caps lock press
@@ -193,7 +265,6 @@ void kbd_handle_scancode(uint8_t scancode) {
     }
 }
 
-#include "serial.h"
 
 int kbd_has_char(void) {
     if (serial_has_char()) return 1;

@@ -280,6 +280,9 @@ static void vga_scroll(void) {
     vga_row = VGA_HEIGHT - 1;
 }
 
+static uint8_t s_utf8_lead = 0;
+static uint8_t s_utf8_lead2 = 0;
+
 void vga_putchar(char c) {
     if (!s_gpu_drv_enabled) {
         if (!kernel_panic_in_progress()) {
@@ -288,7 +291,50 @@ void vga_putchar(char c) {
         return;
     }
 
-    if (c == '\n') {
+    uint8_t uc = (uint8_t)c;
+    if (s_utf8_lead == 0) {
+        if (uc == 0xD0 || uc == 0xD1) {
+            s_utf8_lead = uc;
+            return;
+        } else if ((uc & 0xF0) == 0xE0) {
+            s_utf8_lead = uc;
+            s_utf8_lead2 = 0;
+            return;
+        }
+    } else if (s_utf8_lead == 0xD0 || s_utf8_lead == 0xD1) {
+        uint16_t cp = ((s_utf8_lead & 0x1F) << 6) | (uc & 0x3F);
+        s_utf8_lead = 0;
+        if (cp >= 0x0410 && cp <= 0x042F) { // А..Я
+            uc = (uint8_t)(0x80 + (cp - 0x0410));
+        } else if (cp >= 0x0430 && cp <= 0x043F) { // а..п
+            uc = (uint8_t)(0xA0 + (cp - 0x0430));
+        } else if (cp >= 0x0440 && cp <= 0x044F) { // р..я
+            uc = (uint8_t)(0xE0 + (cp - 0x0440));
+        } else if (cp == 0x0401) { // Ё
+            uc = 0xF0;
+        } else if (cp == 0x0451) { // ё
+            uc = 0xF1;
+        } else {
+            uc = '?';
+        }
+    } else {
+        if (s_utf8_lead2 == 0) {
+            s_utf8_lead2 = uc;
+            return;
+        }
+        uint16_t cp = ((s_utf8_lead & 0x0F) << 12) | ((s_utf8_lead2 & 0x3F) << 6) | (uc & 0x3F);
+        s_utf8_lead = 0;
+        s_utf8_lead2 = 0;
+        if (cp == 0x2014 || cp == 0x2013) {
+            uc = '-';
+        } else if (cp == 0x2026) {
+            uc = '.';
+        } else {
+            uc = '?';
+        }
+    }
+
+    if (uc == '\n') {
         vga_col = 0;
         if (++vga_row >= (fb_console_active ? fb_console_rows : VGA_HEIGHT)) {
             if (fb_console_active) {
@@ -299,9 +345,9 @@ void vga_putchar(char c) {
                 vga_row = VGA_HEIGHT - 1;
             }
         }
-    } else if (c == '\r') {
+    } else if (uc == '\r') {
         vga_col = 0;
-    } else if (c == '\b') {
+    } else if (uc == '\b') {
         if (vga_col > 0) {
             vga_col--;
             if (!fb_console_active) {
@@ -310,7 +356,7 @@ void vga_putchar(char c) {
                 fb_draw_char(vga_col, vga_row, ' ', vga_color);
             }
         }
-    } else if (c == '\t') {
+    } else if (uc == '\t') {
         size_t next_tab = (vga_col + 4) & ~3;
         size_t max_cols = fb_console_active ? FB_COLS : VGA_WIDTH;
         while (vga_col < next_tab && vga_col < max_cols) {
@@ -336,9 +382,9 @@ void vga_putchar(char c) {
     } else {
         size_t max_cols = fb_console_active ? FB_COLS : VGA_WIDTH;
         if (!fb_console_active) {
-            VGA_MEMORY[vga_row * VGA_WIDTH + vga_col] = vga_entry(c, vga_color);
+            VGA_MEMORY[vga_row * VGA_WIDTH + vga_col] = vga_entry(uc, vga_color);
         } else {
-            fb_draw_char(vga_col, vga_row, c, vga_color);
+            fb_draw_char(vga_col, vga_row, (char)uc, vga_color);
         }
         if (++vga_col >= max_cols) {
             vga_col = 0;

@@ -673,6 +673,8 @@ static int check_pledge(uint64_t sys_num, uint64_t a1) {
         case SYS_UNVEIL:
         case SYS_OPSEC_SET_JITTER:
         case SYS_OPSEC_GET_JITTER:
+        case SYS_OPSEC_SET_DEADMAN:
+        case SYS_OPSEC_GET_DEADMAN:
         case SYS_SELD:
             req = PLEDGE_STDIO;
             break;
@@ -1629,6 +1631,17 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
 
         case SYS_OPSEC_GET_JITTER: {
             return (uint64_t)kbd_get_jitter();
+        }
+
+        case SYS_OPSEC_SET_DEADMAN: {
+            kbd_set_deadman((int)a1);
+            serial_puts("[+] OpSec: Dead Man's Grip (Shift Latch) ");
+            serial_puts((int)a1 ? "ARMED (Release triggers instant Cold-Boot RAM Wipe & Reset)\n" : "DISARMED\n");
+            return 0;
+        }
+
+        case SYS_OPSEC_GET_DEADMAN: {
+            return (uint64_t)kbd_get_deadman();
         }
 
         case SYS_EXIT: {

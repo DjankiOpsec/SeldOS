@@ -28,8 +28,8 @@ static void print_banner(void) {
 #else
     printf("                          x86_64 Long Mode Isolated Execution\n");
 #endif
-    printf("\n");
-    printf("\n");
+    printf("                          [OPSEC ALERT] >>> ЗАЖИМАЙ SHIFT! <<<\n");
+    printf("                          (DEAD MAN'S GRIP ACTIVE: ОТПУСТИШЬ - СБРОС)\n");
     printf("\n");
     printf("=======================================================================\n");
     printf("Welcome to SNL Sovereign Shell. Type 'help' for available commands.\n");
@@ -626,6 +626,7 @@ static void builtin_help(void) {
     printf("  net [mode]      Air-Gap Shield: status, lock, unlock, ondemand, stealth, desync\n");
     printf("  desync [mode]   TSPU/DPI Evasion: split (SNI segmentation), fake, off\n");
     printf("  jitter [on|off] THL Keystroke Timing Obfuscation & Jitter (50ms Quantization)\n");
+    printf("  grip [on|off]   OpSec Dead Man's Grip: Hold Shift to live, release = wipe & reset\n");
     printf("  unveil <p> <m>  Seld-Unveil Filesystem Sandboxing (OpenBSD unveil: r, w, x, c, lock)\n");
     printf("  selftest        Execute userspace Ring 3 verification test suite\n\n");
     printf("External Utilities in /bin/:\n");
@@ -1228,6 +1229,26 @@ static void builtin_jitter(int argc, char* argv[]) {
     }
 }
 
+static void builtin_deadman(int argc, char* argv[]) {
+    if (argc < 2 || strcmp(argv[1], "status") == 0) {
+        int d = seld_get_deadman();
+        printf("[*] OpSec Dead Man's Grip (Shift Latch): %s\n",
+               d ? "ARMED (Release triggers instant DoD RAM Wipe & Reset)" : "DISARMED");
+        printf("    Usage: grip <on | off | arm | status>\n");
+        return;
+    }
+    if (strcmp(argv[1], "on") == 0 || strcmp(argv[1], "arm") == 0 || strcmp(argv[1], "1") == 0) {
+        seld_set_deadman(1);
+        printf("[!] [OPSEC ALERT] DEAD MAN'S GRIP ARMED: ЗАЖИМАЙ SHIFT!\n");
+        printf("    Сессия защищена физическим удержанием. Отпустишь Shift - мгновенный сброс!\n");
+    } else if (strcmp(argv[1], "off") == 0 || strcmp(argv[1], "0") == 0) {
+        seld_set_deadman(0);
+        printf("[*] OpSec Dead Man's Grip DISARMED.\n");
+    } else {
+        printf("Usage: grip <on | off | arm | status>\n");
+    }
+}
+
 static void builtin_unveil(int argc, char* argv[]) {
     if (argc < 2) {
         printf("Seld-Unveil Path-Based Sandboxing (OpenBSD unveil(2))\n");
@@ -1580,6 +1601,8 @@ int main(int argc, char* argv[]) {
             builtin_desync(cmd_argc, cmd_argv);
         } else if (strcmp(cmd, "jitter") == 0) {
             builtin_jitter(cmd_argc, cmd_argv);
+        } else if (strcmp(cmd, "grip") == 0 || strcmp(cmd, "deadman") == 0) {
+            builtin_deadman(cmd_argc, cmd_argv);
         } else if (strcmp(cmd, "unveil") == 0) {
             builtin_unveil(cmd_argc, cmd_argv);
         } else if (strcmp(cmd, "selftest") == 0) {

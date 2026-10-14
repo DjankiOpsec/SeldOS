@@ -35,4 +35,9 @@ void kbd_timer_tick(void);
 void kbd_set_jitter(int enable);
 int  kbd_get_jitter(void);
 
+/* OpSec Dead Man's Grip (Shift Latch) Interface */
+void kbd_set_deadman(int enable);
+int  kbd_get_deadman(void);
+int  kbd_is_deadman_armed(void);
+
 #endif /* SELD_KBD_H */

@@ -62,6 +62,8 @@
 #define SYS_UNVEIL          51
 #define SYS_OPSEC_SET_JITTER 52
 #define SYS_OPSEC_GET_JITTER 53
+#define SYS_OPSEC_SET_DEADMAN 54
+#define SYS_OPSEC_GET_DEADMAN 55
 
 /* Seld-Unveil Permission Flags (OpenBSD-style Ring 3 Filesystem Sandboxing) */
 #define UNVEIL_READ         0x01  /* Read file: open(O_RDONLY), readfile, stat */
@@ -260,5 +262,7 @@ int      seld_pledge(uint32_t flags);
 int      seld_unveil(const char* path, const char* permissions);
 int      seld_set_jitter(int enable);
 int      seld_get_jitter(void);
+int      seld_set_deadman(int enable);
+int      seld_get_deadman(void);
 
 #endif /* _SELD_H_ */

@@ -777,3 +777,11 @@ int seld_get_jitter(void) {
     return (int)seld_syscall(SYS_OPSEC_GET_JITTER, 0, 0, 0);
 }
 
+int seld_set_deadman(int enable) {
+    return (int)seld_syscall(SYS_OPSEC_SET_DEADMAN, (long)enable, 0, 0);
+}
+
+int seld_get_deadman(void) {
+    return (int)seld_syscall(SYS_OPSEC_GET_DEADMAN, 0, 0, 0);
+}
+
