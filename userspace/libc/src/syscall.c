@@ -786,3 +786,28 @@ int seld_get_deadman(void) {
     return (int)seld_syscall(SYS_OPSEC_GET_DEADMAN, 0, 0, 0);
 }
 
+int seld_flush_uarch(void) {
+    return (int)seld_syscall(SYS_OPSEC_FLUSH_UARCH, 0, 0, 0);
+}
+
+int seld_set_chaff(int mode) {
+    return (int)seld_syscall(SYS_NET_SET_CHAFF, (long)mode, 0, 0);
+}
+
+int seld_get_chaff(void) {
+    return (int)seld_syscall(SYS_NET_GET_CHAFF, 0, 0, 0);
+}
+
+int seld_set_tempest(int mode) {
+    return (int)seld_syscall(SYS_OPSEC_SET_TEMPEST, (long)mode, 0, 0);
+}
+
+int seld_get_tempest(void) {
+    return (int)seld_syscall(SYS_OPSEC_GET_TEMPEST, 0, 0, 0);
+}
+
+int seld_pci_lockdown(void) {
+    return (int)seld_syscall(SYS_PCI_LOCKDOWN, 0, 0, 0);
+}
+
+

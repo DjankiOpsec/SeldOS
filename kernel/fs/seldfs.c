@@ -446,7 +446,7 @@ int seldfs_is_authorized_file(const char* filename) {
         "init", "sh", "ls", "cat", "echo", "rm", "sha256sum",
         "reboot", "poweroff", "fetch", "fm", "oracle", "ps",
         "uname", "download", "tor", "torbrowser", "doom", "purge", "stealth",
-        "diode",
+        "diode", "pinpad",
         "readme.txt", "opsec.txt", "oracle.txt", "doom1.wad", "pcmode",
         "secret.txt", "airgap.key",
         NULL

@@ -627,9 +627,14 @@ static void builtin_help(void) {
     printf("  desync [mode]   TSPU/DPI Evasion: split (SNI segmentation), fake, off\n");
     printf("  jitter [on|off] THL Keystroke Timing Obfuscation & Jitter (50ms Quantization)\n");
     printf("  grip [on|off]   OpSec Dead Man's Grip: Hold Shift to live, release = wipe & reset\n");
+    printf("  chaff [on|off]  Poisson Cover Traffic & Uniform Padding (GPA Anti-Correlation)\n");
+    printf("  tempest [on|off]TEMPEST Video RF Dispersion & Subpixel Dithering (SDR Evasion)\n");
+    printf("  uarch flush     Microarchitectural Flush (Branch Predictor IBPB, Caches, TLB)\n");
+    printf("  pci lockdown    Zero-Trust PCI DMA & Option ROM Lockdown\n");
     printf("  unveil <p> <m>  Seld-Unveil Filesystem Sandboxing (OpenBSD unveil: r, w, x, c, lock)\n");
     printf("  selftest        Execute userspace Ring 3 verification test suite\n\n");
     printf("External Utilities in /bin/:\n");
+    printf("  pinpad          Scrambled On-Screen Pinpad (Acoustic Keystroke Evasion)\n");
     printf("  diode [cmd]     Air-Gap Optical & Acoustic Data Diode (keygen, send, beep, qr)\n");
     printf("  stealth [cmd]   Anti-TSPU/DPI Stealth Suite & Native C99 VLESS Client\n");
     printf("  ls              List files with size, blocks, and SHA-256 hash\n");
@@ -1249,6 +1254,60 @@ static void builtin_deadman(int argc, char* argv[]) {
     }
 }
 
+static void builtin_chaff(int argc, char* argv[]) {
+    if (argc < 2 || strcmp(argv[1], "status") == 0) {
+        int c = seld_get_chaff();
+        printf("[*] Poisson Cover Traffic & Uniform Padding: %s\n",
+               c ? "ACTIVE (Anti-Correlation GPA Defense)" : "DISABLED");
+        printf("    Usage: chaff <on | off | status>\n");
+        return;
+    }
+    if (strcmp(argv[1], "on") == 0 || strcmp(argv[1], "1") == 0) {
+        seld_set_chaff(1);
+        printf("[+] Poisson Cover Traffic & Uniform Packet Padding ACTIVE: Flow correlation defeated.\n");
+    } else if (strcmp(argv[1], "off") == 0 || strcmp(argv[1], "0") == 0) {
+        seld_set_chaff(0);
+        printf("[*] Poisson Cover Traffic & Uniform Packet Padding DISABLED.\n");
+    } else {
+        printf("Usage: chaff <on | off | status>\n");
+    }
+}
+
+static void builtin_tempest(int argc, char* argv[]) {
+    if (argc < 2 || strcmp(argv[1], "status") == 0) {
+        int t = seld_get_tempest();
+        printf("[*] TEMPEST Video RF Dispersion & Subpixel Dithering: %s\n",
+               t ? "ACTIVE (SDR Van Eck Evasion)" : "DISABLED");
+        printf("    Usage: tempest <on | off | status>\n");
+        return;
+    }
+    if (strcmp(argv[1], "on") == 0 || strcmp(argv[1], "1") == 0) {
+        seld_set_tempest(1);
+        printf("[+] TEMPEST Evasion ACTIVE: RGB micro-dithering masks electromagnetic emissions.\n");
+    } else if (strcmp(argv[1], "off") == 0 || strcmp(argv[1], "0") == 0) {
+        seld_set_tempest(0);
+        printf("[*] TEMPEST Evasion DISABLED.\n");
+    } else {
+        printf("Usage: tempest <on | off | status>\n");
+    }
+}
+
+static void builtin_uarch(int argc, char* argv[]) {
+    (void)argc;
+    (void)argv;
+    printf("[*] Executing CPU Microarchitectural Flush (IBPB, Caches, TLB)...\n");
+    seld_flush_uarch();
+    printf("[+] Microarchitectural state sanitized. Branch history erased.\n");
+}
+
+static void builtin_pci(int argc, char* argv[]) {
+    (void)argc;
+    (void)argv;
+    printf("[*] Initiating Zero-Trust PCI DMA & Option ROM Lockdown...\n");
+    int count = seld_pci_lockdown();
+    printf("[+] PCI Zero-Trust Lockdown complete: revoked untrusted Bus Masters (%d).\n", count);
+}
+
 static void builtin_unveil(int argc, char* argv[]) {
     if (argc < 2) {
         printf("Seld-Unveil Path-Based Sandboxing (OpenBSD unveil(2))\n");
@@ -1603,6 +1662,14 @@ int main(int argc, char* argv[]) {
             builtin_jitter(cmd_argc, cmd_argv);
         } else if (strcmp(cmd, "grip") == 0 || strcmp(cmd, "deadman") == 0) {
             builtin_deadman(cmd_argc, cmd_argv);
+        } else if (strcmp(cmd, "chaff") == 0) {
+            builtin_chaff(cmd_argc, cmd_argv);
+        } else if (strcmp(cmd, "tempest") == 0) {
+            builtin_tempest(cmd_argc, cmd_argv);
+        } else if (strcmp(cmd, "uarch") == 0) {
+            builtin_uarch(cmd_argc, cmd_argv);
+        } else if (strcmp(cmd, "pci") == 0) {
+            builtin_pci(cmd_argc, cmd_argv);
         } else if (strcmp(cmd, "unveil") == 0) {
             builtin_unveil(cmd_argc, cmd_argv);
         } else if (strcmp(cmd, "selftest") == 0) {

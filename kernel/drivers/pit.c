@@ -11,6 +11,7 @@
 #include "pit.h"
 #include "audio.h"
 #include "kbd.h"
+#include "net.h"
 #include "io.h"
 #include "serial.h"
 
@@ -34,6 +35,7 @@ void pit_handle_interrupt(void) {
     timer_ticks++;
     audio_timer_tick();
     kbd_timer_tick();
+    net_chaff_tick();
 }
 
 uint64_t pit_get_ticks(void) {
@@ -96,6 +98,7 @@ void pit_handle_interrupt(void) {
     timer_ticks++;
     audio_timer_tick();
     kbd_timer_tick();
+    net_chaff_tick();
 }
 
 uint64_t pit_get_ticks(void) {

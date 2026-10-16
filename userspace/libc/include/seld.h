@@ -64,6 +64,12 @@
 #define SYS_OPSEC_GET_JITTER 53
 #define SYS_OPSEC_SET_DEADMAN 54
 #define SYS_OPSEC_GET_DEADMAN 55
+#define SYS_OPSEC_FLUSH_UARCH 56
+#define SYS_NET_SET_CHAFF     57
+#define SYS_NET_GET_CHAFF     58
+#define SYS_OPSEC_SET_TEMPEST 59
+#define SYS_OPSEC_GET_TEMPEST 60
+#define SYS_PCI_LOCKDOWN      61
 
 /* Seld-Unveil Permission Flags (OpenBSD-style Ring 3 Filesystem Sandboxing) */
 #define UNVEIL_READ         0x01  /* Read file: open(O_RDONLY), readfile, stat */
@@ -264,5 +270,11 @@ int      seld_set_jitter(int enable);
 int      seld_get_jitter(void);
 int      seld_set_deadman(int enable);
 int      seld_get_deadman(void);
+int      seld_flush_uarch(void);
+int      seld_set_chaff(int mode);
+int      seld_get_chaff(void);
+int      seld_set_tempest(int mode);
+int      seld_get_tempest(void);
+int      seld_pci_lockdown(void);
 
 #endif /* _SELD_H_ */

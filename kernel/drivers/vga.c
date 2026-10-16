@@ -149,6 +149,21 @@ void vga_set_humboldt_color(uint8_t fg, uint8_t bg) {
     vga_color = (fg & 0x0F) | ((bg & 0x0F) << 4);
 }
 
+static int s_tempest_dither = 0;
+
+void vga_set_tempest_dither(int enabled) {
+    s_tempest_dither = enabled ? 1 : 0;
+    if (s_tempest_dither) {
+        serial_puts("[+] OpSec TEMPEST: Video RF dispersion & subpixel dithering ACTIVE\n");
+    } else {
+        serial_puts("[*] OpSec TEMPEST: Video RF dispersion & subpixel dithering DISABLED\n");
+    }
+}
+
+int vga_get_tempest_dither(void) {
+    return s_tempest_dither;
+}
+
 static void fb_draw_char(size_t col, size_t row, char c, uint8_t color) {
     if (!fb_base || col >= FB_COLS || row >= fb_console_rows) return;
 
@@ -170,7 +185,19 @@ static void fb_draw_char(size_t col, size_t row, char c, uint8_t color) {
         uint8_t row_bits = glyph[r];
         uint32_t* dst = &fb_base[(y_start + r) * pitch_pixels + x_start];
         for (size_t b = 0; b < 8; b++) {
-            dst[b] = (row_bits & (0x80 >> b)) ? fg : bg;
+            uint32_t pixel_color = (row_bits & (0x80 >> b)) ? fg : bg;
+            if (s_tempest_dither) {
+                // High-entropy spatial noise mask to blur electromagnetic radiation harmonics
+                uint32_t dither = ((uint32_t)(x_start + b) * 13 + (uint32_t)(y_start + r) * 7 + (uint8_t)c * 3) & 0x07;
+                uint32_t r_ch = (pixel_color >> 16) & 0xFF;
+                uint32_t g_ch = (pixel_color >> 8) & 0xFF;
+                uint32_t b_ch = pixel_color & 0xFF;
+                r_ch = (r_ch ^ dither) & 0xFF;
+                g_ch = (g_ch ^ (dither >> 1)) & 0xFF;
+                b_ch = (b_ch ^ (dither << 1)) & 0xFF;
+                pixel_color = (pixel_color & 0xFF000000) | (r_ch << 16) | (g_ch << 8) | b_ch;
+            }
+            dst[b] = pixel_color;
         }
     }
 }

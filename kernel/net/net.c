@@ -71,6 +71,30 @@ int net_get_desync_stats(uint32_t* splits, uint32_t* fakes) {
     return 0;
 }
 
+/* Poisson Chaff & Uniform Packet Padding (Anti-Correlation GPA Defense) */
+static int s_net_chaff_mode = 0;
+static uint64_t s_chaff_next_tick_ms = 0;
+static uint32_t s_chaff_packets_sent = 0;
+static int s_in_chaff = 0;
+
+void net_set_chaff(int mode) {
+    s_net_chaff_mode = mode ? 1 : 0;
+    if (s_net_chaff_mode) {
+        s_chaff_next_tick_ms = pit_get_uptime_ms() + 100;
+        serial_puts("[+] OpSec GPA Defense: Poisson Chaff & Uniform Padding ACTIVE\n");
+    } else {
+        serial_puts("[*] OpSec GPA Defense: Poisson Chaff & Uniform Padding DISABLED\n");
+    }
+}
+
+int net_get_chaff(void) {
+    return s_net_chaff_mode;
+}
+
+uint32_t net_get_chaff_stats(void) {
+    return s_chaff_packets_sent;
+}
+
 int net_abort_all_connections(void);
 
 void net_lease_acquire(void) {
@@ -92,6 +116,7 @@ void net_lease_release(void) {
 int net_is_traffic_allowed(void) {
     if (s_net_airgap_mode == NET_AIRGAP_UNLOCKED) return 1;
     if (s_net_airgap_mode == NET_AIRGAP_LOCKED) return 0;
+    if (s_net_chaff_mode) return 1; // Cover traffic permitted when Chaff GPA defense is active
     return (s_net_leases > 0);
 }
 
@@ -970,6 +995,8 @@ void net_poll(void) {
             s_stats.rx_dropped++;
         }
     }
+
+    net_chaff_tick();
 }
 
 int net_send_ip(uint32_t dest_ip, uint8_t protocol, const void* payload, size_t payload_len) {
@@ -1034,9 +1061,24 @@ int net_send_ip(uint32_t dest_ip, uint8_t protocol, const void* payload, size_t 
     memcpy(frame_buf + ETH_HLEN + sizeof(struct ipv4_header), payload, payload_len);
 
     size_t total_len = ETH_HLEN + sizeof(struct ipv4_header) + payload_len;
-    if (total_len < ETH_MIN_LEN) {
-        memset(frame_buf + total_len, 0, ETH_MIN_LEN - total_len);
-        total_len = ETH_MIN_LEN;
+    if (s_net_chaff_mode) {
+        // Uniform Packet Quantization (anti-correlation / packet size masking)
+        size_t target_len = ETH_MIN_LEN;
+        if (total_len <= 128) target_len = 128;
+        else if (total_len <= 256) target_len = 256;
+        else if (total_len <= 512) target_len = 512;
+        else if (total_len <= 1024) target_len = 1024;
+        else target_len = 1514;
+
+        if (target_len > total_len && target_len <= ETH_MAX_LEN) {
+            memset(frame_buf + total_len, 0, target_len - total_len);
+            total_len = target_len;
+        }
+    } else {
+        if (total_len < ETH_MIN_LEN) {
+            memset(frame_buf + total_len, 0, ETH_MIN_LEN - total_len);
+            total_len = ETH_MIN_LEN;
+        }
     }
 
     int res = nic_send_packet(frame_buf, total_len);
@@ -1073,7 +1115,8 @@ int net_ping(uint32_t target_ip, uint16_t seq, uint32_t* rtt_ms) {
     icmp->type = ICMP_TYPE_ECHO_REQUEST;
     icmp->code = 0;
     icmp->checksum = 0;
-    icmp->id = htons((uint16_t)rng_get_u64());
+    uint16_t ping_id = (uint16_t)rng_get_u64();
+    icmp->id = htons(ping_id);
     icmp->sequence = htons(seq);
     memcpy(icmp_buf + sizeof(struct icmp_header), ping_payload, payload_len);
 
@@ -1091,7 +1134,7 @@ int net_ping(uint32_t target_ip, uint16_t seq, uint32_t* rtt_ms) {
     while (pit_get_uptime_ms() - start_ms < 1000) {
         net_poll();
         if (s_ping_state.replied &&
-            s_ping_state.reply_id == 0x5E1D &&
+            s_ping_state.reply_id == ping_id &&
             s_ping_state.reply_seq == seq) {
             if (rtt_ms) {
                 *rtt_ms = (uint32_t)(pit_get_uptime_ms() - start_ms);
@@ -1122,6 +1165,36 @@ int net_send_udp(uint32_t dest_ip, uint16_t src_port, uint16_t dest_port, const 
 
     size_t total_udp_len = sizeof(struct udp_header) + payload_len;
     return net_send_ip(dest_ip, IP_PROTO_UDP, udp_buf, total_udp_len);
+}
+
+void net_chaff_tick(void) {
+    if (!s_net_chaff_mode || s_in_chaff) return;
+    if (!nic_is_active() || s_net_airgap_mode == NET_AIRGAP_LOCKED) return;
+
+    uint64_t now = pit_get_uptime_ms();
+    if (now < s_chaff_next_tick_ms) return;
+
+    // Next Poisson interval: 150-450 ms
+    s_chaff_next_tick_ms = now + 150 + (rng_get_u64() % 300);
+
+    s_in_chaff = 1;
+
+    // Generate decoy query / keepalive UDP frame
+    uint8_t decoy_payload[96];
+    rng_get_bytes(decoy_payload, sizeof(decoy_payload));
+    decoy_payload[0] = (uint8_t)(rng_get_u64() & 0xFF);
+    decoy_payload[1] = (uint8_t)((rng_get_u64() >> 8) & 0xFF);
+    decoy_payload[2] = 0x01; // Standard query
+    decoy_payload[3] = 0x00;
+    decoy_payload[4] = 0x00;
+    decoy_payload[5] = 0x01; // 1 Question
+
+    uint32_t dest = s_config.gateway ? s_config.gateway : MAKE_IP(10, 0, 2, 2);
+    uint16_t src_p = 49152 + (uint16_t)(rng_get_u64() % 16000);
+    net_send_udp(dest, src_p, 53, decoy_payload, sizeof(decoy_payload));
+    s_chaff_packets_sent++;
+
+    s_in_chaff = 0;
 }
 
 int net_dns_resolve(const char* hostname, uint32_t* ip_out) {

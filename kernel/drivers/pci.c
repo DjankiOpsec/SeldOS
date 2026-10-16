@@ -243,7 +243,79 @@ int pci_quarantine_backdoors(void) {
     return quarantined_count;
 }
 
+static int s_pci_locked_down = 0;
+
+int pci_is_locked_down(void) {
+    return s_pci_locked_down;
+}
+
+int pci_lockdown_dma_and_rom(void) {
+    int rom_disabled_count = 0;
+    int dma_revoked_count = 0;
+
+    for (uint16_t bus = 0; bus < 256; bus++) {
+        for (uint8_t slot = 0; slot < 32; slot++) {
+            uint16_t vendor = pci_read_word((uint8_t)bus, slot, 0, PCI_REG_VENDOR_ID);
+            if (vendor == 0xFFFF) continue;
+
+            uint8_t header_type = pci_read_byte((uint8_t)bus, slot, 0, PCI_REG_HEADER_TYPE);
+            uint8_t num_funcs = (header_type & 0x80) ? 8 : 1;
+            uint8_t is_bridge = (header_type & 0x7F) == 0x01;
+
+            for (uint8_t func = 0; func < num_funcs; func++) {
+                uint16_t ven = pci_read_word((uint8_t)bus, slot, func, PCI_REG_VENDOR_ID);
+                if (ven == 0xFFFF) continue;
+
+                uint16_t dev = pci_read_word((uint8_t)bus, slot, func, PCI_REG_DEVICE_ID);
+                uint8_t cc = pci_read_byte((uint8_t)bus, slot, func, PCI_REG_CLASS);
+                uint8_t sc = pci_read_byte((uint8_t)bus, slot, func, PCI_REG_SUBCLASS);
+
+                // 1. Option ROM Lockdown: Disable Expansion ROM Decode
+                uint8_t rom_reg = is_bridge ? PCI_REG_EXPANSION_ROM_BR : PCI_REG_EXPANSION_ROM;
+                uint32_t rom_base = pci_read_dword((uint8_t)bus, slot, func, rom_reg);
+                if (rom_base & 0x01) {
+                    pci_write_dword((uint8_t)bus, slot, func, rom_reg, 0);
+                    rom_disabled_count++;
+                }
+
+                // 2. Zero-Trust DMA & Bus Master Lockdown
+                // Whitelist: E1000 Ethernet (0x8086:0x100E), AC97 Audio (0x8086:0x2415), Host/PCI Bridges
+                int is_whitelisted = 0;
+                if (ven == 0x8086 && dev == 0x100e) {
+                    is_whitelisted = 1; // Intel e1000 NIC DMA
+                } else if (ven == 0x8086 && dev == 0x2415) {
+                    is_whitelisted = 1; // Intel ICH AC97 Audio DMA
+                } else if (cc == PCI_CLASS_BRIDGE) {
+                    is_whitelisted = 1; // PCI bridge infrastructure
+                } else if (cc == PCI_CLASS_STORAGE && sc == 0x01) {
+                    is_whitelisted = 1; // IDE storage controller
+                }
+
+                if (!is_whitelisted) {
+                    uint16_t cmd = pci_read_word((uint8_t)bus, slot, func, PCI_REG_COMMAND);
+                    if (cmd & PCI_CMD_BUS_MASTER) {
+                        cmd &= ~PCI_CMD_BUS_MASTER;
+                        pci_write_word((uint8_t)bus, slot, func, PCI_REG_COMMAND, cmd);
+                        dma_revoked_count++;
+                    }
+                }
+            }
+        }
+    }
+
+    s_pci_locked_down = 1;
+    serial_puts("[+] OpSec Zero-Trust: PCI DMA Lockdown active (ROMs disabled: ");
+    serial_print_dec((uint32_t)rom_disabled_count);
+    serial_puts(", untrusted Bus Masters revoked: ");
+    serial_print_dec((uint32_t)dma_revoked_count);
+    serial_puts(").\n");
+
+    return dma_revoked_count;
+}
+
 void pci_init(void) {
     serial_puts("[+] PCI Bus: Subsystem Initialized. Auditing hardware backdoors...\n");
     pci_quarantine_backdoors();
+    pci_lockdown_dma_and_rom();
 }
+

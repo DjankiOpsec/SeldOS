@@ -69,6 +69,14 @@
 #define SYS_OPSEC_GET_JITTER 53
 #define SYS_OPSEC_SET_DEADMAN 54
 #define SYS_OPSEC_GET_DEADMAN 55
+#define SYS_OPSEC_FLUSH_UARCH 56
+#define SYS_NET_SET_CHAFF     57
+#define SYS_NET_GET_CHAFF     58
+#define SYS_OPSEC_SET_TEMPEST 59
+#define SYS_OPSEC_GET_TEMPEST 60
+#define SYS_PCI_LOCKDOWN      61
+
+void cpu_flush_microarchitecture(void);
 
 /* Seld-Unveil Permission Flags (OpenBSD-style Ring 3 Filesystem Sandboxing) */
 #define UNVEIL_READ         0x01  /* Read file: open(O_RDONLY), readfile, stat */

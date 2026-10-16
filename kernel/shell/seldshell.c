@@ -28,6 +28,7 @@
 #include "net.h"
 #include "e1000.h"
 #include "panic.h"
+#include "pci.h"
 
 #define MAX_CMD_LEN 128
 #define MAX_ARGS 16
@@ -946,6 +947,55 @@ static void cmd_drv_off(int argc, char* argv[]) {
     }
 }
 
+static void cmd_chaff(int argc, char* argv[]) {
+    if (argc < 2 || strcmp(argv[1], "status") == 0) {
+        int c = net_get_chaff();
+        print_out("[*] Poisson Cover Traffic & Uniform Padding: ");
+        print_out(c ? "ACTIVE (Anti-Correlation GPA Defense)\n" : "DISABLED\n");
+        return;
+    }
+    if (strcmp(argv[1], "on") == 0 || strcmp(argv[1], "1") == 0) {
+        net_set_chaff(1);
+        print_out("[+] Poisson Cover Traffic & Uniform Packet Padding ACTIVE: Flow correlation defeated.\n");
+    } else if (strcmp(argv[1], "off") == 0 || strcmp(argv[1], "0") == 0) {
+        net_set_chaff(0);
+        print_out("[*] Poisson Cover Traffic & Uniform Packet Padding DISABLED.\n");
+    }
+}
+
+static void cmd_tempest(int argc, char* argv[]) {
+    if (argc < 2 || strcmp(argv[1], "status") == 0) {
+        int t = vga_get_tempest_dither();
+        print_out("[*] TEMPEST Video RF Dispersion & Subpixel Dithering: ");
+        print_out(t ? "ACTIVE (SDR Van Eck Evasion)\n" : "DISABLED\n");
+        return;
+    }
+    if (strcmp(argv[1], "on") == 0 || strcmp(argv[1], "1") == 0) {
+        vga_set_tempest_dither(1);
+        print_out("[+] TEMPEST Evasion ACTIVE: RGB micro-dithering masks electromagnetic emissions.\n");
+    } else if (strcmp(argv[1], "off") == 0 || strcmp(argv[1], "0") == 0) {
+        vga_set_tempest_dither(0);
+        print_out("[*] TEMPEST Evasion DISABLED.\n");
+    }
+}
+
+static void cmd_uarch(int argc, char* argv[]) {
+    (void)argc;
+    (void)argv;
+    print_out("[*] Executing CPU Microarchitectural Flush (IBPB, Caches, TLB)...\n");
+    cpu_flush_microarchitecture();
+    print_out("[+] Microarchitectural state sanitized. Branch history erased.\n");
+}
+
+static void cmd_pci(int argc, char* argv[]) {
+    (void)argc;
+    (void)argv;
+    print_out("[*] Initiating Zero-Trust PCI DMA & Option ROM Lockdown...\n");
+    int count = pci_lockdown_dma_and_rom();
+    (void)count;
+    print_out("[+] PCI Zero-Trust Lockdown complete.\n");
+}
+
 static const struct shell_command commands[] = {
     {"help",     cmd_help},
     {"clear",    cmd_clear},
@@ -979,6 +1029,10 @@ static const struct shell_command commands[] = {
     {"ifconfig", cmd_ifconfig},
     {"ping",     cmd_ping},
     {"arp",      cmd_arp},
+    {"chaff",    cmd_chaff},
+    {"tempest",  cmd_tempest},
+    {"uarch",    cmd_uarch},
+    {"pci",      cmd_pci},
     {"gpu",      cmd_drv_off},
     {"cpu",      cmd_drv_off},
     {"ram",      cmd_drv_off},

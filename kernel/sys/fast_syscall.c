@@ -29,6 +29,7 @@
 #include "panic.h"
 #include "io.h"
 #include "syscall.h"
+#include "pci.h"
 
 extern void syscall_entry_asm(void);
 extern int jump_to_userspace_asm(void (*user_func)(void), void* user_stack_top, uint64_t user_cr3, uint64_t argc, void* argv);
@@ -82,7 +83,34 @@ static inline uint64_t rdmsr(uint32_t msr) {
     __asm__ volatile ("rdmsr" : "=a"(lo), "=d"(hi) : "c"(msr));
     return ((uint64_t)hi << 32) | lo;
 }
+
+static inline void cpuid(uint32_t leaf, uint32_t subleaf, uint32_t* eax, uint32_t* ebx, uint32_t* ecx, uint32_t* edx) {
+    __asm__ volatile ("cpuid"
+        : "=a"(*eax), "=b"(*ebx), "=c"(*ecx), "=d"(*edx)
+        : "a"(leaf), "c"(subleaf));
+}
 #endif
+
+void cpu_flush_microarchitecture(void) {
+#if defined(__riscv)
+    __asm__ volatile ("fence.i; fence rw, rw" ::: "memory");
+#else
+    // 1. Indirect Branch Predictor Barrier (IBPB): MSR 0x48 (IA32_PRED_CMD)
+    uint32_t eax = 0, ebx = 0, ecx = 0, edx = 0;
+    cpuid(7, 0, &eax, &ebx, &ecx, &edx);
+    if (edx & (1 << 26)) { // SPEC_CTRL / IBPB support
+        wrmsr(0x48, 1);
+    }
+
+    // 2. Full CPU cache flush and write-back
+    __asm__ volatile ("wbinvd" ::: "memory");
+
+    // 3. Flush TLB by reloading CR3
+    uint64_t cr3_val;
+    __asm__ volatile ("mov %%cr3, %0; mov %0, %%cr3" : "=r"(cr3_val) : : "memory");
+#endif
+    serial_puts("[+] OpSec: Microarchitectural state sanitized (Caches, TLB, IBPB flushed).\n");
+}
 
 void syscall_init_fast(void) {
 #if defined(__riscv)
@@ -675,6 +703,12 @@ static int check_pledge(uint64_t sys_num, uint64_t a1) {
         case SYS_OPSEC_GET_JITTER:
         case SYS_OPSEC_SET_DEADMAN:
         case SYS_OPSEC_GET_DEADMAN:
+        case SYS_OPSEC_FLUSH_UARCH:
+        case SYS_NET_SET_CHAFF:
+        case SYS_NET_GET_CHAFF:
+        case SYS_OPSEC_SET_TEMPEST:
+        case SYS_OPSEC_GET_TEMPEST:
+        case SYS_PCI_LOCKDOWN:
         case SYS_SELD:
             req = PLEDGE_STDIO;
             break;
@@ -1644,7 +1678,35 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
             return (uint64_t)kbd_get_deadman();
         }
 
+        case SYS_OPSEC_FLUSH_UARCH: {
+            cpu_flush_microarchitecture();
+            return 0;
+        }
+
+        case SYS_NET_SET_CHAFF: {
+            net_set_chaff((int)a1);
+            return 0;
+        }
+
+        case SYS_NET_GET_CHAFF: {
+            return (uint64_t)net_get_chaff();
+        }
+
+        case SYS_OPSEC_SET_TEMPEST: {
+            vga_set_tempest_dither((int)a1);
+            return 0;
+        }
+
+        case SYS_OPSEC_GET_TEMPEST: {
+            return (uint64_t)vga_get_tempest_dither();
+        }
+
+        case SYS_PCI_LOCKDOWN: {
+            return (uint64_t)pci_lockdown_dma_and_rom();
+        }
+
         case SYS_EXIT: {
+            cpu_flush_microarchitecture();
             user_exit_to_kernel(a1);
             return 0;
         }

@@ -198,7 +198,8 @@ def main():
         "poweroff",
         "purge",
         "stealth",
-        "diode"
+        "diode",
+        "pinpad"
     ]
 
     files_to_write = []

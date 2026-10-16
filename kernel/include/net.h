@@ -223,4 +223,10 @@ void net_set_desync(int mode);
 int  net_get_desync(void);
 int  net_get_desync_stats(uint32_t* splits, uint32_t* fakes);
 
+/* Poisson Chaff & Uniform Packet Padding (Anti-Correlation GPA Defense) */
+void net_set_chaff(int mode);
+int  net_get_chaff(void);
+uint32_t net_get_chaff_stats(void);
+void net_chaff_tick(void);
+
 #endif /* SELD_NET_H */
