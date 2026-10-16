@@ -552,7 +552,7 @@ static void load_url(const char* url) {
                  "<p>* Sovereign HTTPS: Native SeldTLS 1.3 (RFC 8446) with AES-128-GCM and X25519.</p>"
                  "<p>* Clearnet: Control D OpSec DNS (76.76.2.2:53 / Ads & Trackers) + Direct TCP.</p>"
                  "<p>* Onion: SOCKS5 (10.0.2.2:9050) with remote ATYP=0x03 DNS resolution.</p>"
-                 "<p>* Hardware: Intel PRO/1000 MT (82540EM) or AMD PCnet-FAST III (Am79C973).</p>"
+                 "<p>* Hardware: 82540EM Gigabit (e1000) or Am79C973 Fast Ethernet.</p>"
                  "<p>* Verify interface status with 'ifconfig' and 'ping 10.0.2.2'.</p>"
                  "<hr>"
                  "<p><a href=\"home\">[ &lt; Return to Sovereign Portal ]</a></p>"

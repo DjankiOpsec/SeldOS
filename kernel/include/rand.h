@@ -3,7 +3,7 @@
  * Copyright (C) 2026 Free Software Foundation, Inc.
  *
  * Kernel Hardware Entropy & RNG Interface
- * Support for CPU RDRAND instruction with fallback jitter entropy.
+ * Zero-Trust CSPRNG with SHA-256 Entropy Sponge Whitening.
  * GPLv3 Licensed.
  */
 

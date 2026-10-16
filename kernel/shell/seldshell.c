@@ -74,7 +74,7 @@ static void cmd_help(int argc, char* argv[]) {
     print_out("  write <f> <t> Write text string to file on disk\n");
     print_out("  rm <file>     Remove file from SeldFS volume\n");
     print_out("  rand [count]  Generate cryptographically secure random 64-bit integers\n");
-    print_out("  entropy       Inspect hardware entropy sources (RDRAND/RDTSC)\n");
+    print_out("  entropy       Inspect Zero-Trust CSPRNG entropy status\n");
     print_out("  sha256 <file> Compute cryptographic SHA-256 digest of file\n");
     print_out("  verify <file> Verify cryptographic SHA-256 integrity of file\n");
     print_out("  uptime        Display system running time and PIT tick count\n");
@@ -85,7 +85,7 @@ static void cmd_help(int argc, char* argv[]) {
     print_out("  run3 [file]   Launch isolated Ring 3 ELF binary or built-in payload\n");
     print_out("  snl <binary>  Execute ELF-64 binary directly from SeldFS (Seld not's Linux)\n");
     print_out("  echo [args..] Output arguments to standard system sinks\n");
-    print_out("  ifconfig      Display network interface status and stats (Intel e1000)\n");
+    print_out("  ifconfig      Display network interface status and stats\n");
     print_out("  ping <ip>     Send ICMP ECHO_REQUEST packets to network host\n");
     print_out("  arp           Display kernel Address Resolution Protocol (ARP) cache\n");
     print_out("  gpu drv off   Brutally disable GPU display driver (triggers kernel panic)\n");
@@ -459,10 +459,11 @@ static void cmd_rand(int argc, char* argv[]) {
 static void cmd_entropy(int argc, char* argv[]) {
     (void)argc; (void)argv;
     print_out("Hardware Entropy Architecture State:\n");
+    print_out("  CSPRNG Engine: Zero-Trust SHA-256 Entropy Whitening\n");
     if (rng_has_rdrand()) {
-        print_out("  Primary CSPRNG: Intel/AMD Hardware RDRAND (NIST SP 800-90A/B/C compliant)\n");
+        print_out("  Hardware Feed: CPU RDRAND [Untrusted Silicon Feed Whitened with SHA-256]\n");
     } else {
-        print_out("  Primary CSPRNG: RDTSC High-Resolution Timestamp Jitter + SplitMix64\n");
+        print_out("  Hardware Feed: High-Resolution Timer Jitter (RDTSC/RDTIME)\n");
     }
     print_out("  Ring 0 Direct Access: Enabled\n");
 }
@@ -669,7 +670,7 @@ static void cmd_ifconfig(int argc, char* argv[]) {
     net_format_mac(cfg.mac, mac_buf, sizeof(mac_buf));
 
     print_out("eth0: flags=UP,BROADCAST,MULTICAST mtu 1500\n");
-    print_out("      ether "); print_out(mac_buf); print_out(" (Intel e1000 PCI)\n");
+    print_out("      ether "); print_out(mac_buf); print_out(" (Gigabit Ethernet PCI)\n");
     print_out("      inet "); print_out(ip_buf);
     print_out("  netmask "); print_out(mask_buf);
     print_out("  gateway "); print_out(gw_buf); print_out("\n");

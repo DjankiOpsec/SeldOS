@@ -168,6 +168,82 @@ int pci_find_class(uint8_t class_code, uint8_t subclass, struct pci_device* dev_
     return -1;
 }
 
+int pci_quarantine_backdoors(void) {
+    int quarantined_count = 0;
+
+    for (uint16_t bus = 0; bus < 256; bus++) {
+        for (uint8_t slot = 0; slot < 32; slot++) {
+            uint16_t vendor = pci_read_word((uint8_t)bus, slot, 0, PCI_REG_VENDOR_ID);
+            if (vendor == 0xFFFF) continue;
+
+            uint8_t header_type = pci_read_byte((uint8_t)bus, slot, 0, PCI_REG_HEADER_TYPE);
+            uint8_t num_funcs = (header_type & 0x80) ? 8 : 1;
+
+            for (uint8_t func = 0; func < num_funcs; func++) {
+                uint16_t ven = pci_read_word((uint8_t)bus, slot, func, PCI_REG_VENDOR_ID);
+                if (ven == 0xFFFF) continue;
+
+                uint16_t dev = pci_read_word((uint8_t)bus, slot, func, PCI_REG_DEVICE_ID);
+                uint8_t cc = pci_read_byte((uint8_t)bus, slot, func, PCI_REG_CLASS);
+                uint8_t sc = pci_read_byte((uint8_t)bus, slot, func, PCI_REG_SUBCLASS);
+
+                int is_hostile = 0;
+                const char* desc = 0;
+
+                // Intel Management Engine Interface (MEI / HECI)
+                // Class 0x07 (Communication), Subclass 0x80 (Other) or known Intel ME device IDs
+                if (ven == 0x8086) {
+                    if (cc == 0x07 && sc == 0x80) {
+                        is_hostile = 1;
+                        desc = "Intel Management Engine (HECI/MEI)";
+                    } else if (dev == 0x1c3a || dev == 0x1e3a || dev == 0x8c3a ||
+                               dev == 0x9cba || dev == 0x9d3a || dev == 0xa13a ||
+                               dev == 0xa2ba || dev == 0xa360 || dev == 0x2e14 ||
+                               dev == 0x3b64 || dev == 0x1d3a) {
+                        is_hostile = 1;
+                        desc = "Intel ME / AMT Interface";
+                    }
+                }
+                // AMD Platform Security Processor (PSP / CCP)
+                else if (ven == 0x1022) {
+                    if (cc == 0x10) {
+                        is_hostile = 1;
+                        desc = "AMD Platform Security Processor (PSP)";
+                    } else if (dev == 0x1456 || dev == 0x1468 || dev == 0x1486 ||
+                               dev == 0x1578 || dev == 0x1649) {
+                        is_hostile = 1;
+                        desc = "AMD PSP / Crypto Coprocessor";
+                    }
+                }
+
+                if (is_hostile) {
+                    // Revoke all PCI privileges: clear Bus Master (DMA), Memory Space, I/O Space
+                    pci_write_word((uint8_t)bus, slot, func, PCI_REG_COMMAND, 0);
+
+                    serial_puts("[!] OPSEC QUARANTINE: Detected Hostile Silicon Coprocessor (");
+                    serial_puts(desc);
+                    serial_puts(") at B/S/F ");
+                    serial_print_dec((uint32_t)bus);
+                    serial_puts("/");
+                    serial_print_dec((uint32_t)slot);
+                    serial_puts("/");
+                    serial_print_dec((uint32_t)func);
+                    serial_puts(". Bus Mastering & DMA revoked!\n");
+
+                    quarantined_count++;
+                }
+            }
+        }
+    }
+
+    if (quarantined_count == 0) {
+        serial_puts("[+] OpSec PCI Audit: 0 active Ring -3 hardware backdoors active on bus.\n");
+    }
+
+    return quarantined_count;
+}
+
 void pci_init(void) {
-    serial_puts("[+] PCI Bus: Subsystem Initialized. Enumerating devices...\n");
+    serial_puts("[+] PCI Bus: Subsystem Initialized. Auditing hardware backdoors...\n");
+    pci_quarantine_backdoors();
 }

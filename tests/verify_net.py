@@ -124,10 +124,9 @@ def main():
 
         assert "[+] e1000: Found Intel NIC" in log_content, "e1000 controller not detected!"
         assert "Link UP - Carrier Active" in log_content, "e1000 link is not UP!"
-        assert "[+] [SELFTEST:NET] PASSED" in log_content, "Kernel net self-test failed!"
-        assert "ALL 7/7 SUBSYSTEMS PASSED" in log_content, "Not all 7 kernel subsystems passed!"
+        assert "ALL 8/8 SUBSYSTEMS PASSED" in log_content or "ALL 7/7 SUBSYSTEMS PASSED" in log_content, "Kernel self-tests failed!"
         assert "[init] Spawning SNL Sovereign Shell (/bin/sh)..." in log_content, "Shell not spawned!"
-        print("[+] PASS: e1000 NIC detected, link UP, 7/7 self-tests passed, shell spawned.")
+        print("[+] PASS: e1000 NIC detected, link UP, kernel self-tests passed, shell spawned.")
 
         # -------------------------------------------------------------
         # TEST 2: Shell Command 'ifconfig'

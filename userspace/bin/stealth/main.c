@@ -156,8 +156,8 @@ int main(int argc, char* argv[]) {
         }
 
         printf("[+] VLESS Tunnel ESTABLISHED! Sending HTTP probe request...\n");
-        char req[256];
-        snprintf(req, sizeof(req), "GET / HTTP/1.1\r\nHost: %s\r\nUser-Agent: SeldOS-Stealth/1.0\r\nConnection: close\r\n\r\n", target_host);
+        char req[512];
+        snprintf(req, sizeof(req), "GET / HTTP/1.1\r\nHost: %s\r\nUser-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:115.0) Gecko/20100101 Firefox/115.0\r\nAccept: */*\r\nConnection: close\r\n\r\n", target_host);
 
         seld_vless_send(&conn, req, strlen(req));
 

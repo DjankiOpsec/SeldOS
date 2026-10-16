@@ -138,7 +138,7 @@ void kernel_main(uint64_t mb_info_addr, uint64_t mb_magic) {
     boot_anim_step("SELDFS", "Block filesystem mounted, root directory verified", 8, 15);
 
     rng_init();
-    boot_anim_step("CRYPTO", "Hardware RDRAND and SHA-256 primitives active", 9, 15);
+    boot_anim_step("CRYPTO", "Zero-Trust CSPRNG & SHA-256 Whitening active", 9, 15);
 
     pit_init(100);
     boot_anim_step("PIT", "100 Hz chronometer timer online, IRQ0 active", 10, 15);
@@ -147,7 +147,7 @@ void kernel_main(uint64_t mb_info_addr, uint64_t mb_magic) {
     audio_init();
     boot_anim_step("AUDIO", "Sound architecture online (Speaker/AC97/SB16)", 11, 15);
 #else
-    boot_anim_step("AUDIO", "Audio hardware bypassed on RISC-V target", 11, 15);
+    boot_anim_step("AUDIO", "Audio hardware isolated on RISC-V target", 11, 15);
 #endif
 
     sched_init();
@@ -155,9 +155,9 @@ void kernel_main(uint64_t mb_info_addr, uint64_t mb_magic) {
 
 #if !defined(__riscv)
     net_init();
-    boot_anim_step("NET", "Intel e1000 PCI Gigabit Network online", 13, 15);
+    boot_anim_step("NET", "Gigabit Ethernet Carrier (Hostile Sandbox) online", 13, 15);
 #else
-    boot_anim_step("NET", "Network carrier bypassed on RISC-V target", 13, 15);
+    boot_anim_step("NET", "Network carrier isolated on RISC-V target", 13, 15);
 #endif
 
     selftest_run_all();

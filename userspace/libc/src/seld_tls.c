@@ -239,15 +239,34 @@ int seld_tls_handshake(struct seld_tls_conn* conn, int tcp_sock, const char* sni
     seld_get_random_bytes(client_random, 32);
     seld_get_random_bytes(session_id, 32);
 
-    // 2. Build ClientHello message
-    uint8_t ch_buf[1024];
+    // 2. Build ClientHello message with Standard Browser JA3/JA4 Fingerprint (Firefox ESR 115 / Tor Browser)
+    uint8_t ch_buf[2048];
     size_t sni_len = strlen(sni_hostname);
 
+    // Standard Browser / Tor Firefox ESR 115 Cipher Suites (15 suites)
+    static const uint16_t s_std_ciphers[] = {
+        0x1301, // TLS_AES_128_GCM_SHA256 (Primary TLS 1.3 negotiated suite)
+        0x1302, // TLS_AES_256_GCM_SHA384
+        0x1303, // TLS_CHACHA20_POLY1305_SHA256
+        0xc02b, // TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+        0xc02f, // TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+        0xc02c, // TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
+        0xc030, // TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+        0xcca9, // TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256
+        0xcca8, // TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256
+        0xc013, // TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA
+        0xc014, // TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA
+        0x009c, // TLS_RSA_WITH_AES_128_GCM_SHA256
+        0x009d, // TLS_RSA_WITH_AES_256_GCM_SHA384
+        0x002f, // TLS_RSA_WITH_AES_128_CBC_SHA
+        0x0035  // TLS_RSA_WITH_AES_256_CBC_SHA
+    };
+
     // Extensions buffer
-    uint8_t exts[512];
+    uint8_t exts[1024];
     size_t ep = 0;
 
-    // Extension: Server Name Indication (0x0000)
+    // 1. Extension: Server Name Indication (0x0000)
     exts[ep++] = 0x00; exts[ep++] = 0x00; // Type SNI
     uint16_t sni_ext_len = (uint16_t)(sni_len + 5);
     exts[ep++] = (uint8_t)(sni_ext_len >> 8); exts[ep++] = (uint8_t)sni_ext_len;
@@ -258,18 +277,48 @@ int seld_tls_handshake(struct seld_tls_conn* conn, int tcp_sock, const char* sni
     memcpy(exts + ep, sni_hostname, sni_len);
     ep += sni_len;
 
-    // Extension: Supported Versions (0x002b) -> TLS 1.3 (0x0304)
-    exts[ep++] = 0x00; exts[ep++] = 0x2b;
-    exts[ep++] = 0x00; exts[ep++] = 0x03;
-    exts[ep++] = 0x02; exts[ep++] = 0x03; exts[ep++] = 0x04;
+    // 2. Extension: Extended Master Secret (0x0017, RFC 7627)
+    exts[ep++] = 0x00; exts[ep++] = 0x17;
+    exts[ep++] = 0x00; exts[ep++] = 0x00;
 
-    // Extension: Supported Groups (0x000a) -> X25519 (0x001d)
+    // 3. Extension: Renegotiation Info (0xff01, RFC 5746)
+    exts[ep++] = 0xff; exts[ep++] = 0x01;
+    exts[ep++] = 0x00; exts[ep++] = 0x01;
+    exts[ep++] = 0x00;
+
+    // 4. Extension: Supported Groups (0x000a) -> X25519 (0x001d), P-256 (0x0017), P-384 (0x0018)
     exts[ep++] = 0x00; exts[ep++] = 0x0a;
-    exts[ep++] = 0x00; exts[ep++] = 0x04;
-    exts[ep++] = 0x00; exts[ep++] = 0x02;
-    exts[ep++] = 0x00; exts[ep++] = 0x1d;
+    exts[ep++] = 0x00; exts[ep++] = 0x08; // ext len 8
+    exts[ep++] = 0x00; exts[ep++] = 0x06; // list len 6
+    exts[ep++] = 0x00; exts[ep++] = 0x1d; // X25519
+    exts[ep++] = 0x00; exts[ep++] = 0x17; // secp256r1
+    exts[ep++] = 0x00; exts[ep++] = 0x18; // secp384r1
 
-    // Extension: Key Share (0x0033) -> X25519 Public Key
+    // 5. Extension: EC Point Formats (0x000b) -> uncompressed (0)
+    exts[ep++] = 0x00; exts[ep++] = 0x0b;
+    exts[ep++] = 0x00; exts[ep++] = 0x02;
+    exts[ep++] = 0x01; exts[ep++] = 0x00;
+
+    // 6. Extension: Session Ticket (0x0023, RFC 5077)
+    exts[ep++] = 0x00; exts[ep++] = 0x23;
+    exts[ep++] = 0x00; exts[ep++] = 0x00;
+
+    // 7. Extension: ALPN (0x0010) -> h2, http/1.1
+    exts[ep++] = 0x00; exts[ep++] = 0x10;
+    exts[ep++] = 0x00; exts[ep++] = 0x0e; // ext len 14
+    exts[ep++] = 0x00; exts[ep++] = 0x0c; // list len 12
+    exts[ep++] = 0x02; exts[ep++] = 'h'; exts[ep++] = '2';
+    exts[ep++] = 0x08; exts[ep++] = 'h'; exts[ep++] = 't'; exts[ep++] = 't'; exts[ep++] = 'p';
+    exts[ep++] = '/'; exts[ep++] = '1'; exts[ep++] = '.'; exts[ep++] = '1';
+
+    // 8. Extension: Status Request / OCSP (0x0005, RFC 6066)
+    exts[ep++] = 0x00; exts[ep++] = 0x05;
+    exts[ep++] = 0x00; exts[ep++] = 0x05;
+    exts[ep++] = 0x01; // status_type: ocsp
+    exts[ep++] = 0x00; exts[ep++] = 0x00; // responder_id_list len 0
+    exts[ep++] = 0x00; exts[ep++] = 0x00; // request_extensions len 0
+
+    // 9. Extension: Key Share (0x0033) -> X25519 Public Key
     exts[ep++] = 0x00; exts[ep++] = 0x33;
     exts[ep++] = 0x00; exts[ep++] = 0x26; // 38 bytes
     exts[ep++] = 0x00; exts[ep++] = 0x24; // client shares len 36
@@ -278,7 +327,14 @@ int seld_tls_handshake(struct seld_tls_conn* conn, int tcp_sock, const char* sni
     memcpy(exts + ep, pub_key, 32);
     ep += 32;
 
-    // Extension: Signature Algorithms (0x000d)
+    // 10. Extension: Supported Versions (0x002b) -> TLS 1.3 (0x0304), TLS 1.2 (0x0303)
+    exts[ep++] = 0x00; exts[ep++] = 0x2b;
+    exts[ep++] = 0x00; exts[ep++] = 0x05;
+    exts[ep++] = 0x04;
+    exts[ep++] = 0x03; exts[ep++] = 0x04; // TLS 1.3
+    exts[ep++] = 0x03; exts[ep++] = 0x03; // TLS 1.2
+
+    // 11. Extension: Signature Algorithms (0x000d)
     exts[ep++] = 0x00; exts[ep++] = 0x0d;
     exts[ep++] = 0x00; exts[ep++] = 0x14; // ext len 20
     exts[ep++] = 0x00; exts[ep++] = 0x12; // sig algs len 18 (9 algorithms)
@@ -292,15 +348,24 @@ int seld_tls_handshake(struct seld_tls_conn* conn, int tcp_sock, const char* sni
     exts[ep++] = 0x06; exts[ep++] = 0x01; // rsa_pkcs1_sha512
     exts[ep++] = 0x08; exts[ep++] = 0x07; // ed25519
 
+    // 12. Extension: PSK Key Exchange Modes (0x002d, RFC 8446)
+    exts[ep++] = 0x00; exts[ep++] = 0x2d;
+    exts[ep++] = 0x00; exts[ep++] = 0x02;
+    exts[ep++] = 0x01; exts[ep++] = 0x01; // psk_dhe_ke
+
     // Build Handshake body
     size_t chp = 0;
     ch_buf[chp++] = 0x03; ch_buf[chp++] = 0x03; // Legacy client version TLS 1.2
     memcpy(ch_buf + chp, client_random, 32); chp += 32;
     ch_buf[chp++] = 32; // Session ID length
     memcpy(ch_buf + chp, session_id, 32); chp += 32;
-    // Cipher suites: TLS_AES_128_GCM_SHA256 (0x1301)
-    ch_buf[chp++] = 0x00; ch_buf[chp++] = 0x02;
-    ch_buf[chp++] = 0x13; ch_buf[chp++] = 0x01;
+    // Cipher suites: 15 standard browser suites (30 bytes)
+    ch_buf[chp++] = (uint8_t)(sizeof(s_std_ciphers) >> 8);
+    ch_buf[chp++] = (uint8_t)(sizeof(s_std_ciphers) & 0xff);
+    for (size_t ci = 0; ci < sizeof(s_std_ciphers) / sizeof(s_std_ciphers[0]); ci++) {
+        ch_buf[chp++] = (uint8_t)(s_std_ciphers[ci] >> 8);
+        ch_buf[chp++] = (uint8_t)(s_std_ciphers[ci] & 0xff);
+    }
     // Compression methods: null (0x00)
     ch_buf[chp++] = 0x01; ch_buf[chp++] = 0x00;
     // Extensions length
@@ -308,7 +373,7 @@ int seld_tls_handshake(struct seld_tls_conn* conn, int tcp_sock, const char* sni
     memcpy(ch_buf + chp, exts, ep); chp += ep;
 
     // Handshake header: msg_type = 1 (ClientHello), length (3 bytes)
-    uint8_t ch_msg[1024];
+    uint8_t ch_msg[2048];
     ch_msg[0] = 0x01;
     ch_msg[1] = (uint8_t)(chp >> 16);
     ch_msg[2] = (uint8_t)(chp >> 8);
@@ -317,7 +382,7 @@ int seld_tls_handshake(struct seld_tls_conn* conn, int tcp_sock, const char* sni
     size_t ch_msg_len = 4 + chp;
 
     // Wrap in TLS Record: ContentType Handshake (0x16), Legacy Ver 0x0301, Length
-    uint8_t ch_rec[1030];
+    uint8_t ch_rec[2054];
     ch_rec[0] = 0x16; ch_rec[1] = 0x03; ch_rec[2] = 0x01;
     ch_rec[3] = (uint8_t)(ch_msg_len >> 8); ch_rec[4] = (uint8_t)ch_msg_len;
     memcpy(ch_rec + 5, ch_msg, ch_msg_len);

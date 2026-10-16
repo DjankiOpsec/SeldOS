@@ -651,7 +651,7 @@ int main(int argc, char* argv[]) {
                         char net_msg[256];
                         snprintf(net_msg, sizeof(net_msg),
                                  "Network Interface: eth0\n"
-                                 "Controller: Intel 82540EP (PCI)\n"
+                                 "Controller: Gigabit Ethernet 82540EP (PCI)\n"
                                  "IPv4: 10.0.2.15  Netmask: 255.255.255.0\n"
                                  "Gateway: 10.0.2.2  Carrier: ONLINE\n"
                                  "Frames: TX %lu, RX %lu",

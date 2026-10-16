@@ -10,6 +10,7 @@
 #include "rand.h"
 #include "io.h"
 #include "pmm.h"
+#include "vmm.h"
 #include "serial.h"
 
 #define KBD_BUFFER_SIZE 256
@@ -141,15 +142,15 @@ static void opsec_deadman_trigger_wipe(void) {
     // 1. DoD wipe of physical memory
     pmm_secure_wipe_all_free();
 
-    // 2. Write-back and invalidate all CPU L1/L2/L3 caches
-    __asm__ volatile ("wbinvd" ::: "memory");
-
 #if defined(__riscv)
     *(volatile uint32_t*)(phys_to_virt(0x100000)) = 0x7777;
     while (1) {
         __asm__ volatile ("wfi");
     }
 #else
+    // 2. Write-back and invalidate all CPU L1/L2/L3 caches
+    __asm__ volatile ("wbinvd" ::: "memory");
+
     // 3. Fast reset port 0x92
     outb(0x92, (uint8_t)(inb(0x92) | 1));
 

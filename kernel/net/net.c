@@ -553,37 +553,97 @@ struct tcp_socket {
     size_t         rx_capacity;
     size_t         rx_len;
     uint8_t        fin_received;
+    uint32_t       ts_recent;   /* Peer's timestamp (TSecr to echo) */
+    uint32_t       ts_val_base; /* Randomized base for outgoing timestamps */
 };
 
 static struct tcp_socket s_sockets[MAX_TCP_SOCKETS] = {0};
 
 static int net_send_tcp_packet_sock(struct tcp_socket* s, uint8_t flags, const void* payload, size_t payload_len) {
     if (!s) return -1;
-    uint8_t tcp_buf[sizeof(struct tcp_header) + 1460];
+    uint8_t tcp_buf[sizeof(struct tcp_header) + 64 + 1460];
     struct tcp_header* tcp = (struct tcp_header*)tcp_buf;
 
     tcp->src_port = htons(s->local_port);
     tcp->dest_port = htons(s->remote_port);
     tcp->seq = htonl(s->snd_nxt);
-    tcp->ack = htonl(s->rcv_nxt);
-    tcp->data_offset = (uint8_t)((sizeof(struct tcp_header) / 4) << 4);
+    tcp->ack = (flags & TCP_FLAG_SYN) ? 0 : htonl(s->rcv_nxt);
     tcp->flags = flags;
-    size_t win = 16384;
-    if (s->rx_capacity > s->rx_len) {
-        win = s->rx_capacity - s->rx_len;
-    } else {
-        win = 0;
-    }
-    if (win > 32768) win = 32768;
-    tcp->window_size = htons((uint16_t)win);
-    tcp->checksum = 0;
     tcp->urgent_ptr = 0;
+    tcp->checksum = 0;
+
+    size_t opt_len = 0;
+    uint8_t* opt = tcp_buf + sizeof(struct tcp_header);
+
+    if (flags & TCP_FLAG_SYN) {
+        /* Standard Linux 6.x SYN TCP Options (20 bytes):
+         * 1. MSS = 1460 (4 bytes): Kind 2, Len 4, 1460 (0x05B4)
+         * 2. SACK Permitted (2 bytes): Kind 4, Len 2
+         * 3. Timestamps (10 bytes): Kind 8, Len 10, TSval, TSecr=0
+         * 4. NOP (1 byte): Kind 1
+         * 5. Window Scale = 7 (3 bytes): Kind 3, Len 3, Shift 7
+         * Total: 20 bytes options -> 40 bytes TCP header (data_offset = 10)
+         * Produces canonical p0f signature: 60:64:1:40:M1460,S,T,N,W7:WS:df:0
+         */
+        opt[opt_len++] = 0x02; opt[opt_len++] = 0x04; opt[opt_len++] = 0x05; opt[opt_len++] = 0xB4;
+        opt[opt_len++] = 0x04; opt[opt_len++] = 0x02;
+        opt[opt_len++] = 0x08; opt[opt_len++] = 0x0A;
+        uint32_t now = (uint32_t)(pit_get_ticks() * 10) + s->ts_val_base;
+        opt[opt_len++] = (uint8_t)(now >> 24);
+        opt[opt_len++] = (uint8_t)(now >> 16);
+        opt[opt_len++] = (uint8_t)(now >> 8);
+        opt[opt_len++] = (uint8_t)now;
+        opt[opt_len++] = 0x00; opt[opt_len++] = 0x00; opt[opt_len++] = 0x00; opt[opt_len++] = 0x00;
+        opt[opt_len++] = 0x01;
+        opt[opt_len++] = 0x03; opt[opt_len++] = 0x03; opt[opt_len++] = 0x07;
+
+        tcp->window_size = htons(64240); /* Linux standard initial window for MSS 1460 */
+    } else if (s->ts_recent != 0) {
+        /* Standard Linux established TCP options (12 bytes):
+         * NOP, NOP, Timestamps: TSval, TSecr
+         * Total: 12 bytes options -> 32 bytes TCP header (data_offset = 8)
+         */
+        opt[opt_len++] = 0x01;
+        opt[opt_len++] = 0x01;
+        opt[opt_len++] = 0x08; opt[opt_len++] = 0x0A;
+        uint32_t now = (uint32_t)(pit_get_ticks() * 10) + s->ts_val_base;
+        opt[opt_len++] = (uint8_t)(now >> 24);
+        opt[opt_len++] = (uint8_t)(now >> 16);
+        opt[opt_len++] = (uint8_t)(now >> 8);
+        opt[opt_len++] = (uint8_t)now;
+        uint32_t rec = s->ts_recent;
+        opt[opt_len++] = (uint8_t)(rec >> 24);
+        opt[opt_len++] = (uint8_t)(rec >> 16);
+        opt[opt_len++] = (uint8_t)(rec >> 8);
+        opt[opt_len++] = (uint8_t)rec;
+
+        size_t win = 64240;
+        if (s->rx_capacity > s->rx_len) {
+            win = s->rx_capacity - s->rx_len;
+        } else {
+            win = 0;
+        }
+        if (win > 64240) win = 64240;
+        tcp->window_size = htons((uint16_t)win);
+    } else {
+        size_t win = 32768;
+        if (s->rx_capacity > s->rx_len) {
+            win = s->rx_capacity - s->rx_len;
+        } else {
+            win = 0;
+        }
+        if (win > 64240) win = 64240;
+        tcp->window_size = htons((uint16_t)win);
+    }
+
+    size_t hdr_len = sizeof(struct tcp_header) + opt_len;
+    tcp->data_offset = (uint8_t)((hdr_len / 4) << 4);
 
     if (payload && payload_len > 0) {
-        memcpy(tcp_buf + sizeof(struct tcp_header), payload, payload_len);
+        memcpy(tcp_buf + hdr_len, payload, payload_len);
     }
 
-    size_t tcp_tot = sizeof(struct tcp_header) + payload_len;
+    size_t tcp_tot = hdr_len + payload_len;
     tcp->checksum = net_tcp_checksum(s_config.ip, s->remote_ip, tcp_buf, tcp_tot);
 
     int err = net_send_ip(s->remote_ip, IP_PROTO_TCP, tcp_buf, tcp_tot);
@@ -638,6 +698,28 @@ static void net_handle_tcp(const uint8_t* frame, size_t frame_len, const struct 
 
     if (!s || s->state == TCP_STATE_CLOSED) {
         return;
+    }
+
+    if (tcp_hlen > sizeof(struct tcp_header)) {
+        const uint8_t* opt = (const uint8_t*)tcp + sizeof(struct tcp_header);
+        const uint8_t* opt_end = (const uint8_t*)tcp + tcp_hlen;
+        while (opt < opt_end) {
+            uint8_t kind = *opt;
+            if (kind == 0) break;
+            if (kind == 1) {
+                opt++;
+                continue;
+            }
+            if (opt + 1 >= opt_end) break;
+            uint8_t len = opt[1];
+            if (len < 2 || opt + len > opt_end) break;
+            if (kind == 8 && len == 10) {
+                uint32_t ts_val = ((uint32_t)opt[2] << 24) | ((uint32_t)opt[3] << 16) |
+                                  ((uint32_t)opt[4] << 8)  | (uint32_t)opt[5];
+                s->ts_recent = ts_val;
+            }
+            opt += len;
+        }
     }
 
     uint32_t seg_seq = ntohl(tcp->seq);
@@ -940,7 +1022,7 @@ int net_send_ip(uint32_t dest_ip, uint8_t protocol, const void* payload, size_t 
     ip->ihl = 5;
     ip->tos = 0;
     ip->total_length = htons((uint16_t)(sizeof(struct ipv4_header) + payload_len));
-    ip->id = htons(s_ip_id++);
+    ip->id = 0; // RFC 6864: Zero IP ID for non-fragmented DF packets (Linux 6.x standard)
     ip->flags_frag = htons(0x4000); // DF
     ip->ttl = 64;
     ip->protocol = protocol;
@@ -978,15 +1060,20 @@ int net_ping(uint32_t target_ip, uint16_t seq, uint32_t* rtt_ms) {
     s_ping_state.reply_id = 0;
     s_ping_state.reply_seq = 0;
 
-    const char* ping_payload = "SeldOS Humboldt Echo Request";
-    size_t payload_len = strlen(ping_payload);
+    static const uint8_t ping_payload[32] = {
+        0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+        0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
+        0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27,
+        0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f
+    };
+    size_t payload_len = sizeof(ping_payload);
 
     uint8_t icmp_buf[sizeof(struct icmp_header) + 64];
     struct icmp_header* icmp = (struct icmp_header*)icmp_buf;
     icmp->type = ICMP_TYPE_ECHO_REQUEST;
     icmp->code = 0;
     icmp->checksum = 0;
-    icmp->id = htons(0x5E1D);
+    icmp->id = htons((uint16_t)rng_get_u64());
     icmp->sequence = htons(seq);
     memcpy(icmp_buf + sizeof(struct icmp_header), ping_payload, payload_len);
 
@@ -1253,6 +1340,8 @@ int net_tcp_socket_connect(uint32_t server_ip, uint16_t port) {
     s->rx_capacity = rx_cap;
     s->rx_len = 0;
     s->fin_received = 0;
+    s->ts_recent = 0;
+    s->ts_val_base = (uint32_t)rng_get_u64();
 
     net_send_tcp_packet_sock(s, TCP_FLAG_SYN, NULL, 0);
 
@@ -1476,7 +1565,7 @@ int net_http_get(uint32_t server_ip, uint16_t port, const char* path, const char
     }
 
     char req[512];
-    const char* h = host ? host : "seldos-gateway";
+    const char* h = host ? host : "10.0.2.2:8080";
     size_t req_len = 0;
     const char* p1 = "GET ";
     while (*p1 && req_len < sizeof(req) - 1) req[req_len++] = *p1++;
@@ -1485,7 +1574,7 @@ int net_http_get(uint32_t server_ip, uint16_t port, const char* path, const char
     const char* p2 = " HTTP/1.0\r\nHost: ";
     while (*p2 && req_len < sizeof(req) - 1) req[req_len++] = *p2++;
     while (*h && req_len < sizeof(req) - 1) req[req_len++] = *h++;
-    const char* p3 = "\r\nUser-Agent: SeldOS-OpSec/0.1\r\nAccept: */*\r\nConnection: close\r\n\r\n";
+    const char* p3 = "\r\nUser-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:115.0) Gecko/20100101 Firefox/115.0\r\nAccept: */*\r\nConnection: close\r\n\r\n";
     while (*p3 && req_len < sizeof(req) - 1) req[req_len++] = *p3++;
     req[req_len] = '\0';
 
@@ -1586,7 +1675,7 @@ int net_download_to_fs(uint32_t server_ip, uint16_t port, const char* path, cons
 
     // Attempt live network HTTP download via active network controller
     if (nic_is_active()) {
-        res = net_http_get(server_ip, port, path, "seldos-gateway", buf, buf_cap, &actual_len);
+        res = net_http_get(server_ip, port, path, "10.0.2.2:8080", buf, buf_cap, &actual_len);
     }
 
     if (res != 0 || actual_len == 0) {
@@ -1618,12 +1707,12 @@ void net_init(void) {
     if (e1000_init() == 0) {
         s_nic_type = NIC_TYPE_E1000;
         mac = e1000_get_mac();
-        nic_name = "Intel e1000";
+        nic_name = "Gigabit Ethernet (e1000) [Hostile Sandbox]";
         nic_ok = 1;
     } else if (pcnet_init() == 0) {
         s_nic_type = NIC_TYPE_PCNET;
         mac = pcnet_get_mac();
-        nic_name = "AMD PCnet-FAST III";
+        nic_name = "Fast Ethernet (pcnet) [Hostile Sandbox]";
         nic_ok = 1;
     }
 

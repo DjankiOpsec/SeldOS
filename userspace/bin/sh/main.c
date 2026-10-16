@@ -949,7 +949,7 @@ static void builtin_ifconfig(void) {
 
     if (!info.link_up) {
         printf("eth0: flags=DOWN (Interface Offline / No Compatible NIC Carrier Detected)\n");
-        printf("      In VirtualBox / VM settings: Set Adapter Type to Intel PRO/1000 MT (82540EM) or AMD PCnet-FAST III (Am79C973)\n");
+        printf("      In VirtualBox / VM settings: Set Adapter Type to 82540EM (e1000) or Am79C973 (PCnet)\n");
         return;
     }
 

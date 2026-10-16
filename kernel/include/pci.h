@@ -69,6 +69,7 @@ void pci_write_byte(uint8_t bus, uint8_t slot, uint8_t func, uint8_t offset, uin
 
 /* High-level PCI Bus Operations */
 void pci_init(void);
+int  pci_quarantine_backdoors(void);
 int  pci_find_device(uint16_t vendor_id, uint16_t device_id, struct pci_device* dev_out);
 int  pci_find_class(uint8_t class_code, uint8_t subclass, struct pci_device* dev_out);
 void pci_enable_bus_mastering(uint8_t bus, uint8_t slot, uint8_t func);

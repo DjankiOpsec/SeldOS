@@ -87,7 +87,7 @@ int main(int argc, char* argv[]) {
         printf("[*] Fetch Target   : %s\n", target);
     }
     printf("[*] SeldFS Target  : %s\n", dest);
-    printf("[*] Connecting via Intel e1000 Gigabit controller...\n");
+    printf("[*] Connecting via Gigabit Ethernet controller...\n");
 
     int res = seld_download_url(target, dest);
     if (res != 0) {

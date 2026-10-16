@@ -41,11 +41,21 @@ static inline uint64_t fsk_rdtsc(void) {
 #endif
 }
 
+static inline void cpu_relax(void) {
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__)
+    __asm__ volatile ("pause");
+#elif defined(__riscv)
+    __asm__ volatile ("nop");
+#else
+    ((void)0);
+#endif
+}
+
 static uint64_t fsk_calibrate_cycles_per_ms(void) {
     uint64_t u0 = seld_uptime();
     uint64_t spin = 0;
     while (seld_uptime() == u0 && spin < 50000000ULL) {
-        __asm__ volatile ("pause");
+        cpu_relax();
         spin++;
     }
     if (spin >= 50000000ULL) {
@@ -56,7 +66,7 @@ static uint64_t fsk_calibrate_cycles_per_ms(void) {
     uint64_t target_up = seld_uptime() + 40;
     spin = 0;
     while (seld_uptime() < target_up && spin < 100000000ULL) {
-        __asm__ volatile ("pause");
+        cpu_relax();
         spin++;
     }
     if (spin >= 100000000ULL) {
@@ -85,14 +95,14 @@ void fsk_transmit_key_packet(const struct fsk_key_packet* pkt, uint32_t symbol_m
     seld_beep(FSK_FREQ_PREAMBLE, 0);
     uint64_t next_tsc = fsk_rdtsc() + (350 * cycles_per_ms);
     while (fsk_rdtsc() < next_tsc) {
-        __asm__ volatile ("pause");
+        cpu_relax();
     }
 
     /* Short silence between pilot and preamble (20 ms) */
     seld_beep(0, 0);
     next_tsc = fsk_rdtsc() + (20 * cycles_per_ms);
     while (fsk_rdtsc() < next_tsc) {
-        __asm__ volatile ("pause");
+        cpu_relax();
     }
 
     /* 2. Preamble bit training sequence: 24 alternating bits 101010... (720 ms)
@@ -103,7 +113,7 @@ void fsk_transmit_key_packet(const struct fsk_key_packet* pkt, uint32_t symbol_m
         seld_beep(freq, 0);
         next_tsc += symbol_cycles;
         while (fsk_rdtsc() < next_tsc) {
-            __asm__ volatile ("pause");
+            cpu_relax();
         }
     }
 
@@ -115,7 +125,7 @@ void fsk_transmit_key_packet(const struct fsk_key_packet* pkt, uint32_t symbol_m
             seld_beep(freq, 0);
             next_tsc += symbol_cycles;
             while (fsk_rdtsc() < next_tsc) {
-                __asm__ volatile ("pause");
+                cpu_relax();
             }
         }
     }
@@ -124,7 +134,7 @@ void fsk_transmit_key_packet(const struct fsk_key_packet* pkt, uint32_t symbol_m
     seld_beep(FSK_FREQ_PREAMBLE, 0);
     next_tsc = fsk_rdtsc() + (200 * cycles_per_ms);
     while (fsk_rdtsc() < next_tsc) {
-        __asm__ volatile ("pause");
+        cpu_relax();
     }
 
     /* 5. Clean silence & audio shutdown */
