@@ -229,4 +229,20 @@ int  net_get_chaff(void);
 uint32_t net_get_chaff_stats(void);
 void net_chaff_tick(void);
 
+/* Anti-Clock-Skew & Virtual Monotonic Timestamp Normalization */
+void net_set_skew_defense(int enable);
+int  net_get_skew_defense(void);
+struct tcp_socket;
+uint32_t net_get_synthetic_tsval(struct tcp_socket* s);
+
+/* In-Band Certified Network Time (Zero-UDP-NTP) */
+void net_set_network_time_epoch(uint64_t epoch_sec);
+uint64_t net_get_network_time_epoch(void);
+int  net_parse_http_date(const char* date_header, uint64_t* out_epoch);
+
+/* Zero-DHCP Static IP Configuration & Poisson Boot Delay */
+int  net_set_config_static(uint32_t ip, uint32_t netmask, uint32_t gateway, uint32_t dns);
+void net_set_boot_delay(int enable, uint32_t delay_ms);
+int  net_get_boot_delay_active(void);
+
 #endif /* SELD_NET_H */

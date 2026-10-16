@@ -810,4 +810,36 @@ int seld_pci_lockdown(void) {
     return (int)seld_syscall(SYS_PCI_LOCKDOWN, 0, 0, 0);
 }
 
+int seld_set_skew_defense(int mode) {
+    return (int)seld_syscall(SYS_NET_SET_SKEW_DEFENSE, (long)mode, 0, 0);
+}
+
+int seld_get_skew_defense(void) {
+    return (int)seld_syscall(SYS_NET_GET_SKEW_DEFENSE, 0, 0, 0);
+}
+
+uint64_t seld_get_time(void) {
+    return (uint64_t)seld_syscall(SYS_NET_GET_TIME, 0, 0, 0);
+}
+
+int seld_set_time(uint64_t epoch) {
+    return (int)seld_syscall(SYS_NET_SET_TIME, (long)epoch, 0, 0);
+}
+
+int seld_set_net_config(uint32_t ip, uint32_t netmask, uint32_t gateway, uint32_t dns) {
+    return (int)seld_syscall4(SYS_NET_SET_CONFIG, (long)ip, (long)netmask, (long)gateway, (long)dns);
+}
+
+int seld_get_hw_telemetry(struct seld_hw_telemetry* info) {
+    return (int)seld_syscall(SYS_OPSEC_GET_HW_TELEMETRY, (long)info, 0, 0);
+}
+
+int seld_set_boot_delay(int enable, uint32_t delay_ms) {
+    return (int)seld_syscall(SYS_NET_SET_BOOT_DELAY, (long)enable, (long)delay_ms, 0);
+}
+
+int seld_get_boot_delay(void) {
+    return (int)seld_syscall(SYS_NET_GET_BOOT_DELAY, 0, 0, 0);
+}
+
 

@@ -114,6 +114,7 @@ void net_lease_release(void) {
 }
 
 int net_is_traffic_allowed(void) {
+    if (net_get_boot_delay_active()) return 0;
     if (s_net_airgap_mode == NET_AIRGAP_UNLOCKED) return 1;
     if (s_net_airgap_mode == NET_AIRGAP_LOCKED) return 0;
     if (s_net_chaff_mode) return 1; // Cover traffic permitted when Chaff GPA defense is active
@@ -584,6 +585,35 @@ struct tcp_socket {
 
 static struct tcp_socket s_sockets[MAX_TCP_SOCKETS] = {0};
 
+/* ========================================================================= */
+/* Anti-Clock-Skew Normalization & Virtual Monotonic Oscillator               */
+/* ========================================================================= */
+static int s_net_skew_defense = 1;
+
+void net_set_skew_defense(int enable) {
+    s_net_skew_defense = enable ? 1 : 0;
+    serial_puts("[+] OpSec: Anti-Clock-Skew Normalization ");
+    serial_puts(s_net_skew_defense ? "ENABLED (Zero-PPM virtual oscillator + CSPRNG dither)\n" : "DISABLED\n");
+}
+
+int net_get_skew_defense(void) {
+    return s_net_skew_defense;
+}
+
+uint32_t net_get_synthetic_tsval(struct tcp_socket* s) {
+    if (!s_net_skew_defense || !s) {
+        return (uint32_t)(pit_get_ticks() * 10) + (s ? s->ts_val_base : 0);
+    }
+    /* Anti-Clock-Skew Virtual Monotonic Oscillator:
+     * Synthesize an exact mathematical 1000 Hz Linux-compliant clock base.
+     * Add non-linear CSPRNG micro-dither (-2..+2 ms) to destroy
+     * any linear regression / Kalman filter clock-skew slope calculations.
+     */
+    uint32_t base = (uint32_t)(pit_get_uptime_ms());
+    int32_t dither = ((int32_t)(rng_get_u64() % 5)) - 2;
+    return (uint32_t)((int32_t)(base + s->ts_val_base) + dither);
+}
+
 static int net_send_tcp_packet_sock(struct tcp_socket* s, uint8_t flags, const void* payload, size_t payload_len) {
     if (!s) return -1;
     uint8_t tcp_buf[sizeof(struct tcp_header) + 64 + 1460];
@@ -613,7 +643,7 @@ static int net_send_tcp_packet_sock(struct tcp_socket* s, uint8_t flags, const v
         opt[opt_len++] = 0x02; opt[opt_len++] = 0x04; opt[opt_len++] = 0x05; opt[opt_len++] = 0xB4;
         opt[opt_len++] = 0x04; opt[opt_len++] = 0x02;
         opt[opt_len++] = 0x08; opt[opt_len++] = 0x0A;
-        uint32_t now = (uint32_t)(pit_get_ticks() * 10) + s->ts_val_base;
+        uint32_t now = net_get_synthetic_tsval(s);
         opt[opt_len++] = (uint8_t)(now >> 24);
         opt[opt_len++] = (uint8_t)(now >> 16);
         opt[opt_len++] = (uint8_t)(now >> 8);
@@ -631,7 +661,7 @@ static int net_send_tcp_packet_sock(struct tcp_socket* s, uint8_t flags, const v
         opt[opt_len++] = 0x01;
         opt[opt_len++] = 0x01;
         opt[opt_len++] = 0x08; opt[opt_len++] = 0x0A;
-        uint32_t now = (uint32_t)(pit_get_ticks() * 10) + s->ts_val_base;
+        uint32_t now = net_get_synthetic_tsval(s);
         opt[opt_len++] = (uint8_t)(now >> 24);
         opt[opt_len++] = (uint8_t)(now >> 16);
         opt[opt_len++] = (uint8_t)(now >> 8);
@@ -817,7 +847,14 @@ static void net_handle_udp(const uint8_t* frame, size_t frame_len, const struct 
 
     const struct udp_header* udp = (const struct udp_header*)(frame + ETH_HLEN + ip_hlen);
     uint16_t src_port = ntohs(udp->src_port);
+    uint16_t dest_port = ntohs(udp->dest_port);
     uint16_t udp_len = ntohs(udp->length);
+
+    // Strict OpSec: Silently drop incoming NTP packets (UDP 123)
+    if (src_port == 123 || dest_port == 123) {
+        serial_puts("[!] OpSec: Dropped incoming UDP NTP packet (port 123)\n");
+        return;
+    }
 
     if (udp_len < sizeof(struct udp_header) || udp_len > ip_tot_len - ip_hlen) {
         s_stats.rx_dropped++;
@@ -1148,6 +1185,10 @@ int net_ping(uint32_t target_ip, uint16_t seq, uint32_t* rtt_ms) {
 }
 
 int net_send_udp(uint32_t dest_ip, uint16_t src_port, uint16_t dest_port, const void* payload, size_t payload_len) {
+    if (dest_port == 123 || src_port == 123) {
+        serial_puts("[!] OpSec: Dropped clearnet UDP NTP (port 123) packet (Anti-Time-Leak Guard)\n");
+        return -9;
+    }
     if (!payload && payload_len > 0) return -1;
     if (sizeof(struct udp_header) + payload_len > 1472) return -2;
 
@@ -1195,6 +1236,171 @@ void net_chaff_tick(void) {
     s_chaff_packets_sent++;
 
     s_in_chaff = 0;
+}
+
+/* ========================================================================= */
+/* In-Band Certified Network Time & HTTP Date Parsing (Zero UDP NTP Leaks)   */
+/* ========================================================================= */
+static uint64_t s_inband_network_time_epoch = 0;
+static uint64_t s_inband_sync_uptime_ms = 0;
+
+void net_set_network_time_epoch(uint64_t epoch_sec) {
+    s_inband_network_time_epoch = epoch_sec;
+    s_inband_sync_uptime_ms = pit_get_uptime_ms();
+    serial_puts("[+] OpSec: In-Band Certified Network Time synchronized: epoch ");
+    serial_print_dec(epoch_sec);
+    serial_puts(" sec (Zero UDP NTP leaks)\n");
+}
+
+uint64_t net_get_network_time_epoch(void) {
+    if (s_inband_network_time_epoch == 0) {
+        return 0;
+    }
+    uint64_t elapsed_sec = (pit_get_uptime_ms() - s_inband_sync_uptime_ms) / 1000;
+    return s_inband_network_time_epoch + elapsed_sec;
+}
+
+static int str_has_prefix_ci(const char* s, const char* prefix, size_t n) {
+    if (!s || !prefix) return 0;
+    for (size_t i = 0; i < n; i++) {
+        char c1 = s[i];
+        char c2 = prefix[i];
+        if (!c1 || !c2) return 0;
+        if (c1 >= 'A' && c1 <= 'Z') c1 += 32;
+        if (c2 >= 'A' && c2 <= 'Z') c2 += 32;
+        if (c1 != c2) return 0;
+    }
+    return 1;
+}
+
+static int parse_month_3(const char* m) {
+    if (!m) return -1;
+    if (str_has_prefix_ci(m, "jan", 3)) return 1;
+    if (str_has_prefix_ci(m, "feb", 3)) return 2;
+    if (str_has_prefix_ci(m, "mar", 3)) return 3;
+    if (str_has_prefix_ci(m, "apr", 3)) return 4;
+    if (str_has_prefix_ci(m, "may", 3)) return 5;
+    if (str_has_prefix_ci(m, "jun", 3)) return 6;
+    if (str_has_prefix_ci(m, "jul", 3)) return 7;
+    if (str_has_prefix_ci(m, "aug", 3)) return 8;
+    if (str_has_prefix_ci(m, "sep", 3)) return 9;
+    if (str_has_prefix_ci(m, "oct", 3)) return 10;
+    if (str_has_prefix_ci(m, "nov", 3)) return 11;
+    if (str_has_prefix_ci(m, "dec", 3)) return 12;
+    return -1;
+}
+
+static int is_leap_year_calc(int year) {
+    return (year % 4 == 0 && (year % 100 != 0 || year % 400 == 0));
+}
+
+int net_parse_http_date(const char* date_str, uint64_t* out_epoch) {
+    if (!date_str || !out_epoch) return -1;
+    const char* p = date_str;
+    if (str_has_prefix_ci(p, "date:", 5)) p += 5;
+    while (*p == ' ' || *p == '\t') p++;
+
+    const char* comma = strchr(p, ',');
+    if (comma && comma < p + 5) {
+        p = comma + 1;
+        while (*p == ' ' || *p == '\t') p++;
+    }
+
+    int day = 0, year = 0, hour = 0, min = 0, sec = 0;
+    char month_str[4] = {0};
+
+    while (*p >= '0' && *p <= '9') {
+        day = day * 10 + (*p - '0');
+        p++;
+    }
+    while (*p == ' ' || *p == '\t') p++;
+
+    for (int i = 0; i < 3 && *p && *p != ' '; i++) {
+        month_str[i] = *p++;
+    }
+    while (*p == ' ' || *p == '\t') p++;
+
+    int month = parse_month_3(month_str);
+    if (month < 1 || month > 12) return -2;
+
+    while (*p >= '0' && *p <= '9') {
+        year = year * 10 + (*p - '0');
+        p++;
+    }
+    while (*p == ' ' || *p == '\t') p++;
+
+    while (*p >= '0' && *p <= '9') { hour = hour * 10 + (*p - '0'); p++; }
+    if (*p == ':') p++;
+    while (*p >= '0' && *p <= '9') { min = min * 10 + (*p - '0'); p++; }
+    if (*p == ':') p++;
+    while (*p >= '0' && *p <= '9') { sec = sec * 10 + (*p - '0'); p++; }
+
+    if (year < 1970 || day < 1 || day > 31 || hour > 23 || min > 59 || sec > 60) {
+        return -3;
+    }
+
+    static const int days_before_month[13] = {
+        0, 0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334
+    };
+
+    uint64_t days = 0;
+    for (int y = 1970; y < year; y++) {
+        days += is_leap_year_calc(y) ? 366 : 365;
+    }
+    days += days_before_month[month] + (day - 1);
+    if (month > 2 && is_leap_year_calc(year)) {
+        days += 1;
+    }
+
+    uint64_t epoch = days * 86400ULL + (uint64_t)hour * 3600ULL + (uint64_t)min * 60ULL + (uint64_t)sec;
+    *out_epoch = epoch;
+    return 0;
+}
+
+/* ========================================================================= */
+/* Zero-DHCP Static IP Configuration & Poisson Boot Delay                    */
+/* ========================================================================= */
+static int s_net_boot_delay_enabled = 0;
+static uint64_t s_net_boot_delay_until = 0;
+
+int net_set_config_static(uint32_t ip, uint32_t netmask, uint32_t gateway, uint32_t dns) {
+    if (ip == 0) return -1;
+    s_config.ip = ip;
+    if (netmask) s_config.netmask = netmask;
+    if (gateway) s_config.gateway = gateway;
+    if (dns) s_config.dns = dns;
+
+    serial_puts("[+] Net: Static IP configured: ");
+    serial_print_dec((ip >> 24) & 0xFF); serial_puts(".");
+    serial_print_dec((ip >> 16) & 0xFF); serial_puts(".");
+    serial_print_dec((ip >> 8) & 0xFF); serial_puts(".");
+    serial_print_dec(ip & 0xFF);
+    serial_puts(" (Zero-DHCP stealth mode)\n");
+
+    return 0;
+}
+
+void net_set_boot_delay(int enable, uint32_t delay_ms) {
+    s_net_boot_delay_enabled = enable ? 1 : 0;
+    if (s_net_boot_delay_enabled) {
+        if (delay_ms == 0) {
+            delay_ms = 5000 + (uint32_t)(rng_get_u64() % 10000);
+        }
+        s_net_boot_delay_until = pit_get_uptime_ms() + delay_ms;
+        serial_puts("[+] OpSec: Poisson Boot Delay engaged (");
+        serial_print_dec((uint64_t)delay_ms);
+        serial_puts(" ms hold)\n");
+    } else {
+        s_net_boot_delay_until = 0;
+        serial_puts("[*] OpSec: Poisson Boot Delay disengaged\n");
+    }
+}
+
+int net_get_boot_delay_active(void) {
+    if (!s_net_boot_delay_enabled) return 0;
+    if (pit_get_uptime_ms() < s_net_boot_delay_until) return 1;
+    s_net_boot_delay_enabled = 0;
+    return 0;
 }
 
 int net_dns_resolve(const char* hostname, uint32_t* ip_out) {
@@ -1727,6 +1933,16 @@ int net_http_get(uint32_t server_ip, uint16_t port, const char* path, const char
         }
     }
 
+    // In-band certified network time extraction
+    const char* date_ptr = strstr(resp, "Date:");
+    if (!date_ptr) date_ptr = strstr(resp, "date:");
+    if (date_ptr && (size_t)(date_ptr - resp) < hdr_len) {
+        uint64_t epoch = 0;
+        if (net_parse_http_date(date_ptr, &epoch) == 0 && epoch > 0) {
+            net_set_network_time_epoch(epoch);
+        }
+    }
+
     memmove(out_buf, out_buf + hdr_len, body_len);
     if (out_len) *out_len = body_len;
 
@@ -1799,8 +2015,7 @@ void net_init(void) {
         s_config.gateway = MAKE_IP(10, 0, 2, 2);
         s_config.dns     = DNS_CONTROLD_P2_PRIMARY; // 76.76.2.2 (Control D Ads & Trackers)
 
-        // Proactively seed ARP table for gateway
-        net_arp_request(s_config.gateway);
+        // OpSec Invariant: Zero unsolicited boot packets (ARP resolved on-demand)
 
         serial_puts("[+] Net: Interface eth0 active (");
         serial_puts(nic_name);

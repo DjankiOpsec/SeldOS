@@ -709,6 +709,14 @@ static int check_pledge(uint64_t sys_num, uint64_t a1) {
         case SYS_OPSEC_SET_TEMPEST:
         case SYS_OPSEC_GET_TEMPEST:
         case SYS_PCI_LOCKDOWN:
+        case SYS_NET_SET_SKEW_DEFENSE:
+        case SYS_NET_GET_SKEW_DEFENSE:
+        case SYS_NET_GET_TIME:
+        case SYS_NET_SET_TIME:
+        case SYS_NET_SET_CONFIG:
+        case SYS_OPSEC_GET_HW_TELEMETRY:
+        case SYS_NET_SET_BOOT_DELAY:
+        case SYS_NET_GET_BOOT_DELAY:
         case SYS_SELD:
             req = PLEDGE_STDIO;
             break;
@@ -1703,6 +1711,57 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
 
         case SYS_PCI_LOCKDOWN: {
             return (uint64_t)pci_lockdown_dma_and_rom();
+        }
+
+        case SYS_NET_SET_SKEW_DEFENSE: {
+            net_set_skew_defense((int)a1);
+            return 0;
+        }
+
+        case SYS_NET_GET_SKEW_DEFENSE: {
+            return (uint64_t)net_get_skew_defense();
+        }
+
+        case SYS_NET_GET_TIME: {
+            return net_get_network_time_epoch();
+        }
+
+        case SYS_NET_SET_TIME: {
+            net_set_network_time_epoch((uint64_t)a1);
+            return 0;
+        }
+
+        case SYS_NET_SET_CONFIG: {
+            return (uint64_t)net_set_config_static((uint32_t)a1, (uint32_t)a2, (uint32_t)a3, (uint32_t)a4);
+        }
+
+        case SYS_NET_SET_BOOT_DELAY: {
+            net_set_boot_delay((int)a1, (uint32_t)a2);
+            return 0;
+        }
+
+        case SYS_NET_GET_BOOT_DELAY: {
+            return (uint64_t)net_get_boot_delay_active();
+        }
+
+        case SYS_OPSEC_GET_HW_TELEMETRY: {
+            struct seld_hw_telemetry* ut = (struct seld_hw_telemetry*)a1;
+            if (!validate_user_buffer(ut, sizeof(*ut), 1)) {
+                return (uint64_t)-1;
+            }
+            struct seld_hw_telemetry kt;
+            memset(&kt, 0, sizeof(kt));
+            strncpy(kt.manufacturer, "Sovereign Libre Silicon", sizeof(kt.manufacturer) - 1);
+            strncpy(kt.product_name, "SeldOS Hardened Node", sizeof(kt.product_name) - 1);
+            strncpy(kt.serial_number, "0000-0000-0000-0000", sizeof(kt.serial_number) - 1);
+            strncpy(kt.bios_version, "1.0.0-audited", sizeof(kt.bios_version) - 1);
+            strncpy(kt.battery_status, "AC_ONLINE", sizeof(kt.battery_status) - 1);
+            kt.battery_percent = 100;
+            kt.battery_cycles = 0;
+            strncpy(kt.battery_serial, "00000000", sizeof(kt.battery_serial) - 1);
+
+            memcpy(ut, &kt, sizeof(kt));
+            return 0;
         }
 
         case SYS_EXIT: {

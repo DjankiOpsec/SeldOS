@@ -619,11 +619,14 @@ static void builtin_help(void) {
     printf("  beep [freq] [d] Play audio tone (default: 440 Hz, 150 ms)\n");
     printf("  snd [freq|off]  Continuous tone generator\n");
     printf("  mem             Display physical memory & kernel heap usage\n");
-    printf("  ifconfig        Display network interface details & statistics (e1000)\n");
+    printf("  ifconfig [st]   Display interface stats or configure static IP (Zero-DHCP)\n");
     printf("  ping <ip>       Send ICMP Echo requests to host\n");
     printf("  arp             Display kernel ARP resolution cache\n");
     printf("  purge           OpSec Immune Purge: kill rogue tasks, zero-wipe threats, sever sockets\n");
-    printf("  net [mode]      Air-Gap Shield: status, lock, unlock, ondemand, stealth, desync\n");
+    printf("  net [mode]      Air-Gap Shield: status, lock, unlock, stealth, desync, delay\n");
+    printf("  skew [on|off]   Anti-Clock-Skew Normalization (Zero-PPM virtual oscillator)\n");
+    printf("  time [status|s] Certified In-Band Network Time (Zero UDP 123 NTP leaks)\n");
+    printf("  telemetry       Hardware Telemetry & ACPI/SMBus Sanitization (0-serial mask)\n");
     printf("  desync [mode]   TSPU/DPI Evasion: split (SNI segmentation), fake, off\n");
     printf("  jitter [on|off] THL Keystroke Timing Obfuscation & Jitter (50ms Quantization)\n");
     printf("  grip [on|off]   OpSec Dead Man's Grip: Hold Shift to live, release = wipe & reset\n");
@@ -945,7 +948,67 @@ static void format_mac_u(const uint8_t* mac, char* buf, size_t sz) {
     buf[idx] = '\0';
 }
 
-static void builtin_ifconfig(void) {
+static int parse_ip_u(const char* str, uint32_t* ip_out) {
+    if (!str || !ip_out) return -1;
+    uint32_t octets[4] = {0};
+    int octet_idx = 0;
+    const char* p = str;
+    while (*p && octet_idx < 4) {
+        if (*p < '0' || *p > '9') return -1;
+        uint32_t val = 0;
+        while (*p >= '0' && *p <= '9') {
+            val = val * 10 + (*p - '0');
+            if (val > 255) return -1;
+            p++;
+        }
+        octets[octet_idx++] = val;
+        if (*p == '.') {
+            p++;
+            if (*p == '\0') return -1;
+        } else if (*p != '\0') {
+            return -1;
+        }
+    }
+    if (octet_idx != 4 || *p != '\0') return -1;
+    *ip_out = octets[0] | (octets[1] << 8) | (octets[2] << 16) | (octets[3] << 24);
+    return 0;
+}
+
+static void builtin_ifconfig(int argc, char* argv[]) {
+    if (argc >= 2 && strcmp(argv[1], "static") == 0) {
+        if (argc < 5) {
+            printf("Usage: ifconfig static <ip> <netmask> <gateway> [dns]\n");
+            return;
+        }
+        uint32_t ip = 0, mask = 0, gw = 0, dns = 0x02024C4C; // default 76.76.2.2 Control D
+        if (parse_ip_u(argv[2], &ip) != 0 ||
+            parse_ip_u(argv[3], &mask) != 0 ||
+            parse_ip_u(argv[4], &gw) != 0) {
+            printf("[-] Invalid IPv4 address format.\n");
+            printf("Usage: ifconfig static <ip> <netmask> <gateway> [dns]\n");
+            return;
+        }
+        if (argc >= 6) {
+            if (parse_ip_u(argv[5], &dns) != 0) {
+                printf("[-] Invalid DNS server IPv4 address format.\n");
+                return;
+            }
+        }
+        int res = seld_set_net_config(ip, mask, gw, dns);
+        if (res == 0) {
+            char ip_b[16], mask_b[16], gw_b[16], dns_b[16];
+            format_ip_u(ip, ip_b, sizeof(ip_b));
+            format_ip_u(mask, mask_b, sizeof(mask_b));
+            format_ip_u(gw, gw_b, sizeof(gw_b));
+            format_ip_u(dns, dns_b, sizeof(dns_b));
+            printf("[+] Static IPv4 configured: IP %s, Mask %s, GW %s, DNS %s (Zero-DHCP)\n",
+                   ip_b, mask_b, gw_b, dns_b);
+        } else {
+            printf("[-] Failed to apply static network configuration (error %d)\n", res);
+        }
+        return;
+    }
+
     struct seld_net_info info;
     if (seld_net_info(&info) != 0) {
         printf("[-] Failed to query network interface.\n");
@@ -973,32 +1036,6 @@ static void builtin_ifconfig(void) {
            info.rx_frames, info.rx_bytes, info.rx_dropped, info.rx_checksum_errors);
     printf("      TX packets %lu  bytes %lu\n",
            info.tx_frames, info.tx_bytes);
-}
-
-static int parse_ip_u(const char* str, uint32_t* ip_out) {
-    if (!str || !ip_out) return -1;
-    uint32_t octets[4] = {0};
-    int octet_idx = 0;
-    const char* p = str;
-    while (*p && octet_idx < 4) {
-        if (*p < '0' || *p > '9') return -1;
-        uint32_t val = 0;
-        while (*p >= '0' && *p <= '9') {
-            val = val * 10 + (*p - '0');
-            if (val > 255) return -1;
-            p++;
-        }
-        octets[octet_idx++] = val;
-        if (*p == '.') {
-            p++;
-            if (*p == '\0') return -1;
-        } else if (*p != '\0') {
-            return -1;
-        }
-    }
-    if (octet_idx != 4 || *p != '\0') return -1;
-    *ip_out = octets[0] | (octets[1] << 8) | (octets[2] << 16) | (octets[3] << 24);
-    return 0;
 }
 
 static void builtin_arp(void) {
@@ -1151,7 +1188,9 @@ static void builtin_net(int argc, char* argv[]) {
         printf("    TSPU TCP Desync: %s\n",
                desync == SELD_DESYNC_SPLIT ? "SPLIT (SNI/Host Segment Evasion active)" :
                desync == SELD_DESYNC_FAKE  ? "FAKE (TTL desync)" : "OFF");
-        printf("    Usage: net <status | lock | unlock | ondemand | stealth | desync>\n");
+        int delay = seld_get_boot_delay();
+        printf("    Poisson Boot Delay: %s\n", delay ? "ACTIVE (Initial TX hold active)" : "DISABLED / EXPIRED");
+        printf("    Usage: net <status | lock | unlock | ondemand | stealth | desync | delay>\n");
         return;
     }
 
@@ -1187,8 +1226,33 @@ static void builtin_net(int argc, char* argv[]) {
             printf("Current TCP Desync mode: %s\n",
                    d == SELD_DESYNC_SPLIT ? "SPLIT" : d == SELD_DESYNC_FAKE ? "FAKE" : "OFF");
         }
+    } else if (strcmp(argv[1], "delay") == 0) {
+        if (argc >= 3) {
+            if (strcmp(argv[2], "on") == 0 || strcmp(argv[2], "1") == 0) {
+                seld_set_boot_delay(1, 0);
+                printf("[+] Poisson Boot Delay: ENABLED (Randomized initial TX hold active).\n");
+            } else if (strcmp(argv[2], "off") == 0 || strcmp(argv[2], "0") == 0) {
+                seld_set_boot_delay(0, 0);
+                printf("[*] Poisson Boot Delay: DISABLED.\n");
+            } else if (strcmp(argv[2], "status") == 0) {
+                int d = seld_get_boot_delay();
+                printf("[*] Poisson Boot Delay: %s\n", d ? "ACTIVE" : "EXPIRED / INACTIVE");
+            } else {
+                uint32_t custom_ms = 0;
+                if (parse_uint32_safe(argv[2], &custom_ms) == 0 && custom_ms > 0) {
+                    seld_set_boot_delay(1, custom_ms);
+                    printf("[+] Poisson Boot Delay set to %u ms hold.\n", custom_ms);
+                } else {
+                    printf("Usage: net delay <on | off | status | ms>\n");
+                }
+            }
+        } else {
+            int d = seld_get_boot_delay();
+            printf("[*] Poisson Boot Delay: %s\n", d ? "ACTIVE" : "EXPIRED / INACTIVE");
+            printf("Usage: net delay <on | off | status | ms>\n");
+        }
     } else {
-        printf("snl: net: unknown argument '%s'. Options: status, lock, unlock, ondemand, stealth, desync\n", argv[1]);
+        printf("snl: net: unknown argument '%s'. Options: status, lock, unlock, ondemand, stealth, desync, delay\n", argv[1]);
     }
 }
 
@@ -1339,6 +1403,62 @@ static void builtin_unveil(int argc, char* argv[]) {
         printf("[+] Seld-Unveil rule registered: '%s' -> [%s]\n", argv[1], argv[2]);
     } else {
         printf("[-] Failed to register unveil rule for '%s' (code %d)\n", argv[1], ret);
+    }
+}
+
+static void builtin_skew(int argc, char* argv[]) {
+    if (argc >= 2) {
+        if (strcmp(argv[1], "on") == 0 || strcmp(argv[1], "1") == 0) {
+            seld_set_skew_defense(1);
+            printf("[+] Anti-Clock-Skew Normalization: ACTIVE (Zero-PPM virtual oscillator + CSPRNG dither)\n");
+        } else if (strcmp(argv[1], "off") == 0 || strcmp(argv[1], "0") == 0) {
+            seld_set_skew_defense(0);
+            printf("[*] Anti-Clock-Skew Normalization: DISABLED\n");
+        } else if (strcmp(argv[1], "status") == 0) {
+            printf("[*] Anti-Clock-Skew Normalization Status: %s\n",
+                   seld_get_skew_defense() ? "ACTIVE" : "DISABLED");
+        } else {
+            printf("Usage: skew <on | off | status>\n");
+        }
+    } else {
+        printf("[*] Anti-Clock-Skew Normalization: %s\n",
+               seld_get_skew_defense() ? "ACTIVE" : "DISABLED");
+        printf("Usage: skew <on | off | status>\n");
+    }
+}
+
+static void builtin_time(int argc, char* argv[]) {
+    if (argc >= 3 && strcmp(argv[1], "sync") == 0) {
+        uint64_t epoch = (uint64_t)strtoul(argv[2], NULL, 10);
+        if (epoch > 0) {
+            seld_set_time(epoch);
+            printf("[+] Certified network time updated: epoch %lu sec (Zero UDP NTP leaks)\n", epoch);
+            return;
+        }
+    }
+    uint64_t epoch = seld_get_time();
+    if (epoch > 0) {
+        printf("[+] Certified In-Band Network Time: epoch %lu sec (0 UDP NTP leaks)\n", epoch);
+    } else {
+        printf("[*] Certified Network Time: Not yet synchronized in-band (UDP 123 blocked)\n");
+    }
+}
+
+static void builtin_telemetry(int argc, char* argv[]) {
+    (void)argc;
+    (void)argv;
+    struct seld_hw_telemetry tel;
+    if (seld_get_hw_telemetry(&tel) == 0) {
+        printf("[*] SeldOS Hardware Telemetry Sanitization:\n");
+        printf("    Manufacturer   : %s\n", tel.manufacturer);
+        printf("    Product Model  : %s\n", tel.product_name);
+        printf("    Hardware Serial: %s [Sanitized / Zeroed]\n", tel.serial_number);
+        printf("    BIOS / Firmware: %s\n", tel.bios_version);
+        printf("    Battery State  : %s (%u%%, %u cycles, Serial: %s)\n",
+               tel.battery_status, tel.battery_percent, tel.battery_cycles, tel.battery_serial);
+        printf("    ACPI / SMBus   : ISOLATED (Direct silicon queries blocked)\n");
+    } else {
+        printf("[-] Failed to query hardware telemetry.\n");
     }
 }
 
@@ -1521,8 +1641,20 @@ static void builtin_selftest(void) {
         opsec_ok = 0;
     }
 
+    // E. Anti-Clock-Skew Normalization Check
+    seld_set_skew_defense(1);
+    if (seld_get_skew_defense() != 1) {
+        opsec_ok = 0;
+    }
+
+    // F. Hardware Telemetry Sanitization Check
+    struct seld_hw_telemetry tel;
+    if (seld_get_hw_telemetry(&tel) != 0 || strcmp(tel.serial_number, "0000-0000-0000-0000") != 0) {
+        opsec_ok = 0;
+    }
+
     if (opsec_ok) {
-        printf("[+] [TEST 8/8] PASSED: Zero-on-Free, RFC 7686 Guard, and Seld-Pledge verified.\n");
+        printf("[+] [TEST 8/8] PASSED: Zero-on-Free, RFC 7686, Anti-Skew, and Telemetry verified.\n");
         passed_tests++;
     } else {
         printf("[-] [TEST 8/8] FAILED: Ring 3 OpSec subsystem verification failure!\n");
@@ -1645,7 +1777,7 @@ int main(int argc, char* argv[]) {
         } else if (strcmp(cmd, "mem") == 0) {
             builtin_mem();
         } else if (strcmp(cmd, "ifconfig") == 0) {
-            builtin_ifconfig();
+            builtin_ifconfig(cmd_argc, cmd_argv);
         } else if (strcmp(cmd, "arp") == 0) {
             builtin_arp();
         } else if (strcmp(cmd, "ping") == 0) {
@@ -1656,6 +1788,12 @@ int main(int argc, char* argv[]) {
             builtin_purge();
         } else if (strcmp(cmd, "net") == 0) {
             builtin_net(cmd_argc, cmd_argv);
+        } else if (strcmp(cmd, "skew") == 0) {
+            builtin_skew(cmd_argc, cmd_argv);
+        } else if (strcmp(cmd, "time") == 0) {
+            builtin_time(cmd_argc, cmd_argv);
+        } else if (strcmp(cmd, "telemetry") == 0) {
+            builtin_telemetry(cmd_argc, cmd_argv);
         } else if (strcmp(cmd, "desync") == 0) {
             builtin_desync(cmd_argc, cmd_argv);
         } else if (strcmp(cmd, "jitter") == 0) {

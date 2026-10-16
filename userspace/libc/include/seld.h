@@ -70,6 +70,14 @@
 #define SYS_OPSEC_SET_TEMPEST 59
 #define SYS_OPSEC_GET_TEMPEST 60
 #define SYS_PCI_LOCKDOWN      61
+#define SYS_NET_SET_SKEW_DEFENSE 62
+#define SYS_NET_GET_SKEW_DEFENSE 63
+#define SYS_NET_GET_TIME         64
+#define SYS_NET_SET_TIME         65
+#define SYS_NET_SET_CONFIG       66
+#define SYS_OPSEC_GET_HW_TELEMETRY 67
+#define SYS_NET_SET_BOOT_DELAY   68
+#define SYS_NET_GET_BOOT_DELAY   69
 
 /* Seld-Unveil Permission Flags (OpenBSD-style Ring 3 Filesystem Sandboxing) */
 #define UNVEIL_READ         0x01  /* Read file: open(O_RDONLY), readfile, stat */
@@ -276,5 +284,23 @@ int      seld_get_chaff(void);
 int      seld_set_tempest(int mode);
 int      seld_get_tempest(void);
 int      seld_pci_lockdown(void);
+int      seld_set_skew_defense(int mode);
+int      seld_get_skew_defense(void);
+uint64_t seld_get_time(void);
+int      seld_set_time(uint64_t epoch);
+int      seld_set_net_config(uint32_t ip, uint32_t netmask, uint32_t gateway, uint32_t dns);
+struct seld_hw_telemetry {
+    char manufacturer[32];
+    char product_name[32];
+    char serial_number[32];
+    char bios_version[32];
+    char battery_status[16];
+    uint32_t battery_percent;
+    uint32_t battery_cycles;
+    char battery_serial[32];
+};
+int      seld_get_hw_telemetry(struct seld_hw_telemetry* info);
+int      seld_set_boot_delay(int enable, uint32_t delay_ms);
+int      seld_get_boot_delay(void);
 
 #endif /* _SELD_H_ */
