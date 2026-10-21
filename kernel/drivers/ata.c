@@ -5,7 +5,7 @@
  * ATA Hard Drive Driver Implementation
  * 28-bit LBA disk operations for Primary Master ATA bus.
  * Resilient PIO engine with timeout recovery, soft-reset, and PCI Bus Master IDE detection.
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #include "ata.h"

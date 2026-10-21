@@ -3,7 +3,7 @@
  * Copyright (C) 2026 Free Software Foundation, Inc.
  *
  * Supervisor Thread Scheduler (Ring 0 Cooperative Threads) Interface
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #ifndef SELD_SCHED_H
@@ -44,5 +44,6 @@ int sched_get_tasks(struct task out_tasks[MAX_TASKS]);
 int cpu_driver_disable(void);
 int cpu_is_driver_enabled(void);
 int sched_purge_unauthorized_tasks(void);
+int sched_kill_task(uint32_t pid);
 
 #endif /* SELD_SCHED_H */

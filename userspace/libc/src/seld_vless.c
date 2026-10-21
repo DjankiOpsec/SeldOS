@@ -2,7 +2,7 @@
  * SeldOS - Humboldt Kernel Project
  * Sovereign VLESS Client Engine (Native C99 Freestanding)
  * Implementation of VLESS protocol client with optional SeldTLS 1.3
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #include "seld_vless.h"

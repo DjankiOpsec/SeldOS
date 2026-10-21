@@ -7,6 +7,10 @@
 #include "pit.h"
 #include "sched.h"
 #include "panic.h"
+#include "vmm.h"
+#include "pmm.h"
+#include "fast_syscall.h"
+#include "string.h"
 
 static struct idt_entry idt[256];
 static struct idt_ptr idtp;
@@ -138,7 +142,32 @@ void pic_mask_irq(uint8_t irq) {
 extern void syscall_dispatch(struct interrupt_frame* frame);
 
 void isr_handler(struct interrupt_frame* frame) {
-    if (frame->int_no < 32) {
+    if (frame->int_no == 14) {
+        // Exception 14: Page Fault
+        uint64_t fault_addr;
+        __asm__ volatile ("mov %%cr2, %0" : "=r"(fault_addr));
+        // If page-not-present fault (bit 0 == 0) and address is within user stack region [USER_STACK_BOTTOM, USER_STACK_PAGE)
+        uint64_t cr3;
+        __asm__ volatile ("mov %%cr3, %0" : "=r"(cr3));
+        uint64_t cr3_phys = cr3 & ~0xFFFULL;
+        if (cr3_phys != vmm_get_kernel_pml4() && (frame->err_code & 1) == 0 &&
+            fault_addr >= USER_STACK_BOTTOM && fault_addr < USER_STACK_PAGE) {
+            uint64_t page_va = fault_addr & ~0xFFFULL;
+            void* frame_phys = pmm_alloc_frame();
+            if (frame_phys) {
+                memset(phys_to_virt((uint64_t)frame_phys), 0, PAGE_SIZE);
+                uint64_t* pml4_virt = (uint64_t*)phys_to_virt(cr3_phys);
+                if (vmm_map_page(pml4_virt, page_va, (uint64_t)frame_phys,
+                                 VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE | VMM_FLAG_USER | VMM_FLAG_NO_EXECUTE) == 0) {
+                    __asm__ volatile ("invlpg (%0)" : : "r"(page_va) : "memory");
+                    return;
+                } else {
+                    pmm_free_frame(frame_phys);
+                }
+            }
+        }
+        kernel_panic_exception((uint8_t)frame->int_no, frame->err_code, frame);
+    } else if (frame->int_no < 32) {
         kernel_panic_exception((uint8_t)frame->int_no, frame->err_code, frame);
     } else if (frame->int_no == 32) {
         // Timer IRQ0

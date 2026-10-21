@@ -4,7 +4,7 @@
  *
  * Spinlock Primitives Implementation
  * Hardware-enforced mutual exclusion via GCC atomics and x86 PAUSE.
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #ifndef SELD_SPINLOCK_H

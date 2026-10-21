@@ -4,7 +4,7 @@
  *
  * SeldShell - Ring 0 Hardened Command Interpreter
  * Implementation of secure system control, diagnostics, and OpSec verification.
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #include "shell.h"
@@ -56,7 +56,7 @@ static void print_dec64(uint64_t val) {
 /* System commands */
 static void cmd_help(int argc, char* argv[]) {
     (void)argc; (void)argv;
-    print_out("SeldShell Internal Utility Set (GPLv3):\n");
+    print_out("SeldShell Internal Utility Set (AGPLv3 Hardened):\n");
     print_out("  help          Display available command definitions\n");
     print_out("  clear         Clear frame buffer\n");
     print_out("  uname         Display kernel identification and security state\n");
@@ -102,19 +102,18 @@ static void cmd_clear(int argc, char* argv[]) {
 
 static void cmd_uname(int argc, char* argv[]) {
     (void)argc; (void)argv;
-    print_out("SeldOS kernel-humboldt-x86_64 0.1.0-sec-gplv3 #1 SMP Mon Sep 28 2026 x86_64 Seld/GNU\n");
+    print_out("SeldOS kernel-humboldt-x86_64 0.1.0-sec-hardened #1 SMP Mon Sep 28 2026 x86_64 Seld/Sovereign\n");
     print_out("Privilege execution tier: Ring 0 (Direct Supervisor Hardened Mode)\n");
 }
 
 static void cmd_license(int argc, char* argv[]) {
     (void)argc; (void)argv;
-    print_out("SeldOS & SeldShell are part of the Humboldt Free Software Project.\n");
-    print_out("Copyright (C) 2026 Free Software Foundation, Inc.\n");
-    print_out("Licensed under the GNU General Public License version 3 (GPLv3).\n");
-    print_out("Freedom 0: Run the program for any purpose.\n");
-    print_out("Freedom 1: Study how the program works and adapt it to your needs.\n");
-    print_out("Freedom 2: Redistribute copies so you can help your neighbor.\n");
-    print_out("Freedom 3: Improve the program, and release improvements to the public.\n");
+    print_out("SeldOS & SeldShell are part of the Humboldt Underground Sovereign Project.\n");
+    print_out("Copyright (C) 2026 The SeldOS Sovereign Project / Humboldt Underground.\n");
+    print_out("Licensed under the GNU Affero General Public License v3 (AGPLv3) + Sovereign Rider.\n");
+    print_out("Rule 1: Absolute Network Copyleft (AGPLv3 Section 13).\n");
+    print_out("Rule 2: Total Prohibition on Surveillance, Police State & Intelligence exploitation.\n");
+    print_out("Rule 3: Eternal Sovereignty - no commercial closed exceptions will ever be sold.\n");
 }
 
 static void cmd_creg(int argc, char* argv[]) {
@@ -1140,8 +1139,8 @@ static void execute_command(char* line) {
 
 void seldshell_init(void) {
     vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
-    print_out("SeldShell v1.0.0-sec (Ring 0 GPLv3 Environment)\n");
-    print_out("Type 'help' for list of commands, 'license' for GNU GPL details.\n\n");
+    print_out("SeldShell v1.0.0-sec (Ring 0 Humboldt Hardened Environment)\n");
+    print_out("Type 'help' for list of commands, 'license' for AGPLv3 Sovereign details.\n\n");
 }
 
 void seldshell_run(void) {

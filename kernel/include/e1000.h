@@ -5,7 +5,7 @@
  * Intel e1000 Gigabit Ethernet Network Interface Driver Interface
  * Supports Intel 82540EP (QEMU/VBox) and related 8254x/8257x family.
  * Hardened Ring Buffers & DMA Descriptors.
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #ifndef SELD_E1000_H

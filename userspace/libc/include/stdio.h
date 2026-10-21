@@ -2,7 +2,7 @@
  * SeldOS - Humboldt Kernel Project
  * SNL C Standard Library (libsnl)
  * Standard Input / Output Definitions & Buffered Streams
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #ifndef _STDIO_H_

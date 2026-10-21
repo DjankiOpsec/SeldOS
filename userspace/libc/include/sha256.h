@@ -2,7 +2,7 @@
  * SeldOS - Humboldt Kernel Project
  * SNL C Standard Library (libsnl)
  * SHA-256 Cryptographic Hash Header
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #ifndef _SNL_SHA256_H_

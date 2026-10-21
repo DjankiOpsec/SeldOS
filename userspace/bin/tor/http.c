@@ -2,7 +2,7 @@
  * SeldOS - Humboldt Kernel Project
  * Tor Browser (OpSec Sovereign Edition)
  * Privacy-Hardened HTTP/1.1 Client Engine
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #include "http.h"
@@ -213,6 +213,9 @@ int http_fetch(const char* url, uint32_t proxy_ip, uint16_t proxy_port, struct h
                 }
 
                 if (ip == 0) {
+                    if (is_onion || (strlen(host) >= 6 && strcmp(host + strlen(host) - 6, ".onion") == 0)) {
+                        return -10; // RFC 7686 Guard: Onion domains must never be resolved via clearnet DNS
+                    }
                     struct seld_net_info ninfo;
                     if (seld_net_info(&ninfo) == 0 && !ninfo.link_up) {
                         return -15; // Network interface offline
@@ -398,7 +401,7 @@ int http_fetch(const char* url, uint32_t proxy_ip, uint16_t proxy_port, struct h
         char* body_buf = (char*)malloc(body_len + 1);
         if (!body_buf) {
             free(raw_buf);
-            return -8;
+            return -6;
         }
         memcpy(body_buf, raw_buf + body_offset, body_len);
         body_buf[body_len] = '\0';

@@ -2,7 +2,7 @@
  * SeldOS - Humboldt Kernel Project
  * SNL C Standard Library (libsnl)
  * Fast SYSCALL / SYSRET Assembly Wrappers
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #include "seld.h"
@@ -263,13 +263,123 @@ int seld_net_arp(struct seld_arp_entry* entries, size_t max_entries) {
     return (int)seld_syscall(SYS_NET_ARP, (long)entries, (long)max_entries, 0);
 }
 
-int seld_net_download(uint32_t ip, uint16_t port, const char* url_path, const char* local_path) {
-    return (int)seld_syscall4(SYS_NET_DOWNLOAD, (long)ip, (long)port, (long)url_path, (long)local_path);
-}
-
 #include "seld_tls.h"
 #include <stdio.h>
 #include <stdlib.h>
+
+int seld_http_download(uint32_t ip, uint16_t port, const char* host, const char* path, const char* local_path) {
+    if (!path || !local_path) return -1;
+    if (ip == 0) {
+        struct seld_net_info net;
+        if (seld_net_info(&net) == 0 && net.gateway != 0) {
+            ip = net.gateway;
+        } else {
+            return -2;
+        }
+    }
+    if (port == 0) port = 80;
+
+    int sock = seld_tcp_connect(ip, port);
+    if (sock < 0) {
+        return -3;
+    }
+
+    char req[512];
+    const char* h = host ? host : "10.0.2.2:8080";
+    snprintf(req, sizeof(req),
+        "GET %s HTTP/1.0\r\n"
+        "Host: %s\r\n"
+        "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:115.0) Gecko/20100101 Firefox/115.0\r\n"
+        "Accept: */*\r\n"
+        "Connection: close\r\n\r\n",
+        path, h);
+
+    if (seld_tcp_send(sock, req, strlen(req)) <= 0) {
+        seld_tcp_close(sock);
+        return -3;
+    }
+
+    size_t cap = 64 * 1024;
+    uint8_t* resp_buf = (uint8_t*)malloc(cap);
+    if (!resp_buf) {
+        seld_tcp_close(sock);
+        return -6;
+    }
+
+    size_t total_read = 0;
+    while (1) {
+        if (total_read + 16384 > cap) {
+            size_t new_cap = cap * 2;
+            if (new_cap > 8 * 1024 * 1024) break;
+            uint8_t* new_buf = (uint8_t*)realloc(resp_buf, new_cap);
+            if (!new_buf) break;
+            resp_buf = new_buf;
+            cap = new_cap;
+        }
+        int n = seld_tcp_recv(sock, resp_buf + total_read, cap - total_read, 10000);
+        if (n > 0) {
+            total_read += (size_t)n;
+        } else {
+            break;
+        }
+    }
+    seld_tcp_close(sock);
+
+    if (total_read == 0) {
+        free(resp_buf);
+        return -7;
+    }
+
+    size_t hdr_len = 0;
+    for (size_t i = 0; i + 3 < total_read; i++) {
+        if (resp_buf[i] == '\r' && resp_buf[i+1] == '\n' && resp_buf[i+2] == '\r' && resp_buf[i+3] == '\n') {
+            hdr_len = i + 4;
+            break;
+        } else if (resp_buf[i] == '\n' && resp_buf[i+1] == '\n') {
+            hdr_len = i + 2;
+            break;
+        }
+    }
+
+    if (hdr_len == 0 || hdr_len >= total_read) {
+        free(resp_buf);
+        return -8;
+    }
+
+    if (strncmp((char*)resp_buf, "HTTP/1.0 200", 12) != 0 &&
+        strncmp((char*)resp_buf, "HTTP/1.1 200", 12) != 0) {
+        free(resp_buf);
+        return -9;
+    }
+
+    uint8_t* body = resp_buf + hdr_len;
+    size_t body_len = total_read - hdr_len;
+
+    char* cl_ptr = strstr((char*)resp_buf, "content-length:");
+    if (!cl_ptr) cl_ptr = strstr((char*)resp_buf, "Content-Length:");
+    if (cl_ptr && (size_t)(cl_ptr - (char*)resp_buf) < hdr_len) {
+        cl_ptr += 15;
+        while (*cl_ptr == ' ' || *cl_ptr == '\t') cl_ptr++;
+        size_t expected_len = (size_t)atoi(cl_ptr);
+        if (expected_len > 0 && body_len < expected_len) {
+            free(resp_buf);
+            return -8;
+        }
+    }
+
+    int wres = seld_writefile(local_path, body, body_len);
+    free(resp_buf);
+
+    if (wres == 0) {
+        printf("[+] HTTP/1.0 200 OK - Download Complete! (%u bytes saved to %s)\n", (unsigned int)body_len, local_path);
+        return 0;
+    }
+    return -10;
+}
+
+int seld_net_download(uint32_t ip, uint16_t port, const char* url_path, const char* local_path) {
+    return seld_http_download(ip, port, NULL, url_path, local_path);
+}
 
 int seld_https_download(const char* host, const char* path, const char* local_path) {
     if (!host || !path || !local_path) return -1;
@@ -325,8 +435,8 @@ int seld_https_download(const char* host, const char* path, const char* local_pa
         return -5;
     }
 
-    // Read response body into memory buffer (up to 5 MiB for binaries & WAD assets)
-    size_t cap = 5 * 1024 * 1024;
+    // Read response body into memory buffer (starts at 64 KiB, grows dynamically up to 8 MiB)
+    size_t cap = 64 * 1024;
     uint8_t* resp_buf = (uint8_t*)malloc(cap);
     if (!resp_buf) {
         seld_tls_close(tls);
@@ -335,14 +445,21 @@ int seld_https_download(const char* host, const char* path, const char* local_pa
     }
 
     size_t total_read = 0;
-    while (total_read < cap) {
+    while (1) {
+        if (total_read + 16384 > cap) {
+            size_t new_cap = cap * 2;
+            if (new_cap > 8 * 1024 * 1024) break;
+            uint8_t* new_buf = (uint8_t*)realloc(resp_buf, new_cap);
+            if (!new_buf) break;
+            resp_buf = new_buf;
+            cap = new_cap;
+        }
         int n = seld_tls_read(tls, resp_buf + total_read, cap - total_read, 8000);
         if (n > 0) {
             total_read += (size_t)n;
         } else if (n == 0) {
             break; // EOF or close_notify
         } else {
-            // Read error or TLS verification failure
             seld_tls_close(tls);
             free(tls);
             free(resp_buf);
@@ -567,8 +684,13 @@ int seld_dns_resolve_dot(const char* hostname, uint32_t* ip_out) {
     uint8_t qbuf[512];
     uint8_t* dst = qbuf + 2; // Leave 2 bytes for length prefix
 
-    // DNS Header: ID=0x5E1D, Flags=0x0100 (Standard Query, RD=1), QDCOUNT=1
-    dst[0] = 0x5E; dst[1] = 0x1D; // ID
+    // DNS Header: RFC 5452 Random 16-bit ID, Flags=0x0100 (Standard Query, RD=1), QDCOUNT=1
+    uint16_t dot_qid = 0;
+    if (seld_getrandom(&dot_qid, sizeof(dot_qid)) != (int)sizeof(dot_qid) || dot_qid == 0) {
+        dot_qid = 0x5E1D;
+    }
+    dst[0] = (uint8_t)(dot_qid >> 8);
+    dst[1] = (uint8_t)(dot_qid & 0xFF);
     dst[2] = 0x01; dst[3] = 0x00; // Flags: RD
     dst[4] = 0x00; dst[5] = 0x01; // QDCOUNT: 1
     dst[6] = 0x00; dst[7] = 0x00; // ANCOUNT: 0
@@ -841,5 +963,42 @@ int seld_set_boot_delay(int enable, uint32_t delay_ms) {
 int seld_get_boot_delay(void) {
     return (int)seld_syscall(SYS_NET_GET_BOOT_DELAY, 0, 0, 0);
 }
+
+int seld_getrandom(void* buf, size_t len) {
+    return (int)seld_syscall(SYS_GETRANDOM, (long)buf, (long)len, 0);
+}
+
+int seld_opsec_blackout(void) {
+    return (int)seld_syscall(SYS_OPSEC_BLACKOUT, 0, 0, 0);
+}
+
+void seld_opsec_fire_kill(void) {
+    seld_syscall(SYS_OPSEC_FIRE_KILL, 0, 0, 0);
+    while (1) {}
+}
+
+int seld_opsec_otp_draw(uint32_t col, uint32_t row, const char* text, uint32_t seed) {
+    if (!text) return -1;
+    struct seld_otp_request req;
+    req.col = col;
+    req.row = row;
+    req.seed = seed;
+    strncpy(req.text, text, sizeof(req.text) - 1);
+    req.text[sizeof(req.text) - 1] = '\0';
+    return (int)seld_syscall(SYS_OPSEC_OTP_DRAW, (long)&req, 0, 0);
+}
+
+int seld_redirect_stdout(int fd) {
+    return (int)seld_syscall(SYS_REDIRECT_STDOUT, (long)fd, 0, 0);
+}
+
+int seld_redirect_stdin(int fd) {
+    return (int)seld_syscall(SYS_REDIRECT_STDIN, (long)fd, 0, 0);
+}
+
+int seld_kill(uint32_t pid, int sig) {
+    return (int)seld_syscall(SYS_KILL, (long)pid, (long)sig, 0);
+}
+
 
 

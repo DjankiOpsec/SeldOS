@@ -1,6 +1,6 @@
 /*
  * SeldOS Kernel Embedded SVGZ Logo Blob (RISC-V)
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 .section .rodata

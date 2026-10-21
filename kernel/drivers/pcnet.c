@@ -4,7 +4,7 @@
  *
  * AMD PCnet-FAST III (Am79C973 / PCnet-PCI II/III) Network Interface Driver
  * Supports VirtualBox default NIC, VMware, and legacy AMD Ethernet hardware.
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #include "pcnet.h"
@@ -15,6 +15,7 @@
 #include "string.h"
 #include "serial.h"
 #include "pit.h"
+#include "rand.h"
 
 #define PCNET_NUM_DESC 16
 #define PCNET_DESC_LOG2 4
@@ -84,6 +85,12 @@ static inline uint16_t pcnet_read_bcr(uint16_t io, uint16_t reg) {
     return inw(io + 0x16); // BDP
 }
 
+void pcnet_randomize_mac(void) {
+    rng_get_bytes(s_mac_addr, 6);
+    // IEEE 802: Locally administered (bit 1 = 1), Unicast (bit 0 = 0)
+    s_mac_addr[0] = (s_mac_addr[0] | 0x02) & 0xFE;
+}
+
 int pcnet_init(void) {
     serial_puts("[+] pcnet: Probing PCI bus for AMD PCnet controllers...\n");
 
@@ -114,6 +121,9 @@ int pcnet_init(void) {
     for (int i = 0; i < 6; i++) {
         s_mac_addr[i] = inb(s_io_base + i);
     }
+
+    // OpSec Anti-Fingerprinting: Randomize/Spoof MAC address (Locally Administered)
+    pcnet_randomize_mac();
 
     // 4. Hardware Reset
     inw(s_io_base + 0x14); // 16-bit WIO Reset read
@@ -232,7 +242,7 @@ int pcnet_init(void) {
     serial_puts("[+] pcnet: Found AMD PCnet NIC (Device: 0x2000, I/O: 0x");
     serial_print_hex(s_io_base);
     serial_puts(")\n");
-    serial_puts("[+] pcnet: Hardware MAC Address: ");
+    serial_puts("[+] pcnet: OpSec Ephemeral MAC Address (Randomized/Spoofed): ");
     const char hex_chars[] = "0123456789ABCDEF";
     for (int i = 0; i < 6; i++) {
         serial_putchar(hex_chars[(s_mac_addr[i] >> 4) & 0x0F]);

@@ -2,7 +2,7 @@
  * SeldOS - Humboldt Kernel Project
  * SNL C Standard Library (libsnl)
  * Standard Utilities (exit, atoi, itoa, abs, getenv)
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #include "stdlib.h"

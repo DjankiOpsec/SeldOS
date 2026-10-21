@@ -2,7 +2,7 @@
  * SeldOS - Humboldt Kernel Project
  * SNL C Standard Library (libsnl)
  * POSIX Standard Symbolic Constants & Process Primitives
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #ifndef _UNISTD_H_

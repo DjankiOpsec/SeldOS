@@ -1,7 +1,7 @@
 /*
  * SeldOS - Humboldt Kernel Project
  * AMD PCnet-FAST III (Am79C973) PCI Network Driver Interface
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #ifndef SELD_PCNET_H
@@ -13,6 +13,7 @@
 int            pcnet_init(void);
 int            pcnet_is_active(void);
 const uint8_t* pcnet_get_mac(void);
+void           pcnet_randomize_mac(void);
 int            pcnet_send_packet(const void* data, size_t len);
 int            pcnet_poll_packet(void* buf, size_t max_len);
 

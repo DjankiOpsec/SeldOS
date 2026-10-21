@@ -2,7 +2,7 @@
  * SeldOS - Humboldt Kernel Project
  * Sovereign Audio Architecture Implementation
  * Universal Support: PC Speaker (PIT Ch2), Intel AC'97 (PCI / VirtualBox), Sound Blaster 16
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #include "audio.h"
@@ -61,6 +61,7 @@ static uint32_t s_ac97_pcm_buf_phys = 0;
 static uint32_t s_ac97_buf_frames = (AC97_NUM_BLOCKS * AC97_BLOCK_FRAMES); // 4096 frames
 static uint32_t s_ac97_buf_bytes = (AC97_NUM_BLOCKS * AC97_BLOCK_BYTES);   // 16384 bytes (4 pages)
 static volatile int s_ac97_tone_active = 0;
+static volatile int s_audio_blackout = 0;
 
 static uint32_t s_ac97_block_end_phase[AC97_NUM_BLOCKS] = {0};
 static uint32_t s_ac97_target_freq = 0;
@@ -292,6 +293,7 @@ static void ac97_render_block(uint8_t block_idx, uint32_t freq_hz) {
  * - PC Speaker PIT Channel 2 + Port 0x61 (Universal x86)
  */
 void audio_play_tone(uint32_t freq_hz) {
+    if (s_audio_blackout) return;
     if (freq_hz < 20 || freq_hz > 20000) {
         audio_stop_tone();
         return;
@@ -432,6 +434,7 @@ void audio_snd(int8_t ona) {
  * Timed beep tone generator with overflow protection.
  */
 void audio_beep(uint32_t freq_hz, uint32_t duration_ms) {
+    if (s_audio_blackout) return;
     if (freq_hz == 0) {
         audio_stop_tone();
         return;
@@ -488,7 +491,7 @@ struct audio_info audio_get_info(void) {
  */
 int audio_play_pcm(const uint8_t* samples, size_t len, uint32_t sample_rate) {
     (void)sample_rate;
-    if (!samples || len == 0) return 0;
+    if (s_audio_blackout || !samples || len == 0) return 0;
 
     // 1. AC'97 DMA streaming
     if ((s_audio_info.active_devices & AUDIO_DEV_AC97) && s_ac97_pcm_buf && s_ac97_bdl) {
@@ -534,3 +537,41 @@ int audio_play_pcm(const uint8_t* samples, size_t len, uint32_t sample_rate) {
 
     return (int)len;
 }
+
+void audio_blackout_mute(void) {
+    s_audio_blackout = 1;
+    audio_stop_tone();
+
+    // 1. Hardware silence on PC Speaker (PIT Ch2 gate & speaker data)
+    outb(SPEAKER_PORT_B, inb(SPEAKER_PORT_B) & ~3);
+
+    // 2. Hardware silence on AC'97: Mute Master, Headphone, PCM volume registers
+    if (s_audio_info.active_devices & AUDIO_DEV_AC97) {
+        uint16_t nam = s_audio_info.ac97_nambar;
+        uint16_t nabm = s_audio_info.ac97_nabmbar;
+
+        // Reset DMA Bus Master
+        outb(nabm + AC97_PO_CR, 0x00);
+        outb(nabm + AC97_PO_CR, 0x02); // Reset
+
+        // Set Bit 15 (Mute = 1) and attenuate to 0 (0x8000)
+        outw(nam + AC97_MASTER_VOL, 0x8000);
+        outw(nam + AC97_HEADPHONE,  0x8000);
+        outw(nam + AC97_MONO_VOL,   0x8000);
+        outw(nam + AC97_PCM_VOL,    0x8000);
+    }
+
+    // 3. Hardware silence on Sound Blaster 16
+    if (s_audio_info.active_devices & AUDIO_DEV_SB16) {
+        outb(SB16_DSP_RESET, 1);
+        for (volatile int i = 0; i < 1000; i++) inb(0x80);
+        outb(SB16_DSP_RESET, 0);
+    }
+
+    serial_puts("[+] OpSec: Audio subsystem placed into HARDWARE BLACKOUT (DACs muted, DMA revoked).\n");
+}
+
+int audio_is_blackout(void) {
+    return s_audio_blackout;
+}
+

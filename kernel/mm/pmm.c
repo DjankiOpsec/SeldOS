@@ -5,7 +5,7 @@
  * Physical Memory Manager (PMM) Implementation
  * Supports Multiboot 1 & Multiboot 2 memory map inspection.
  * Bitmap-based page frame tracking.
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #include "pmm.h"
@@ -114,6 +114,7 @@ void pmm_init(uint64_t mb_magic, uint64_t mb_info_addr) {
         }
     }
 #else
+    highest_addr = 0;
     if (mb_magic == 0x36d76289 && mb_info_addr != 0) {
         // Multiboot 2
         uint8_t* tag_ptr = (uint8_t*)(mb_info_addr + 8);
@@ -159,6 +160,10 @@ void pmm_init(uint64_t mb_magic, uint64_t mb_info_addr) {
         }
     }
 
+    if (highest_addr == 0) {
+        highest_addr = 0x8000000; // Fallback: 128 MiB if no mmap provided
+    }
+
     // Cap at 1 GiB for now
     if (highest_addr > 0x40000000) {
         highest_addr = 0x40000000;
@@ -175,22 +180,84 @@ void pmm_init(uint64_t mb_magic, uint64_t mb_info_addr) {
     size_t bitmap_bytes = (total_frames / 8) + 1;
     size_t bitmap_frames = (bitmap_bytes + PAGE_SIZE - 1) / PAGE_SIZE;
 
-    // Initialize all frames as free (0)
-    memset(pmm_bitmap, 0, bitmap_bytes);
-    used_frames = 0;
+    // Initialize all frames as used (1), then selectively free usable RAM regions from BIOS mmap
+    memset(pmm_bitmap, 0xFF, bitmap_bytes);
+    used_frames = total_frames;
 
-    // Mark the first 1MB as used (BIOS, IVT, BDA, VGA buffer 0xB8000)
-    size_t first_mb_frames = 0x100000 / PAGE_SIZE;
-    for (size_t i = 0; i < first_mb_frames; i++) {
-        bitmap_set(i);
-        used_frames++;
+    int mmap_processed = 0;
+    if (mb_magic == 0x36d76289 && mb_info_addr != 0) {
+        // Multiboot 2
+        uint8_t* tag_ptr = (uint8_t*)(mb_info_addr + 8);
+        while (1) {
+            struct multiboot2_tag* tag = (struct multiboot2_tag*)tag_ptr;
+            if (tag->type == 0) break;
+            if (tag->type == 6) {
+                struct multiboot2_tag_mmap* mmap_tag = (struct multiboot2_tag_mmap*)tag;
+                uint8_t* entry_ptr = tag_ptr + sizeof(struct multiboot2_tag_mmap);
+                uint8_t* end_ptr = tag_ptr + mmap_tag->size;
+                while (entry_ptr < end_ptr) {
+                    struct multiboot2_mmap_entry* entry = (struct multiboot2_mmap_entry*)entry_ptr;
+                    if (entry->type == 1 && entry->addr + entry->len > 0x100000) {
+                        uint64_t start = entry->addr < 0x100000 ? 0x100000 : entry->addr;
+                        uint64_t end = entry->addr + entry->len;
+                        if (end > total_physical_memory) end = total_physical_memory;
+                        size_t sf = start / PAGE_SIZE;
+                        size_t ef = end / PAGE_SIZE;
+                        for (size_t f = sf; f < ef && f < total_frames; f++) {
+                            if (bitmap_test(f)) {
+                                bitmap_clear(f);
+                                used_frames--;
+                            }
+                        }
+                    }
+                    entry_ptr += mmap_tag->entry_size;
+                }
+                mmap_processed = 1;
+            }
+            tag_ptr += ((tag->size + 7) & ~7);
+        }
+    } else if (mb_magic == 0x2badb002 && mb_info_addr != 0) {
+        // Multiboot 1
+        struct multiboot1_info* mb1 = (struct multiboot1_info*)mb_info_addr;
+        if (mb1->flags & (1 << 6)) {
+            uint8_t* mmap_ptr = (uint8_t*)((uint64_t)mb1->mmap_addr + 0xFFFF800000000000ULL);
+            uint8_t* end_ptr = mmap_ptr + mb1->mmap_length;
+            while (mmap_ptr < end_ptr) {
+                struct multiboot1_mmap_entry* entry = (struct multiboot1_mmap_entry*)mmap_ptr;
+                if (entry->type == 1 && entry->addr + entry->len > 0x100000) {
+                    uint64_t start = entry->addr < 0x100000 ? 0x100000 : entry->addr;
+                    uint64_t end = entry->addr + entry->len;
+                    if (end > total_physical_memory) end = total_physical_memory;
+                    size_t sf = start / PAGE_SIZE;
+                    size_t ef = end / PAGE_SIZE;
+                    for (size_t f = sf; f < ef && f < total_frames; f++) {
+                        if (bitmap_test(f)) {
+                            bitmap_clear(f);
+                            used_frames--;
+                        }
+                    }
+                }
+                mmap_ptr += entry->size + sizeof(uint32_t);
+            }
+            mmap_processed = 1;
+        }
+    }
+
+    if (!mmap_processed) {
+        // Fallback: clear all frames above 1MB if no mmap provided
+        for (size_t f = 0x100000 / PAGE_SIZE; f < total_frames; f++) {
+            if (bitmap_test(f)) {
+                bitmap_clear(f);
+                used_frames--;
+            }
+        }
     }
 
     // Physical address of kernel start is 0x100000 (1MB)
     // Physical address of bitmap end:
     size_t kernel_start_frame = 0x100000 / PAGE_SIZE;
     size_t reserved_end_frame = (bitmap_phys / PAGE_SIZE) + bitmap_frames;
-    for (size_t i = kernel_start_frame; i < reserved_end_frame; i++) {
+    for (size_t i = kernel_start_frame; i < reserved_end_frame && i < total_frames; i++) {
         if (!bitmap_test(i)) {
             bitmap_set(i);
             used_frames++;
@@ -206,11 +273,9 @@ void pmm_init(uint64_t mb_magic, uint64_t mb_info_addr) {
         for (size_t i = rd_start_frame; i < rd_end_frame && i < total_frames; i++) {
             if (!bitmap_test(i)) {
                 bitmap_set(i);
-                used_frames++;
             }
         }
     }
-
     ramdisk_expand_in_ram();
 
     serial_puts("[+] PMM Initialized: ");
@@ -227,13 +292,23 @@ void* pmm_alloc_frame(void) {
         }
         return NULL;
     }
-    for (size_t i = 0; i < total_frames; i++) {
+#if defined(__riscv)
+    size_t start_frame = 0x80700000ULL / PAGE_SIZE;
+#else
+    size_t start_frame = 0x100000 / PAGE_SIZE;
+#endif
+    for (size_t i = start_frame; i < total_frames; i++) {
         if (!bitmap_test(i)) {
             bitmap_set(i);
             used_frames++;
             return (void*)(i * PAGE_SIZE);
         }
     }
+    serial_puts("[-] PMM: Out of frames! used=");
+    serial_print_dec(used_frames);
+    serial_puts(" total=");
+    serial_print_dec(total_frames);
+    serial_puts("\n");
     return NULL; // Out of memory
 }
 
@@ -248,7 +323,12 @@ void* pmm_alloc_frames(size_t count) {
     size_t contiguous = 0;
     size_t start_frame = 0;
 
-    for (size_t i = 0; i < total_frames; i++) {
+#if defined(__riscv)
+    size_t start_scan = 0x80700000ULL / PAGE_SIZE;
+#else
+    size_t start_scan = 0x100000 / PAGE_SIZE;
+#endif
+    for (size_t i = start_scan; i < total_frames; i++) {
         if (!bitmap_test(i)) {
             if (contiguous == 0) {
                 start_frame = i;
@@ -270,6 +350,15 @@ void* pmm_alloc_frames(size_t count) {
 
 void pmm_free_frame(void* ptr) {
     uint64_t addr = (uint64_t)ptr;
+#if defined(__riscv)
+    if (addr < 0x80700000ULL || addr >= 0x88000000ULL) {
+        return; // Guard physical RAM boundaries & kernel region
+    }
+#else
+    if (addr < 0x100000ULL || addr >= total_physical_memory) {
+        return; // Guard physical RAM boundaries
+    }
+#endif
     extern uint64_t kernel_pml4_phys;
     if (kernel_pml4_phys && addr == kernel_pml4_phys) {
         return; // Guard kernel root page table
@@ -283,6 +372,15 @@ void pmm_free_frame(void* ptr) {
 
 void pmm_free_frames(void* ptr, size_t count) {
     uint64_t addr = (uint64_t)ptr;
+#if defined(__riscv)
+    if (addr < 0x80700000ULL || addr >= 0x88000000ULL) {
+        return; // Guard physical RAM boundaries & kernel region
+    }
+#else
+    if (addr < 0x100000ULL || addr >= total_physical_memory) {
+        return; // Guard physical RAM boundaries
+    }
+#endif
     size_t start_frame = addr / PAGE_SIZE;
     for (size_t i = 0; i < count; i++) {
         size_t frame = start_frame + i;
@@ -326,11 +424,16 @@ int ram_is_driver_enabled(void) {
 void pmm_secure_wipe_all_free(void) {
     serial_puts("[+] OpSec: Initiating Cold-Boot defense (scrubbing unallocated RAM frames)...\n");
     size_t scrubbed = 0;
-    for (size_t i = 0; i < total_frames; i++) {
+#if defined(__riscv)
+    size_t start_wipe = 0x80700000ULL / PAGE_SIZE;
+#else
+    size_t start_wipe = 0;
+#endif
+    for (size_t i = start_wipe; i < total_frames; i++) {
         if (!bitmap_test(i)) {
             uint64_t pa = (uint64_t)i * PAGE_SIZE;
 #if defined(__riscv)
-            if (pa >= 0x80000000ULL && pa < 0x100000000ULL) {
+            if (pa >= 0x80700000ULL && pa < 0x88000000ULL) {
                 uint8_t* virt = (uint8_t*)phys_to_virt(pa);
                 memset(virt, 0, PAGE_SIZE);
                 scrubbed++;
@@ -354,3 +457,4 @@ void pmm_secure_wipe_all_free(void) {
     serial_print_dec((uint64_t)scrubbed);
     serial_puts(" free physical frames wiped.\n");
 }
+

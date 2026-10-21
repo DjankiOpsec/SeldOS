@@ -2,7 +2,7 @@
  * SeldOS - Humboldt Kernel Project
  * SNL Coreutils: sha256sum - Cryptographic Hash & Inode Integrity Verification
  * Calculates SHA-256 hash of file(s) and verifies integrity against inode.
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #include "stdio.h"
@@ -33,21 +33,42 @@ int main(int argc, char* argv[]) {
     int failures = 0;
 
     for (int i = 1; i < argc; i++) {
-        int bytes = readfile(argv[i], file_buf, sizeof(file_buf));
+        struct seld_stat st;
+        int has_stat = (stat(argv[i], &st) == 0);
+        char* buf = file_buf;
+        size_t buf_size = sizeof(file_buf);
+        int allocated = 0;
+
+        if (has_stat && st.size > buf_size) {
+            buf = (char*)malloc(st.size);
+            if (buf) {
+                buf_size = st.size;
+                allocated = 1;
+            } else {
+                buf = file_buf;
+                buf_size = sizeof(file_buf);
+            }
+        }
+
+        int bytes = readfile(argv[i], buf, buf_size);
         if (bytes < 0) {
             printf("sha256sum: %s: No such file or directory\n", argv[i]);
+            if (allocated) free(buf);
             failures++;
             continue;
         }
 
         uint8_t computed[32];
-        sha256_hash(file_buf, (size_t)bytes, computed);
+        sha256_hash(buf, (size_t)bytes, computed);
+        if (allocated) {
+            free(buf);
+            buf = NULL;
+        }
 
         char computed_hex[65];
         hex_encode(computed, computed_hex);
 
-        struct seld_stat st;
-        if (stat(argv[i], &st) == 0) {
+        if (has_stat) {
             if (memcmp(computed, st.sha256, 32) == 0) {
                 printf("%s  %s  [OK]\n", computed_hex, argv[i]);
             } else {

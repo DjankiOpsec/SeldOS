@@ -3,7 +3,7 @@
  * SNL-FM: Seld Sovereign Graphical File Manager v0.1
  * Graphical File Manager for Humboldt 680x334 Framebuffer.
  * Direct Linear Framebuffer Rendering with 39-Color Palette.
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #include "stdio.h"

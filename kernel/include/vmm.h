@@ -4,7 +4,7 @@
  *
  * Virtual Memory Manager (VMM) Interface
  * Higher-Half direct physical memory mapping and fine-grained 4KiB page mapping.
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #ifndef SELD_VMM_H
@@ -54,6 +54,8 @@ void vmm_destroy_address_space(uint64_t* pml4_virt);
 int vmm_map_page(uint64_t* pml4_virt, uint64_t virt, uint64_t phys, uint64_t flags);
 int vmm_unmap_page(uint64_t* pml4_virt, uint64_t virt);
 void vmm_switch_pml4(uint64_t phys_pml4);
+uint64_t vmm_get_page_entry(uint64_t* pml4_virt, uint64_t virt);
+int vmm_check_access(uint64_t* pml4_virt, uint64_t virt, int write);
 uint64_t vmm_get_mapping(uint64_t* pml4_virt, uint64_t virt);
 uint64_t vmm_get_kernel_pml4(void);
 

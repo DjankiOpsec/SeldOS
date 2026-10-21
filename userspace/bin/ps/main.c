@@ -2,7 +2,7 @@
  * SeldOS - Humboldt Kernel Project
  * SNL Coreutils: ps - Process Status Monitor
  * Queries and displays active tasks / PID info from kernel scheduler.
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #include "stdio.h"

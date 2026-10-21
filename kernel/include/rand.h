@@ -4,7 +4,7 @@
  *
  * Kernel Hardware Entropy & RNG Interface
  * Zero-Trust CSPRNG with SHA-256 Entropy Sponge Whitening.
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #ifndef SELD_RAND_H

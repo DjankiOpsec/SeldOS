@@ -1,13 +1,15 @@
 /*
  * SeldOS - Humboldt Kernel Project
  * SNL Coreutils: echo - Print Arguments to Standard Output
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #include "stdio.h"
 #include "string.h"
+#include "seld.h"
 
 int main(int argc, char* argv[]) {
+    seld_pledge(PLEDGE_STDIO);
     int start = 1;
     int newline = 1;
 

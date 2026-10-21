@@ -3,7 +3,7 @@
  * Copyright (C) 2026 Free Software Foundation, Inc.
  *
  * SeldShell - Ring 0 Hardened Command Interpreter
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #ifndef SELD_SHELL_H

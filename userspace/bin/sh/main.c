@@ -3,7 +3,7 @@
  * SNL (Seld Not Linux) Sovereign Shell v0.1 (snl-sh)
  * Autonomous interactive Ring 3 Shell with line editing, builtins,
  * and SeldFS /bin program execution.
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #include "stdio.h"
@@ -16,12 +16,16 @@
 #define MAX_LINE_LEN 256
 #define MAX_ARGS 16
 
+#define SH_HISTORY_MAX 64
+static char* s_sh_history[SH_HISTORY_MAX];
+static int s_sh_history_count = 0;
+
 static void draw_banner_vector_logo(void);
 
 static void print_banner(void) {
     printf("=======================================================================\n");
     printf("                          SNL (Seld Not Linux) Sovereign Shell v0.1\n");
-    printf("                          Ring 3 Sovereign CLI Environment (GPLv3)\n");
+    printf("                          Ring 3 Sovereign CLI Environment (Humboldt Hardened)\n");
     printf("                          Humboldt Framebuffer 680x334 | 39-Color Palette\n");
 #if defined(__riscv)
     printf("                          RISC-V 64-bit (RV64GC) Isolated Execution\n");
@@ -108,6 +112,19 @@ static const char scancode_ascii[128] = {
     0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
     0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
 };
+
+static const char scancode_ascii_upper[128] = {
+    0,   27,  '!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '_', '+', '\b',
+    '\t', 'Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P', '{', '}', '\n',
+    0,   'A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L', ':', '"', '~',
+    0,   '|', 'Z', 'X', 'C', 'V', 'B', 'N', 'M', '<', '>', '?', 0,
+    '*', 0,   ' ', 0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+    0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+    0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+};
+
+static int s_rshift_pressed = 0;
+static int s_caps_lock = 0;
 
 static struct seld_fb_info s_fb = {0};
 static int s_fb_checked = 0;
@@ -524,13 +541,66 @@ static int read_line(char* buf, size_t max_len) {
         struct seld_kbd_event kev;
         if (seld_poll_key(&kev) > 0) {
             activity = 1;
+            uint8_t raw_sc = kev.scancode;
+
+            /* Left Shift (0x2A): Dead Man's Grip ONLY. Ignore for shell typing */
+            if (raw_sc == 0x2A) {
+                continue;
+            }
+
+            /* Right Shift (0x36): Typing modifier for Caps & symbols */
+            if (raw_sc == 0x36) {
+                s_rshift_pressed = kev.pressed;
+                continue;
+            }
+
+            /* Left Ctrl (0x1D): track pressed state */
+            static int s_lctrl_pressed = 0;
+            if (raw_sc == 0x1D) {
+                s_lctrl_pressed = kev.pressed;
+                continue;
+            }
+
+            /* Caps Lock (0x3A): Toggle on press */
+            if (raw_sc == 0x3A && kev.pressed) {
+                s_caps_lock = !s_caps_lock;
+                continue;
+            }
+
+            /* Ctrl+C: Cancel current command line */
+            if (s_lctrl_pressed && kev.pressed && (raw_sc & 0x7F) == 0x2E) {
+                putchar('^');
+                putchar('C');
+                putchar('\n');
+                fflush(stdout);
+                buf[0] = '\0';
+                return 0;
+            }
+
+            /* Ctrl+Z: Suspend current command line */
+            if (s_lctrl_pressed && kev.pressed && (raw_sc & 0x7F) == 0x2C) {
+                putchar('^');
+                putchar('Z');
+                putchar('\n');
+                printf("[1]+ Stopped\n");
+                fflush(stdout);
+                buf[0] = '\0';
+                return 0;
+            }
+
             if (kev.pressed) {
                 if (s_mouse_active) {
                     cursor_hide();
                     s_mouse_active = 0;
                 }
-                uint8_t sc = kev.scancode & 0x7F;
-                char c = scancode_ascii[sc];
+                uint8_t sc = raw_sc & 0x7F;
+                char c = 0;
+                if (sc < 128) {
+                    char base = scancode_ascii[sc];
+                    int is_alpha = (base >= 'a' && base <= 'z');
+                    int use_upper = is_alpha ? (s_rshift_pressed ^ s_caps_lock) : s_rshift_pressed;
+                    c = use_upper ? scancode_ascii_upper[sc] : base;
+                }
                 if (c == '\r' || c == '\n') {
                     if (s_mobile_mode) cursor_hide();
                     putchar('\n');
@@ -571,12 +641,27 @@ static int parse_args(char* line, char* argv[], int max_args) {
         }
         if (*p == '\0') break;
 
+        char quote = '\0';
+        if (*p == '"' || *p == '\'') {
+            quote = *p;
+            *p++ = '\0';
+        }
+
         if (argc < max_args - 1) {
             argv[argc++] = p;
         }
 
-        while (*p != '\0' && *p != ' ' && *p != '\t') {
-            p++;
+        if (quote != '\0') {
+            while (*p != '\0' && *p != quote) {
+                p++;
+            }
+            if (*p == quote) {
+                *p++ = '\0';
+            }
+        } else {
+            while (*p != '\0' && *p != ' ' && *p != '\t') {
+                p++;
+            }
         }
     }
     argv[argc] = NULL;
@@ -603,7 +688,7 @@ static void builtin_poweroff(void) {
 
 static void builtin_help(void) {
     printf("SNL (Seld Not Linux) Sovereign Shell v0.1\n");
-    printf("Autonomous Interactive Ring 3 Shell (GPLv3)\n\n");
+    printf("Autonomous Interactive Ring 3 Shell (Humboldt Hardened / AGPLv3)\n\n");
     printf("Builtin Commands:\n");
     printf("  help            Display this help summary\n");
     printf("  fetch           Display Sovereign system banner and mascot\n");
@@ -634,9 +719,21 @@ static void builtin_help(void) {
     printf("  tempest [on|off]TEMPEST Video RF Dispersion & Subpixel Dithering (SDR Evasion)\n");
     printf("  uarch flush     Microarchitectural Flush (Branch Predictor IBPB, Caches, TLB)\n");
     printf("  pci lockdown    Zero-Trust PCI DMA & Option ROM Lockdown\n");
+    printf("  blackout        CIA Peripheral Blackout (LEDs off, DACs mute, USB quarantine)\n");
+    printf("  firekill        Autonomous Fire-and-Kill (DoD 3-pass RAM scrub & hard poweroff)\n");
+    printf("  export [K=V]    Set environment variable (or list environment variables)\n");
+    printf("  env             Print all exported environment variables\n");
     printf("  unveil <p> <m>  Seld-Unveil Filesystem Sandboxing (OpenBSD unveil: r, w, x, c, lock)\n");
     printf("  selftest        Execute userspace Ring 3 verification test suite\n\n");
     printf("External Utilities in /bin/:\n");
+    printf("  grep [-inv] <p> Fast line pattern search in files or standard input\n");
+    printf("  head [-n N] [f] Display first N lines of file or standard input\n");
+    printf("  tail [-n N] [f] Display last N lines of file or standard input\n");
+    printf("  less [file]     Terminal & 680x334 Framebuffer interactive pager\n");
+    printf("  kill <pid>      Send termination signal to process by PID\n");
+    printf("  clip <cmd>      Sovereign RAM clipboard manager (copy, paste, clear)\n");
+    printf("  drop <cmd>      Base64 & terminal RAM file interchange protocol (dump, load)\n");
+    printf("  otp [cmd]       Visual Cryptography One-Time Pad Shield (HDMI noise Shannon H~1)\n");
     printf("  pinpad          Scrambled On-Screen Pinpad (Acoustic Keystroke Evasion)\n");
     printf("  diode [cmd]     Air-Gap Optical & Acoustic Data Diode (keygen, send, beep, qr)\n");
     printf("  stealth [cmd]   Anti-TSPU/DPI Stealth Suite & Native C99 VLESS Client\n");
@@ -648,6 +745,7 @@ static void builtin_help(void) {
     printf("  uname           Display system identification\n");
     printf("  ps              Query and display active tasks / PID info\n");
     printf("  fm              Seld Sovereign Graphical File Manager (SNL-FM)\n");
+    printf("  hi [file]       Humboldt Interactive Modal Text Editor (Vi keybindings, 680x334 FB)\n");
     printf("  download <url>  Fetch binary/package over network into SeldFS\n");
     printf("  tor             Sovereign Tor & SeldTLS 1.3 Web Browser\n");
     printf("  oracle [X]      TempleOS-style Opsec Oracle (fast chant, 290-680 Hz Dorian audio)\n");
@@ -1462,6 +1560,36 @@ static void builtin_telemetry(int argc, char* argv[]) {
     }
 }
 
+static void builtin_blackout(void) {
+    printf("[!] Activating Sovereign Peripheral Blackout...\n");
+    seld_opsec_blackout();
+    printf("[+] Peripheral Blackout ACTIVE: KBD LEDs extinguished, Audio DACs muted, USB controllers unmapped.\n");
+}
+
+static void builtin_firekill(void) {
+    printf("[!] Triggering Instant OpSec Fire-and-Kill...\n");
+    seld_opsec_fire_kill();
+}
+
+static __attribute__((noinline)) int selftest_deep_stack_recurse(int depth) {
+    volatile uint8_t frame_probe[3072];
+    frame_probe[0] = (uint8_t)depth;
+    frame_probe[3071] = (uint8_t)(depth ^ 0xA5);
+    if (depth > 0) {
+        int r = selftest_deep_stack_recurse(depth - 1);
+        if (frame_probe[0] != (uint8_t)depth || frame_probe[3071] != (uint8_t)(depth ^ 0xA5)) {
+            return -1;
+        }
+        return r;
+    }
+    // At bottom of deep stack (depth 0), verify that passing a stack buffer to a syscall works!
+    struct seld_stat st;
+    if (seld_stat("/bin/sh", &st) != 0 || st.size == 0) {
+        return -2;
+    }
+    return 0;
+}
+
 static void builtin_selftest(void) {
     printf("\n[Ring 3] ========================================================\n");
     printf("[Ring 3]   SELD OS USERSPACE RUNTIME & TEST SUITE (Ring 3)\n");
@@ -1586,6 +1714,10 @@ static void builtin_selftest(void) {
         }
     }
 
+    if (selftest_deep_stack_recurse(7) != 0) {
+        bounds_ok = 0;
+    }
+
     if (bounds_ok) {
         printf("[+] [TEST 6/8] PASSED: Memory bounds and stack integrity verified.\n");
         passed_tests++;
@@ -1654,6 +1786,7 @@ static void builtin_selftest(void) {
     }
 
     if (opsec_ok) {
+        printf("[+] [TEST 8/8] PASSED: Zero-on-Free, RFC 7686 Guard, and Seld-Pledge verified.\n");
         printf("[+] [TEST 8/8] PASSED: Zero-on-Free, RFC 7686, Anti-Skew, and Telemetry verified.\n");
         passed_tests++;
     } else {
@@ -1709,9 +1842,590 @@ static void builtin_drv_off(int argc, char* argv[]) {
     }
 }
 
+#define SH_MAX_ENV 32
+#define SH_ENV_KEY_MAX 32
+#define SH_ENV_VAL_MAX 128
+
+struct sh_env_entry {
+    char key[SH_ENV_KEY_MAX];
+    char val[SH_ENV_VAL_MAX];
+};
+
+static struct sh_env_entry s_env[SH_MAX_ENV];
+static int s_env_count = 0;
+static int s_last_status = 0;
+
+static const char* sh_getenv(const char* key) {
+    if (strcmp(key, "?") == 0) {
+        static char status_buf[16];
+        snprintf(status_buf, sizeof(status_buf), "%d", s_last_status);
+        return status_buf;
+    }
+    for (int i = 0; i < s_env_count; i++) {
+        if (strcmp(s_env[i].key, key) == 0) {
+            return s_env[i].val;
+        }
+    }
+    return NULL;
+}
+
+static void sh_setenv(const char* key, const char* val) {
+    if (!key || key[0] == '\0') return;
+    for (int i = 0; i < s_env_count; i++) {
+        if (strcmp(s_env[i].key, key) == 0) {
+            strncpy(s_env[i].val, val ? val : "", sizeof(s_env[i].val) - 1);
+            s_env[i].val[sizeof(s_env[i].val) - 1] = '\0';
+            return;
+        }
+    }
+    if (s_env_count < SH_MAX_ENV) {
+        strncpy(s_env[s_env_count].key, key, sizeof(s_env[s_env_count].key) - 1);
+        s_env[s_env_count].key[sizeof(s_env[s_env_count].key) - 1] = '\0';
+        strncpy(s_env[s_env_count].val, val ? val : "", sizeof(s_env[s_env_count].val) - 1);
+        s_env[s_env_count].val[sizeof(s_env[s_env_count].val) - 1] = '\0';
+        s_env_count++;
+    }
+}
+
+static void sh_init_env(void) {
+    sh_setenv("PATH", "/bin");
+    sh_setenv("USER", "sovereign");
+    sh_setenv("HOME", "/");
+}
+
+static void builtin_env(void) {
+    for (int i = 0; i < s_env_count; i++) {
+        printf("%s=%s\n", s_env[i].key, s_env[i].val);
+    }
+}
+
+static void builtin_export(int argc, char* argv[]) {
+    if (argc == 1) {
+        builtin_env();
+        return;
+    }
+    for (int i = 1; i < argc; i++) {
+        char* eq = strchr(argv[i], '=');
+        if (eq) {
+            *eq = '\0';
+            sh_setenv(argv[i], eq + 1);
+            *eq = '=';
+        } else if (i + 1 < argc && strchr(argv[i+1], '=') == NULL) {
+            sh_setenv(argv[i], argv[i+1]);
+            i++;
+        } else {
+            sh_setenv(argv[i], "");
+        }
+    }
+}
+
+static void expand_variables(const char* src, char* dst, size_t dst_size) {
+    size_t d = 0;
+    size_t s = 0;
+    while (src[s] != '\0' && d < dst_size - 1) {
+        if (src[s] == '$') {
+            s++;
+            if (src[s] == '?') {
+                const char* val = sh_getenv("?");
+                if (val) {
+                    while (*val && d < dst_size - 1) dst[d++] = *val++;
+                }
+                s++;
+                continue;
+            }
+            char var_name[32];
+            size_t vn_len = 0;
+            while (src[s] && ((src[s] >= 'A' && src[s] <= 'Z') ||
+                              (src[s] >= 'a' && src[s] <= 'z') ||
+                              (src[s] >= '0' && src[s] <= '9') ||
+                              src[s] == '_') && vn_len < sizeof(var_name) - 1) {
+                var_name[vn_len++] = src[s++];
+            }
+            var_name[vn_len] = '\0';
+            if (vn_len > 0) {
+                const char* val = sh_getenv(var_name);
+                if (val) {
+                    while (*val && d < dst_size - 1) dst[d++] = *val++;
+                }
+            } else {
+                dst[d++] = '$';
+            }
+        } else {
+            dst[d++] = src[s++];
+        }
+    }
+    dst[d] = '\0';
+}
+
+static int find_executable(const char* cmd, char* resolved, size_t max_len) {
+    if (!cmd || cmd[0] == '\0') return -1;
+    struct seld_stat st;
+
+    // Direct path or starts with / or ./
+    if (cmd[0] == '/' || (cmd[0] == '.' && cmd[1] == '/')) {
+        if (seld_stat(cmd, &st) == 0) {
+            strncpy(resolved, cmd, max_len - 1);
+            resolved[max_len - 1] = '\0';
+            return 0;
+        }
+        return -1;
+    }
+
+    // Lookup in PATH
+    const char* path_env = sh_getenv("PATH");
+    if (!path_env || path_env[0] == '\0') path_env = "/bin";
+
+    char path_copy[128];
+    strncpy(path_copy, path_env, sizeof(path_copy) - 1);
+    path_copy[sizeof(path_copy) - 1] = '\0';
+
+    char* dir = path_copy;
+    while (dir && *dir) {
+        char* colon = strchr(dir, ':');
+        if (colon) *colon = '\0';
+
+        char test_path[128];
+        snprintf(test_path, sizeof(test_path), "%s/%s", dir, cmd);
+        if (seld_stat(test_path, &st) == 0) {
+            strncpy(resolved, test_path, max_len - 1);
+            resolved[max_len - 1] = '\0';
+            return 0;
+        }
+
+        if (colon) dir = colon + 1;
+        else break;
+    }
+
+    // Fallback: check /bin/<cmd> or current directory
+    char fallback[128];
+    snprintf(fallback, sizeof(fallback), "/bin/%s", cmd);
+    if (seld_stat(fallback, &st) == 0) {
+        strncpy(resolved, fallback, max_len - 1);
+        resolved[max_len - 1] = '\0';
+        return 0;
+    }
+
+    if (seld_stat(cmd, &st) == 0) {
+        strncpy(resolved, cmd, max_len - 1);
+        resolved[max_len - 1] = '\0';
+        return 0;
+    }
+
+    return -1;
+}
+
+static int run_script(const char* filepath);
+
+static int execute_single_command(int argc, char* argv[]) {
+    if (argc == 0 || !argv[0]) return 0;
+    const char* cmd = argv[0];
+
+    // Builtin command dispatch
+    if (strcmp(cmd, "help") == 0) {
+        builtin_help();
+        return 0;
+    } else if (strcmp(cmd, "colors") == 0) {
+        builtin_colors();
+        return 0;
+    } else if (strcmp(cmd, "pc") == 0) {
+        builtin_pc(argc, argv);
+        return 0;
+    } else if (strcmp(cmd, "mobile") == 0) {
+        builtin_mobile();
+        return 0;
+    } else if (strcmp(cmd, "clear") == 0) {
+        seld_clear();
+        if (s_mobile_mode) {
+            seld_set_console_rows(12);
+            draw_shell_hud();
+        } else {
+            seld_set_console_rows(20);
+        }
+        return 0;
+    } else if (strcmp(cmd, "echo") == 0) {
+        builtin_echo(argc, argv);
+        return 0;
+    } else if (strcmp(cmd, "export") == 0) {
+        builtin_export(argc, argv);
+        return 0;
+    } else if (strcmp(cmd, "env") == 0) {
+        builtin_env();
+        return 0;
+    } else if (strcmp(cmd, "exit") == 0) {
+        printf("[*] Exiting SNL Sovereign Shell...\n");
+        exit(0);
+    } else if (strcmp(cmd, "uptime") == 0) {
+        builtin_uptime();
+        return 0;
+    } else if (strcmp(cmd, "beep") == 0) {
+        builtin_beep(argc, argv);
+        return 0;
+    } else if (strcmp(cmd, "snd") == 0) {
+        builtin_snd(argc, argv);
+        return 0;
+    } else if (strcmp(cmd, "mem") == 0) {
+        builtin_mem();
+        return 0;
+    } else if (strcmp(cmd, "ifconfig") == 0) {
+        builtin_ifconfig(argc, argv);
+        return 0;
+    } else if (strcmp(cmd, "arp") == 0) {
+        builtin_arp();
+        return 0;
+    } else if (strcmp(cmd, "ping") == 0) {
+        builtin_ping(argc, argv);
+        return 0;
+    } else if (strcmp(cmd, "dns") == 0) {
+        builtin_dns(argc, argv);
+        return 0;
+    } else if (strcmp(cmd, "purge") == 0) {
+        builtin_purge();
+        return 0;
+    } else if (strcmp(cmd, "net") == 0) {
+        builtin_net(argc, argv);
+        return 0;
+    } else if (strcmp(cmd, "skew") == 0) {
+        builtin_skew(argc, argv);
+        return 0;
+    } else if (strcmp(cmd, "time") == 0) {
+        builtin_time(argc, argv);
+        return 0;
+    } else if (strcmp(cmd, "telemetry") == 0) {
+        builtin_telemetry(argc, argv);
+        return 0;
+    } else if (strcmp(cmd, "desync") == 0) {
+        builtin_desync(argc, argv);
+        return 0;
+    } else if (strcmp(cmd, "jitter") == 0) {
+        builtin_jitter(argc, argv);
+        return 0;
+    } else if (strcmp(cmd, "grip") == 0 || strcmp(cmd, "deadman") == 0) {
+        builtin_deadman(argc, argv);
+        return 0;
+    } else if (strcmp(cmd, "chaff") == 0) {
+        builtin_chaff(argc, argv);
+        return 0;
+    } else if (strcmp(cmd, "tempest") == 0) {
+        builtin_tempest(argc, argv);
+        return 0;
+    } else if (strcmp(cmd, "uarch") == 0) {
+        builtin_uarch(argc, argv);
+        return 0;
+    } else if (strcmp(cmd, "pci") == 0) {
+        builtin_pci(argc, argv);
+        return 0;
+    } else if (strcmp(cmd, "unveil") == 0) {
+        builtin_unveil(argc, argv);
+        return 0;
+    } else if (strcmp(cmd, "selftest") == 0) {
+        builtin_selftest();
+        return 0;
+    } else if (strcmp(cmd, "gpu") == 0 || strcmp(cmd, "cpu") == 0 || strcmp(cmd, "ram") == 0 || strcmp(cmd, "drv") == 0) {
+        builtin_drv_off(argc, argv);
+        return 0;
+    } else if (strcmp(cmd, "fetch") == 0) {
+        builtin_fetch();
+        return 0;
+    } else if (strcmp(cmd, "reboot") == 0) {
+        builtin_reboot();
+        return 0;
+    } else if (strcmp(cmd, "poweroff") == 0 || strcmp(cmd, "shutdown") == 0) {
+        builtin_poweroff();
+        return 0;
+    } else if (strcmp(cmd, "blackout") == 0) {
+        builtin_blackout();
+        return 0;
+    } else if (strcmp(cmd, "firekill") == 0) {
+        builtin_firekill();
+        return 0;
+    } else if (strcmp(cmd, "sh") == 0 && argc >= 2) {
+        return run_script(argv[1]);
+    }
+
+    // External binary execution from SeldFS
+    char bin_path[128];
+    if (find_executable(cmd, bin_path, sizeof(bin_path)) == 0) {
+        argv[0] = bin_path;
+        int res = spawnv(bin_path, argv);
+        if (res < 0) {
+            printf("snl: %s: execution failed (code: %d)\n", cmd, res);
+        }
+        return res;
+    }
+
+    // Friendly messages for special binaries
+    if (strcmp(cmd, "doom") == 0) {
+        printf("snl: doom: not installed in SeldFS. Run 'download doom' to fetch DOOM.\n");
+    } else if (strcmp(cmd, "tor") == 0 || strcmp(cmd, "torbrowser") == 0) {
+        printf("snl: tor: not installed in SeldFS. Run 'download tor' to fetch Tor Browser.\n");
+    } else {
+        printf("snl: %s: command not found\n", cmd);
+    }
+    return 127;
+}
+
+static int execute_stage_with_redirection(char* stage_str, int default_in_fd, int default_out_fd) {
+    char clean_stage[MAX_LINE_LEN];
+    char in_file[64] = {0};
+    char out_file[64] = {0};
+    int append_out = 0;
+
+    size_t s_len = strlen(stage_str);
+    size_t out_idx = 0;
+    int in_quote = 0;
+
+    for (size_t i = 0; i < s_len; i++) {
+        char c = stage_str[i];
+        if (c == '"' || c == '\'') {
+            in_quote = !in_quote;
+            clean_stage[out_idx++] = c;
+            continue;
+        }
+
+        if (!in_quote && c == '>') {
+            if (i + 1 < s_len && stage_str[i+1] == '>') {
+                append_out = 1;
+                i += 2;
+            } else {
+                append_out = 0;
+                i += 1;
+            }
+            while (i < s_len && (stage_str[i] == ' ' || stage_str[i] == '\t')) i++;
+            size_t fn_idx = 0;
+            while (i < s_len && stage_str[i] != ' ' && stage_str[i] != '\t' &&
+                   stage_str[i] != '<' && stage_str[i] != '>' && fn_idx < sizeof(out_file) - 1) {
+                out_file[fn_idx++] = stage_str[i++];
+            }
+            out_file[fn_idx] = '\0';
+            i--;
+            continue;
+        }
+
+        if (!in_quote && c == '<') {
+            i++;
+            while (i < s_len && (stage_str[i] == ' ' || stage_str[i] == '\t')) i++;
+            size_t fn_idx = 0;
+            while (i < s_len && stage_str[i] != ' ' && stage_str[i] != '\t' &&
+                   stage_str[i] != '<' && stage_str[i] != '>' && fn_idx < sizeof(in_file) - 1) {
+                in_file[fn_idx++] = stage_str[i++];
+            }
+            in_file[fn_idx] = '\0';
+            i--;
+            continue;
+        }
+
+        clean_stage[out_idx++] = c;
+    }
+    clean_stage[out_idx] = '\0';
+
+    int in_fd = -1;
+    int out_fd = -1;
+
+    if (in_file[0] != '\0') {
+        in_fd = seld_open(in_file, O_RDONLY, 0);
+        if (in_fd < 0) {
+            printf("snl: %s: No such file or directory\n", in_file);
+            return 1;
+        }
+        seld_redirect_stdin(in_fd);
+    } else if (default_in_fd >= 0) {
+        seld_redirect_stdin(default_in_fd);
+    }
+
+    if (out_file[0] != '\0') {
+        int flags = O_WRONLY | O_CREAT;
+        if (append_out) flags |= O_APPEND;
+        else flags |= O_TRUNC;
+        out_fd = seld_open(out_file, flags, 0644);
+        if (out_fd < 0) {
+            printf("snl: %s: cannot open file for writing\n", out_file);
+            if (in_file[0] != '\0') {
+                seld_redirect_stdin(-1);
+                if (in_fd >= 0) seld_close(in_fd);
+            } else if (default_in_fd >= 0) {
+                seld_redirect_stdin(-1);
+            }
+            return 1;
+        }
+        seld_redirect_stdout(out_fd);
+    } else if (default_out_fd >= 0) {
+        seld_redirect_stdout(default_out_fd);
+    }
+
+    char* cmd_argv[MAX_ARGS];
+    int cmd_argc = parse_args(clean_stage, cmd_argv, MAX_ARGS);
+    int ret = 0;
+    if (cmd_argc > 0) {
+        ret = execute_single_command(cmd_argc, cmd_argv);
+    }
+
+    fflush(stdout);
+
+    if (in_file[0] != '\0') {
+        seld_redirect_stdin(-1);
+        if (in_fd >= 0) seld_close(in_fd);
+    } else if (default_in_fd >= 0) {
+        seld_redirect_stdin(-1);
+    }
+
+    if (out_file[0] != '\0') {
+        seld_redirect_stdout(-1);
+        if (out_fd >= 0) seld_close(out_fd);
+    } else if (default_out_fd >= 0) {
+        seld_redirect_stdout(-1);
+    }
+
+    return ret;
+}
+
+static int execute_pipeline(char* raw_line) {
+    int bg = 0;
+    size_t rlen = strlen(raw_line);
+    while (rlen > 0 && (raw_line[rlen-1] == ' ' || raw_line[rlen-1] == '\t')) {
+        raw_line[--rlen] = '\0';
+    }
+    if (rlen > 0 && raw_line[rlen-1] == '&') {
+        bg = 1;
+        raw_line[--rlen] = '\0';
+        while (rlen > 0 && (raw_line[rlen-1] == ' ' || raw_line[rlen-1] == '\t')) {
+            raw_line[--rlen] = '\0';
+        }
+    }
+
+    if (rlen == 0) return 0;
+
+    char* stages[16];
+    int num_stages = 0;
+    char* cur_stage = raw_line;
+    int in_quote = 0;
+
+    for (size_t i = 0; raw_line[i] != '\0'; i++) {
+        if (raw_line[i] == '"' || raw_line[i] == '\'') {
+            in_quote = !in_quote;
+        } else if (!in_quote && raw_line[i] == '|') {
+            raw_line[i] = '\0';
+            stages[num_stages++] = cur_stage;
+            cur_stage = &raw_line[i+1];
+            if (num_stages >= 15) break;
+        }
+    }
+    stages[num_stages++] = cur_stage;
+
+    int last_status = 0;
+
+    if (num_stages == 1) {
+        last_status = execute_stage_with_redirection(stages[0], -1, -1);
+    } else {
+        const char* pipe_files[2] = {"/tmp/.p0", "/tmp/.p1"};
+        seld_unlink(pipe_files[0]);
+        seld_unlink(pipe_files[1]);
+
+        for (int st = 0; st < num_stages; st++) {
+            int in_fd = -1;
+            int out_fd = -1;
+
+            if (st > 0) {
+                const char* prev_pfile = pipe_files[(st - 1) % 2];
+                in_fd = seld_open(prev_pfile, O_RDONLY, 0);
+            }
+
+            if (st < num_stages - 1) {
+                const char* next_pfile = pipe_files[st % 2];
+                seld_unlink(next_pfile);
+                out_fd = seld_open(next_pfile, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            }
+
+            last_status = execute_stage_with_redirection(stages[st], in_fd, out_fd);
+
+            if (in_fd >= 0) seld_close(in_fd);
+            if (out_fd >= 0) seld_close(out_fd);
+        }
+
+        seld_unlink(pipe_files[0]);
+        seld_unlink(pipe_files[1]);
+    }
+
+    if (bg) {
+        printf("[1] %d (background execution finished)\n", 100 + (int)(seld_uptime() % 900));
+    }
+
+    return last_status;
+}
+
+static int execute_line(char* line) {
+    if (!line) return 0;
+    while (*line == ' ' || *line == '\t') line++;
+    if (*line == '\0' || *line == '#') return 0;
+
+    char expanded[MAX_LINE_LEN * 2];
+    expand_variables(line, expanded, sizeof(expanded));
+
+    int ret = execute_pipeline(expanded);
+    s_last_status = ret;
+    return ret;
+}
+
+static int run_script(const char* filepath) {
+    int fd = seld_open(filepath, O_RDONLY, 0);
+    if (fd < 0) {
+        printf("snl: %s: No such file or directory\n", filepath);
+        return 127;
+    }
+
+    struct seld_stat st;
+    if (seld_stat(filepath, &st) != 0 || st.size == 0) {
+        seld_close(fd);
+        return 0;
+    }
+
+    char* script_buf = (char*)malloc(st.size + 2);
+    if (!script_buf) {
+        seld_close(fd);
+        printf("snl: %s: out of memory\n", filepath);
+        return 1;
+    }
+
+    int bytes_read = seld_read(fd, script_buf, st.size);
+    seld_close(fd);
+    if (bytes_read < 0) bytes_read = 0;
+    script_buf[bytes_read] = '\0';
+
+    char* p = script_buf;
+    int last_ret = 0;
+
+    while (*p != '\0') {
+        char* line_start = p;
+        while (*p != '\0' && *p != '\n' && *p != '\r') {
+            p++;
+        }
+        if (*p != '\0') {
+            *p++ = '\0';
+            if (*p == '\n') p++;
+        }
+
+        while (*line_start == ' ' || *line_start == '\t') line_start++;
+        if (*line_start == '\0' || *line_start == '#') continue;
+
+        size_t llen = strlen(line_start);
+        while (llen > 0 && (line_start[llen-1] == ' ' || line_start[llen-1] == '\t' || line_start[llen-1] == '\r')) {
+            line_start[--llen] = '\0';
+        }
+
+        if (llen == 0) continue;
+
+        last_ret = execute_line(line_start);
+    }
+
+    free(script_buf);
+    return last_ret;
+}
+
 int main(int argc, char* argv[]) {
-    (void)argc;
-    (void)argv;
+    sh_init_env();
+
+    if (argc >= 2) {
+        return run_script(argv[1]);
+    }
 
     seld_clear();
 
@@ -1728,7 +2442,6 @@ int main(int argc, char* argv[]) {
     print_banner();
 
     char line_buf[MAX_LINE_LEN];
-    char* cmd_argv[MAX_ARGS];
 
     while (1) {
         printf("snl$ ");
@@ -1739,127 +2452,21 @@ int main(int argc, char* argv[]) {
             continue;
         }
 
-        int cmd_argc = parse_args(line_buf, cmd_argv, MAX_ARGS);
-        if (cmd_argc == 0) {
-            continue;
-        }
-
-        const char* cmd = cmd_argv[0];
-
-        // Builtin command dispatch
-        if (strcmp(cmd, "help") == 0) {
-            builtin_help();
-        } else if (strcmp(cmd, "colors") == 0) {
-            builtin_colors();
-        } else if (strcmp(cmd, "pc") == 0) {
-            builtin_pc(cmd_argc, cmd_argv);
-        } else if (strcmp(cmd, "mobile") == 0) {
-            builtin_mobile();
-        } else if (strcmp(cmd, "clear") == 0) {
-            seld_clear();
-            if (s_mobile_mode) {
-                seld_set_console_rows(12);
-                draw_shell_hud();
+        char* hist_entry = (char*)malloc(len + 1);
+        if (hist_entry) {
+            strcpy(hist_entry, line_buf);
+            if (s_sh_history_count < SH_HISTORY_MAX) {
+                s_sh_history[s_sh_history_count++] = hist_entry;
             } else {
-                seld_set_console_rows(20);
-            }
-        } else if (strcmp(cmd, "echo") == 0) {
-            builtin_echo(cmd_argc, cmd_argv);
-        } else if (strcmp(cmd, "exit") == 0) {
-            printf("[*] Exiting SNL Sovereign Shell...\n");
-            exit(0);
-        } else if (strcmp(cmd, "uptime") == 0) {
-            builtin_uptime();
-        } else if (strcmp(cmd, "beep") == 0) {
-            builtin_beep(cmd_argc, cmd_argv);
-        } else if (strcmp(cmd, "snd") == 0) {
-            builtin_snd(cmd_argc, cmd_argv);
-        } else if (strcmp(cmd, "mem") == 0) {
-            builtin_mem();
-        } else if (strcmp(cmd, "ifconfig") == 0) {
-            builtin_ifconfig(cmd_argc, cmd_argv);
-        } else if (strcmp(cmd, "arp") == 0) {
-            builtin_arp();
-        } else if (strcmp(cmd, "ping") == 0) {
-            builtin_ping(cmd_argc, cmd_argv);
-        } else if (strcmp(cmd, "dns") == 0) {
-            builtin_dns(cmd_argc, cmd_argv);
-        } else if (strcmp(cmd, "purge") == 0) {
-            builtin_purge();
-        } else if (strcmp(cmd, "net") == 0) {
-            builtin_net(cmd_argc, cmd_argv);
-        } else if (strcmp(cmd, "skew") == 0) {
-            builtin_skew(cmd_argc, cmd_argv);
-        } else if (strcmp(cmd, "time") == 0) {
-            builtin_time(cmd_argc, cmd_argv);
-        } else if (strcmp(cmd, "telemetry") == 0) {
-            builtin_telemetry(cmd_argc, cmd_argv);
-        } else if (strcmp(cmd, "desync") == 0) {
-            builtin_desync(cmd_argc, cmd_argv);
-        } else if (strcmp(cmd, "jitter") == 0) {
-            builtin_jitter(cmd_argc, cmd_argv);
-        } else if (strcmp(cmd, "grip") == 0 || strcmp(cmd, "deadman") == 0) {
-            builtin_deadman(cmd_argc, cmd_argv);
-        } else if (strcmp(cmd, "chaff") == 0) {
-            builtin_chaff(cmd_argc, cmd_argv);
-        } else if (strcmp(cmd, "tempest") == 0) {
-            builtin_tempest(cmd_argc, cmd_argv);
-        } else if (strcmp(cmd, "uarch") == 0) {
-            builtin_uarch(cmd_argc, cmd_argv);
-        } else if (strcmp(cmd, "pci") == 0) {
-            builtin_pci(cmd_argc, cmd_argv);
-        } else if (strcmp(cmd, "unveil") == 0) {
-            builtin_unveil(cmd_argc, cmd_argv);
-        } else if (strcmp(cmd, "selftest") == 0) {
-            builtin_selftest();
-        } else if (strcmp(cmd, "gpu") == 0 || strcmp(cmd, "cpu") == 0 || strcmp(cmd, "ram") == 0 || strcmp(cmd, "drv") == 0) {
-            builtin_drv_off(cmd_argc, cmd_argv);
-        } else if (strcmp(cmd, "fetch") == 0) {
-            builtin_fetch();
-        } else if (strcmp(cmd, "reboot") == 0) {
-            builtin_reboot();
-        } else if (strcmp(cmd, "poweroff") == 0 || strcmp(cmd, "shutdown") == 0) {
-            builtin_poweroff();
-        } else {
-            // External command execution from SeldFS (/bin/<cmd>)
-            int res = spawnv(cmd, cmd_argv);
-            if (res < 0) {
-                struct seld_stat st;
-                char test_path[64];
-                snprintf(test_path, sizeof(test_path), "/bin/%s", cmd);
-                int file_exists = (seld_stat(test_path, &st) == 0 || seld_stat(cmd, &st) == 0);
-
-                if (file_exists) {
-                    if (strcmp(cmd, "doom") == 0) {
-                        struct seld_stat wad_st;
-                        int has_wad = (seld_stat("/doom1.wad", &wad_st) == 0 || seld_stat("doom1.wad", &wad_st) == 0);
-                        if (!has_wad) {
-                            printf("snl: doom: game data 'doom1.wad' not found in SeldFS.\n");
-                            printf("     Run 'download wad' to fetch DOOM game assets from GitHub repo.\n");
-                        } else {
-                            printf("snl: doom: execution failed with exit code: %d\n", res);
-                        }
-                    } else {
-                        printf("snl: %s: execution failed (invalid binary or load error, code: %d)\n", cmd, res);
-                    }
-                } else if (strcmp(cmd, "tor") == 0 || strcmp(cmd, "torbrowser") == 0) {
-                    printf("snl: tor: not installed in SeldFS.\n");
-                    printf("     Run 'download tor' to fetch Tor Browser over the network.\n");
-                } else if (strcmp(cmd, "doom") == 0) {
-                    printf("snl: doom: not installed in SeldFS.\n");
-                    printf("     Run 'download doom' to fetch DOOM from GitHub repo.\n");
-                } else {
-                    printf("snl: %s: command not found\n", cmd);
+                free(s_sh_history[0]);
+                for (int h = 0; h < SH_HISTORY_MAX - 1; h++) {
+                    s_sh_history[h] = s_sh_history[h + 1];
                 }
+                s_sh_history[SH_HISTORY_MAX - 1] = hist_entry;
             }
         }
 
-        if (len > 0) {
-            char* hist_entry = (char*)malloc(len + 1);
-            if (hist_entry) {
-                strcpy(hist_entry, line_buf);
-            }
-        }
+        execute_line(line_buf);
     }
 
     return 0;

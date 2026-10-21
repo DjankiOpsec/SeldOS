@@ -3,7 +3,7 @@
 ;
 ; Ring 0 Task Switch Assembly Stub
 ; Saves callee-saved registers of old task, updates RSP, and restores next task.
-; GPLv3 Licensed.
+; GNU AGPLv3 Licensed - Humboldt Underground.
 
 bits 64
 section .text

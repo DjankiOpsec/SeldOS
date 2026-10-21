@@ -3,7 +3,7 @@
  * Copyright (C) 2026 Free Software Foundation, Inc.
  *
  * RISC-V 64-bit Low-Level Supervisor Trap Vector Entry & Return
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 .section .text

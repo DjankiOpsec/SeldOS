@@ -6,7 +6,7 @@
  * Handles requests from isolated Ring 3 applications.
  * Implements process virtual memory (brk), ELF process execution (spawn/exec),
  * and universal file I/O over SeldFS.
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #include "fast_syscall.h"
@@ -30,6 +30,7 @@
 #include "io.h"
 #include "syscall.h"
 #include "pci.h"
+#include "rand.h"
 
 extern void syscall_entry_asm(void);
 extern int jump_to_userspace_asm(void (*user_func)(void), void* user_stack_top, uint64_t user_cr3, uint64_t argc, void* argv);
@@ -70,6 +71,8 @@ struct user_fd_entry {
     uint32_t size;
 };
 static struct user_fd_entry user_fds[MAX_USER_FDS];
+static int s_stdout_redirect_fd = -1;
+static int s_stdin_redirect_fd = -1;
 
 #if !defined(__riscv)
 static inline void wrmsr(uint32_t msr, uint64_t val) {
@@ -149,6 +152,22 @@ void syscall_init_fast(void) {
 
     serial_puts("[+] SYSCALL: Fast system call extension enabled (MSR LSTAR configured).\n");
 #endif
+}
+
+/* Safely copy a null-terminated string from user space validating every byte */
+static int copy_string_from_user(const char* u_str, char* k_buf, size_t max_len) {
+    if (!u_str || !k_buf || max_len == 0) return -1;
+    size_t i = 0;
+    while (i < max_len - 1) {
+        if (!validate_user_buffer(u_str + i, 1, 0)) return -1;
+        char c = u_str[i];
+        k_buf[i++] = c;
+        if (c == '\0') {
+            return 0;
+        }
+    }
+    k_buf[max_len - 1] = '\0';
+    return (u_str[i] == '\0') ? 0 : -1;
 }
 
 /* SeldFS path resolution helper (supports symmetric lookup: 'sh' <-> '/bin/sh') */
@@ -561,6 +580,13 @@ int elf_load_and_run(const char* path, int argc, char* argv[]) {
         net_lease_release();
     }
 
+    // Restore active address space before destroying child page tables
+    if (parent_cr3 && parent_cr3 != proc_pml4_phys) {
+        vmm_switch_pml4(parent_cr3);
+    } else {
+        vmm_switch_pml4(vmm_get_kernel_pml4());
+    }
+
     // Clean up child address space
     vmm_destroy_address_space(proc_pml4_virt);
 
@@ -572,10 +598,6 @@ int elf_load_and_run(const char* path, int argc, char* argv[]) {
     current_unveil_count = saved_unveil_count;
     current_unveil_enforced = saved_unveil_enforced;
     current_unveil_locked = saved_unveil_locked;
-
-    if (parent_cr3 && parent_cr3 != vmm_get_kernel_pml4()) {
-        vmm_switch_pml4(parent_cr3);
-    }
 
     return exit_code;
 }
@@ -678,8 +700,39 @@ void fast_sys_poweroff(void) {
     system_poweroff();
 }
 
+void opsec_peripheral_blackout(void) {
+    serial_puts("[!] OPSEC BLACKOUT: Initiating complete peripheral blackout...\n");
+    kbd_blackout_leds();
+    audio_blackout_mute();
+    pci_usb_quarantine_poweroff();
+    serial_puts("[+] OPSEC BLACKOUT: Keyboard LEDs extinguished, Audio DACs muted, USB controllers unmapped.\n");
+}
+
+void opsec_fire_and_kill(void) {
+    serial_puts("\n[!] ========================================================\n");
+    serial_puts("[!] OPSEC FIRE-AND-KILL: Mission complete. Triggering instant RAM wipe & hard poweroff...\n");
+    serial_puts("[!] ========================================================\n");
+
+    // 1. Terminate all network connections immediately
+    net_abort_all_connections();
+
+    // 2. Clear video memory to avoid persistent display retention
+    vga_clear();
+
+    // 3. DoD scrub of physical memory
+    pmm_secure_wipe_all_free();
+
+#if !defined(__riscv)
+    // 4. Invalidate all CPU caches
+    __asm__ volatile ("wbinvd" ::: "memory");
+#endif
+
+    // 5. Execute hard platform poweroff
+    system_poweroff();
+}
+
 /* Seld-Pledge Capability Verification Engine */
-static int check_pledge(uint64_t sys_num, uint64_t a1) {
+static int check_pledge(uint64_t sys_num, uint64_t a1, uint64_t a2) {
     if (!current_pledge_enforced) return 0;
 
     uint32_t req = 0;
@@ -717,6 +770,8 @@ static int check_pledge(uint64_t sys_num, uint64_t a1) {
         case SYS_OPSEC_GET_HW_TELEMETRY:
         case SYS_NET_SET_BOOT_DELAY:
         case SYS_NET_GET_BOOT_DELAY:
+        case SYS_GETRANDOM:
+        case SYS_OPSEC_OTP_DRAW:
         case SYS_SELD:
             req = PLEDGE_STDIO;
             break;
@@ -729,8 +784,12 @@ static int check_pledge(uint64_t sys_num, uint64_t a1) {
             req = (a1 == 0) ? PLEDGE_STDIO : PLEDGE_RPATH;
             break;
 
-        case SYS_SELD_VERIFY:
         case SYS_OPEN:
+        case 8:
+            req = (a2 & (0x0001 | 0x0002 | 0x0040)) ? PLEDGE_WPATH : PLEDGE_RPATH;
+            break;
+
+        case SYS_SELD_VERIFY:
         case SYS_CLOSE:
         case 9:
         case SYS_STAT:
@@ -747,7 +806,13 @@ static int check_pledge(uint64_t sys_num, uint64_t a1) {
 
         case SYS_SPAWN:
         case SYS_EXEC:
+        case SYS_KILL:
             req = PLEDGE_EXEC;
+            break;
+
+        case SYS_REDIRECT_STDOUT:
+        case SYS_REDIRECT_STDIN:
+            req = PLEDGE_STDIO;
             break;
 
         case SYS_NET_INFO:
@@ -772,14 +837,18 @@ static int check_pledge(uint64_t sys_num, uint64_t a1) {
             req = PLEDGE_AUDIO;
             break;
 
+        case 40: /* SYS_DRV_OFF */
+        case 41: /* SYS_DRV_ON */
         case SYS_IMMUNE_PURGE:
         case SYS_NET_SET_LOCK:
         case SYS_NET_GET_LOCK:
+        case SYS_OPSEC_BLACKOUT:
             req = PLEDGE_PURGE;
             break;
 
         case SYS_REBOOT:
         case SYS_POWEROFF:
+        case SYS_OPSEC_FIRE_KILL:
             req = PLEDGE_REBOOT;
             break;
 
@@ -788,7 +857,7 @@ static int check_pledge(uint64_t sys_num, uint64_t a1) {
             break;
     }
 
-    if (req && (current_pledge_mask & req) == 0) {
+    if (req == 0 || (current_pledge_mask & req) == 0) {
         serial_puts("[-] OpSec PLEDGE VIOLATION: Syscall ");
         serial_print_dec(sys_num);
         serial_puts(" denied by active pledge mask 0x");
@@ -804,7 +873,7 @@ static int check_pledge(uint64_t sys_num, uint64_t a1) {
 uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4) {
     (void)a4;
 
-    if (check_pledge(num, a1) != 0) {
+    if (check_pledge(num, a1, a2) != 0) {
         serial_puts("[-] OpSec: Terminating rogue/compromised process breaching pledge contract.\n");
         user_exit_to_kernel(134);
         return (uint64_t)-1;
@@ -821,40 +890,58 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
                 return (uint64_t)-1;
             }
 
-            if (fd == 1 || fd == 2) {
+            uint64_t target_fd = fd;
+            if ((fd == 1 || fd == 2) && s_stdout_redirect_fd >= 3 && s_stdout_redirect_fd < MAX_USER_FDS && user_fds[s_stdout_redirect_fd].used) {
+                target_fd = s_stdout_redirect_fd;
+            }
+
+            if (target_fd == 1 || target_fd == 2) {
                 // Console stdout/stderr
                 for (size_t i = 0; i < count; i++) {
                     vga_putchar(buf[i]);
                     serial_putchar(buf[i]);
                 }
                 return count;
-            } else if (fd >= 3 && fd < MAX_USER_FDS && user_fds[fd].used) {
+            } else if (target_fd >= 3 && target_fd < MAX_USER_FDS && user_fds[target_fd].used) {
                 // Universal write to SeldFS file
                 size_t max_file_sz = SELDFS_DATA_BLOCKS_PER_FILE * SELDFS_BLOCK_SIZE;
-                if (user_fds[fd].offset + count > max_file_sz) {
+                if (user_fds[target_fd].offset + count > max_file_sz) {
                     return (uint64_t)-1;
                 }
 
-                uint8_t* fbuf = (uint8_t*)kmalloc(max_file_sz);
-                if (!fbuf) return (uint64_t)-1;
-                memset(fbuf, 0, max_file_sz);
-
+                struct seldfs_inode cur_inode;
                 size_t cur_len = 0;
-                seldfs_read_file(user_fds[fd].filename, fbuf, max_file_sz, &cur_len);
+                if (seldfs_get_file_info(user_fds[target_fd].filename, &cur_inode) == 0) {
+                    cur_len = cur_inode.size;
+                }
 
-                memcpy(fbuf + user_fds[fd].offset, buf, count);
-                size_t new_len = user_fds[fd].offset + count;
+                size_t needed_sz = user_fds[target_fd].offset + count;
+                if (needed_sz < cur_len) {
+                    needed_sz = cur_len;
+                }
+
+                uint8_t* fbuf = (uint8_t*)kmalloc(needed_sz);
+                if (!fbuf) return (uint64_t)-1;
+                memset(fbuf, 0, needed_sz);
+
+                if (cur_len > 0) {
+                    size_t read_len = 0;
+                    seldfs_read_file(user_fds[target_fd].filename, fbuf, cur_len, &read_len);
+                }
+
+                memcpy(fbuf + user_fds[target_fd].offset, buf, count);
+                size_t new_len = user_fds[target_fd].offset + count;
                 if (new_len < cur_len) {
                     new_len = cur_len;
                 }
 
-                if (seldfs_write_file(user_fds[fd].filename, fbuf, new_len) != 0) {
+                if (seldfs_write_file(user_fds[target_fd].filename, fbuf, new_len) != 0) {
                     kfree(fbuf);
                     return (uint64_t)-1;
                 }
 
-                user_fds[fd].offset += (uint32_t)count;
-                user_fds[fd].size = (uint32_t)new_len;
+                user_fds[target_fd].offset += (uint32_t)count;
+                user_fds[target_fd].size = (uint32_t)new_len;
                 kfree(fbuf);
                 return count;
             }
@@ -871,24 +958,36 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
                 return (uint64_t)-1;
             }
 
-            if (fd == 0) {
-                // Stdin console keyboard or serial read
+            uint64_t target_fd = fd;
+            if (fd == 0 && s_stdin_redirect_fd >= 3 && s_stdin_redirect_fd < MAX_USER_FDS && user_fds[s_stdin_redirect_fd].used) {
+                target_fd = s_stdin_redirect_fd;
+            }
+
+            if (target_fd == 0) {
+                // Stdin console keyboard or serial read (line-buffered: breaks on newline)
+                size_t read_bytes = 0;
                 for (size_t i = 0; i < count; i++) {
+                    char ch;
                     if (serial_has_char()) {
-                        buf[i] = serial_getchar();
+                        ch = serial_getchar();
                     } else {
-                        buf[i] = kbd_getchar();
+                        ch = kbd_getchar();
+                    }
+                    buf[i] = ch;
+                    read_bytes++;
+                    if (ch == '\n') {
+                        break;
                     }
                 }
-                return count;
-            } else if (fd >= 3 && fd < MAX_USER_FDS && user_fds[fd].used) {
+                return read_bytes;
+            } else if (target_fd >= 3 && target_fd < MAX_USER_FDS && user_fds[target_fd].used) {
                 // Read directly from SeldFS file at current offset
                 size_t bytes_read = 0;
-                int res = seldfs_read_file_offset(user_fds[fd].filename, user_fds[fd].offset, buf, count, &bytes_read);
+                int res = seldfs_read_file_offset(user_fds[target_fd].filename, user_fds[target_fd].offset, buf, count, &bytes_read);
                 if (res != 0) {
                     return (uint64_t)-1;
                 }
-                user_fds[fd].offset += (uint32_t)bytes_read;
+                user_fds[target_fd].offset += (uint32_t)bytes_read;
                 return bytes_read;
             }
             return (uint64_t)-1;
@@ -899,12 +998,13 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
             // a1 = path, a2 = flags
             const char* path = (const char*)a1;
             int flags = (int)a2;
-            if (!validate_user_buffer(path, 1, 0)) {
+            char k_path[SELDFS_MAX_FILENAME];
+            if (copy_string_from_user(path, k_path, sizeof(k_path)) != 0) {
                 return (uint64_t)-1;
             }
 
             char filename[SELDFS_MAX_FILENAME];
-            resolve_seldfs_path(path, filename);
+            resolve_seldfs_path(k_path, filename);
 
             uint8_t req_perm = UNVEIL_READ;
             if (flags & (0x0001 /* O_WRONLY */ | 0x0002 /* O_RDWR */)) {
@@ -940,10 +1040,15 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
                 }
             }
 
+            if (found && (flags & 0x0200 /* O_TRUNC */)) {
+                seldfs_write_file(filename, "", 0);
+                inode.size = 0;
+            }
+
             user_fds[target_fd].used = 1;
             memset(user_fds[target_fd].filename, 0, sizeof(user_fds[target_fd].filename));
             strncpy(user_fds[target_fd].filename, filename, sizeof(user_fds[target_fd].filename) - 1);
-            user_fds[target_fd].offset = 0;
+            user_fds[target_fd].offset = (flags & 0x0400 /* O_APPEND */) ? inode.size : 0;
             user_fds[target_fd].flags = (uint32_t)flags;
             user_fds[target_fd].size = found ? inode.size : 0;
 
@@ -965,12 +1070,17 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
             // a1 = path, a2 = struct seld_stat*
             const char* path = (const char*)a1;
             struct seld_stat* st = (struct seld_stat*)a2;
-            if (!validate_user_buffer(path, 1, 0) || !validate_user_buffer(st, sizeof(struct seld_stat), 1)) {
+            if (!validate_user_buffer(st, sizeof(struct seld_stat), 1)) {
+                return (uint64_t)-1;
+            }
+
+            char k_path[SELDFS_MAX_FILENAME];
+            if (copy_string_from_user(path, k_path, sizeof(k_path)) != 0) {
                 return (uint64_t)-1;
             }
 
             char filename[SELDFS_MAX_FILENAME];
-            resolve_seldfs_path(path, filename);
+            resolve_seldfs_path(k_path, filename);
 
             if (!check_unveil(filename, UNVEIL_READ)) {
                 return (uint64_t)-1;
@@ -1060,6 +1170,20 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
                         memset(phys_to_virt((uint64_t)frame), 0, PAGE_SIZE);
                         vmm_map_page(user_pml4, va, (uint64_t)frame,
                                      VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE | VMM_FLAG_USER | VMM_FLAG_NO_EXECUTE);
+                    }
+                }
+            } else if (a1 < user_current_brk) {
+                uint64_t cr3 = vmm_get_active_root();
+                uint64_t* user_pml4 = (uint64_t*)phys_to_virt(cr3);
+                uint64_t start_va = (a1 + PAGE_SIZE - 1) & ~0xFFFULL;
+                uint64_t end_va   = (user_current_brk + PAGE_SIZE - 1) & ~0xFFFULL;
+                for (uint64_t va = start_va; va < end_va; va += PAGE_SIZE) {
+                    uint64_t pa = vmm_get_mapping(user_pml4, va);
+                    if (pa) {
+                        vmm_unmap_page(user_pml4, va);
+                        // OpSec Zero-on-Free: sanitize RAM frame before releasing to PMM
+                        memset(phys_to_virt(pa), 0, PAGE_SIZE);
+                        pmm_free_frame((void*)pa);
                     }
                 }
             }
@@ -1154,9 +1278,10 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
 
         case SYS_UNLINK: {
             const char* path = (const char*)a1;
-            if (!validate_user_buffer(path, 1, 0)) return (uint64_t)-1;
+            char k_path[SELDFS_MAX_FILENAME];
+            if (copy_string_from_user(path, k_path, sizeof(k_path)) != 0) return (uint64_t)-1;
             char resolved[SELDFS_MAX_FILENAME];
-            resolve_seldfs_path(path, resolved);
+            resolve_seldfs_path(k_path, resolved);
             if (!check_unveil(resolved, UNVEIL_CREATE)) return (uint64_t)-1;
             return (uint64_t)seldfs_delete_file(resolved);
         }
@@ -1211,12 +1336,17 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
             const char* path = (const char*)a1;
             void* buf = (void*)a2;
             size_t max_len = (size_t)a3;
-            if (!validate_user_buffer(path, 1, 0) || !validate_user_buffer(buf, max_len, 1)) {
+            if (!validate_user_buffer(buf, max_len, 1)) {
+                return (uint64_t)-1;
+            }
+
+            char k_path[SELDFS_MAX_FILENAME];
+            if (copy_string_from_user(path, k_path, sizeof(k_path)) != 0) {
                 return (uint64_t)-1;
             }
 
             char resolved[SELDFS_MAX_FILENAME];
-            resolve_seldfs_path(path, resolved);
+            resolve_seldfs_path(k_path, resolved);
 
             if (!check_unveil(resolved, UNVEIL_READ)) {
                 return (uint64_t)-1;
@@ -1233,12 +1363,17 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
             const char* path = (const char*)a1;
             const void* buf = (const void*)a2;
             size_t len = (size_t)a3;
-            if (!validate_user_buffer(path, 1, 0) || !validate_user_buffer(buf, len, 0)) {
+            if (len > 0 && !validate_user_buffer(buf, len, 0)) {
+                return (uint64_t)-1;
+            }
+
+            char k_path[SELDFS_MAX_FILENAME];
+            if (copy_string_from_user(path, k_path, sizeof(k_path)) != 0) {
                 return (uint64_t)-1;
             }
 
             char resolved[SELDFS_MAX_FILENAME];
-            resolve_seldfs_path(path, resolved);
+            resolve_seldfs_path(k_path, resolved);
 
             if (!check_unveil(resolved, UNVEIL_WRITE)) {
                 return (uint64_t)-1;
@@ -1477,30 +1612,7 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
         }
 
         case SYS_NET_DOWNLOAD: {
-            uint32_t server_ip = (uint32_t)a1;
-            uint16_t port = (uint16_t)a2;
-            const char* url_path = (const char*)a3;
-            const char* local_path = (const char*)a4;
-
-            if (!url_path || !local_path ||
-                !validate_user_buffer(url_path, 1, 0) ||
-                !validate_user_buffer(local_path, 1, 0)) {
-                return (uint64_t)-1;
-            }
-
-            if (server_ip == 0) {
-                struct net_config cfg = net_get_config();
-                server_ip = cfg.gateway;
-            }
-            if (port == 0) {
-                port = 8080;
-            }
-
-            char resolved_path[SELDFS_MAX_FILENAME];
-            resolve_seldfs_path(local_path, resolved_path);
-
-            int res = net_download_to_fs(server_ip, port, url_path, resolved_path);
-            return (uint64_t)res;
+            return (uint64_t)-1;
         }
 
         case SYS_NET_TCP_CONNECT: {
@@ -1547,11 +1659,13 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
             // a1 = const char* hostname, a2 = uint32_t* ip_out
             const char* uhost = (const char*)a1;
             uint32_t* uip = (uint32_t*)a2;
-            if (!uhost || !uip || !validate_user_buffer(uhost, 1, 0) || !validate_user_buffer(uip, sizeof(uint32_t), 1)) {
+            char k_host[128];
+            if (!uip || !validate_user_buffer(uip, sizeof(uint32_t), 1) ||
+                copy_string_from_user(uhost, k_host, sizeof(k_host)) != 0) {
                 return (uint64_t)-1;
             }
             uint32_t resolved_ip = 0;
-            int res = net_dns_resolve(uhost, &resolved_ip);
+            int res = net_dns_resolve(k_host, &resolved_ip);
             if (res == 0) {
                 *uip = resolved_ip;
                 return 0;
@@ -1561,17 +1675,10 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
 
         case 40: /* SYS_DRV_OFF */ {
             const char* drv = (const char*)a1;
-            if (!drv || !validate_user_buffer(drv, 1, 0)) return (uint64_t)-1;
             char k_drv[16];
-            size_t di = 0;
-            while (di < sizeof(k_drv) - 1) {
-                if (!validate_user_buffer(drv + di, 1, 0)) return (uint64_t)-1;
-                char ch = drv[di];
-                k_drv[di] = ch;
-                if (ch == '\0') break;
-                di++;
+            if (copy_string_from_user(drv, k_drv, sizeof(k_drv)) != 0) {
+                return (uint64_t)-1;
             }
-            k_drv[sizeof(k_drv) - 1] = '\0';
 
             if (strcmp(k_drv, "gpu") == 0) {
                 return (uint64_t)vga_driver_disable();
@@ -1762,6 +1869,50 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
 
             memcpy(ut, &kt, sizeof(kt));
             return 0;
+        }
+
+        case SYS_GETRANDOM: {
+            void* buf = (void*)a1;
+            size_t len = (size_t)a2;
+            if (len == 0) return 0;
+            if (!validate_user_buffer(buf, len, 1)) {
+                return (uint64_t)-1;
+            }
+            rng_get_bytes(buf, len);
+            return (uint64_t)len;
+        }
+
+        case SYS_OPSEC_BLACKOUT: {
+            opsec_peripheral_blackout();
+            return 0;
+        }
+
+        case SYS_OPSEC_FIRE_KILL: {
+            opsec_fire_and_kill();
+            return 0;
+        }
+
+        case SYS_OPSEC_OTP_DRAW: {
+            struct seld_otp_request* req = (struct seld_otp_request*)a1;
+            if (!validate_user_buffer(req, sizeof(*req), 0)) {
+                return (uint64_t)-1;
+            }
+            vga_draw_otp_text(req->col, req->row, req->text, req->seed);
+            return 0;
+        }
+
+        case SYS_REDIRECT_STDOUT: {
+            s_stdout_redirect_fd = (int)a1;
+            return 0;
+        }
+
+        case SYS_REDIRECT_STDIN: {
+            s_stdin_redirect_fd = (int)a1;
+            return 0;
+        }
+
+        case SYS_KILL: {
+            return (uint64_t)sched_kill_task((uint32_t)a1);
         }
 
         case SYS_EXIT: {

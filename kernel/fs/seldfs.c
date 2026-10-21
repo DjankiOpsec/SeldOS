@@ -4,7 +4,7 @@
  *
  * SeldFS - Hardened Ring 0 Simple Block File System Implementation
  * Flat inode structure with Sector 1 Block Allocation Bitmap and SHA-256 verification.
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #include "seldfs.h"
@@ -63,14 +63,14 @@ static int flush_bitmap(void) {
 }
 
 static int flush_inodes(void) {
-    uint8_t buffer[INODES_SECTOR_COUNT * ATA_SECTOR_SIZE];
+    static uint8_t buffer[INODES_SECTOR_COUNT * ATA_SECTOR_SIZE];
     memset(buffer, 0, sizeof(buffer));
     memcpy(buffer, sb.inodes, sizeof(sb.inodes));
     return bdev_write_sectors(INODES_START_LBA, INODES_SECTOR_COUNT, buffer);
 }
 
 static int flush_all_metadata(void) {
-    uint8_t sb_buf[ATA_SECTOR_SIZE];
+    static uint8_t sb_buf[ATA_SECTOR_SIZE];
     memset(sb_buf, 0, sizeof(sb_buf));
     memcpy(sb_buf, &sb, 20); // First 20 bytes: magic, version, block_size, total_inodes, free_data_lba
     if (bdev_write_sectors(SB_SECTOR_LBA, 1, sb_buf) != 0) {
@@ -352,13 +352,13 @@ int seldfs_write_file(const char* filename, const void* data, size_t len) {
                 free_blocks(start_lba + blocks, sb.inodes[target_inode].block_count - blocks);
             }
         } else {
-            // Need larger allocation: free old blocks, allocate new
-            free_blocks(sb.inodes[target_inode].start_lba, sb.inodes[target_inode].block_count);
-            if (allocate_blocks(blocks, &start_lba) != 0) {
-                // Restore old allocation if possible
-                allocate_blocks(sb.inodes[target_inode].block_count, &start_lba);
-                return -1; // Out of disk space
+            // Need larger allocation: allocate new block run first, then free old
+            uint32_t new_lba = 0;
+            if (allocate_blocks(blocks, &new_lba) != 0) {
+                return -1; // Out of disk space: keep old allocation untouched
             }
+            free_blocks(sb.inodes[target_inode].start_lba, sb.inodes[target_inode].block_count);
+            start_lba = new_lba;
         }
     } else {
         // Find free inode slot
@@ -418,8 +418,13 @@ int seldfs_delete_file(const char* filename) {
 
     for (size_t i = 0; i < SELDFS_MAX_FILES; i++) {
         if (sb.inodes[i].used && strcmp(sb.inodes[i].filename, filename) == 0) {
-            // Free allocated data blocks in bitmap
+            // Free allocated data blocks in bitmap after zeroing sectors (anti-forensics)
             if (sb.inodes[i].block_count > 0 && sb.inodes[i].start_lba >= DATA_START_LBA) {
+                uint8_t zero_buf[SELDFS_BLOCK_SIZE];
+                memset(zero_buf, 0, SELDFS_BLOCK_SIZE);
+                for (uint32_t b = 0; b < sb.inodes[i].block_count; b++) {
+                    bdev_write_sectors(sb.inodes[i].start_lba + b, 1, zero_buf);
+                }
                 free_blocks(sb.inodes[i].start_lba, sb.inodes[i].block_count);
             }
 
@@ -446,7 +451,8 @@ int seldfs_is_authorized_file(const char* filename) {
         "init", "sh", "ls", "cat", "echo", "rm", "sha256sum",
         "reboot", "poweroff", "fetch", "fm", "oracle", "ps",
         "uname", "download", "tor", "torbrowser", "doom", "purge", "stealth",
-        "diode", "pinpad",
+        "diode", "pinpad", "otp", "hi",
+        "grep", "head", "tail", "less", "kill", "clip", "drop",
         "readme.txt", "opsec.txt", "oracle.txt", "doom1.wad", "pcmode",
         "secret.txt", "airgap.key",
         NULL

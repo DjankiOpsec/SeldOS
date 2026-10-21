@@ -4,7 +4,7 @@
  *
  * Kernel Dynamic Memory Allocator (kmalloc / kfree) Interface
  * Boundary-tag first-fit heap allocator in Ring 0.
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #ifndef SELD_KMALLOC_H

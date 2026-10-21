@@ -3,7 +3,7 @@
  * SeldTLS - Native Sovereign TLS 1.3 Subsystem
  * Curve25519 / X25519 Elliptic Curve Key Exchange (RFC 7748)
  * Pure C Freestanding Implementation.
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #ifndef _SELD_X25519_H_

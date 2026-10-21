@@ -1,7 +1,7 @@
 // doomgeneric port for SeldOS (Humboldt Kernel)
 // Includes Mobile / Touchscreen Virtual Controls HUD & Mouse Driver Integration
 // Features full 640x480 offscreen compositing (zero flicker) & direct touch menu navigation
-// GPLv3 Licensed.
+// GNU AGPLv3 Licensed - Humboldt Underground.
 
 #include "doomkeys.h"
 #include "m_argv.h"

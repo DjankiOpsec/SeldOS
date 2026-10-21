@@ -4,7 +4,7 @@
  * Standard System V / RISC-V ELF ABI startup:
  * Prepares stack, passes argc in a0, argv in a1, calls main(argc, argv),
  * and cleanly calls exit(status) or SYS_EXIT via ecall.
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 .section .text._start, "ax", @progbits

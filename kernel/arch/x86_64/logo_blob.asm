@@ -1,5 +1,5 @@
 ; SeldOS Kernel Embedded SVGZ Logo Blob
-; GPLv3 Licensed.
+; GNU AGPLv3 Licensed - Humboldt Underground.
 
 bits 64
 section .rodata

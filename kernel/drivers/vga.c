@@ -616,3 +616,46 @@ void vga_emergency_text_write(int col, int row, const char* text, uint8_t color_
     }
 }
 
+static inline uint8_t otp_prng_bit(uint32_t seed, uint32_t px, uint32_t py) {
+    uint64_t x = ((uint64_t)seed << 32) | ((uint64_t)px * 0x1F1F1F1FULL ^ (uint64_t)py * 0x5A5A5A5AULL);
+    x ^= x >> 30;
+    x *= 0xBF58476D1CE4E5B9ULL;
+    x ^= x >> 27;
+    x *= 0x94D049BB133111EBULL;
+    x ^= x >> 31;
+    return (uint8_t)(x & 1);
+}
+
+void vga_draw_otp_text(size_t col, size_t row, const char* str, uint32_t seed) {
+    if (!s_gpu_drv_enabled || !fb_base || !str) return;
+    if (row >= fb_console_rows) return;
+
+    uint32_t pitch_pixels = primary_fb.pitch / 4;
+    if (pitch_pixels == 0) pitch_pixels = primary_fb.width;
+
+    size_t c_idx = col;
+    while (*str && c_idx < FB_COLS) {
+        char c = *str++;
+        size_t x_start = c_idx * 8;
+        size_t y_start = row * 16;
+        const uint8_t* glyph = font8x16[(uint8_t)c];
+
+        for (size_t r = 0; r < 16; r++) {
+            uint8_t row_bits = glyph[r];
+            uint32_t* dst = &fb_base[(y_start + r) * pitch_pixels + x_start];
+            for (size_t b = 0; b < 8; b++) {
+                uint32_t px = (uint32_t)(x_start + b);
+                uint32_t py = (uint32_t)(y_start + r);
+
+                uint8_t secret_bit = (row_bits & (0x80 >> b)) ? 1 : 0;
+                uint8_t mask_bit = otp_prng_bit(seed, px, py);
+                uint8_t display_bit = secret_bit ^ mask_bit;
+
+                // Display bit: 1 = pure white, 0 = pure charcoal
+                dst[b] = display_bit ? 0x00FFFFFF : 0x0018181A;
+            }
+        }
+        c_idx++;
+    }
+}
+

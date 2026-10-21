@@ -1,7 +1,7 @@
 /*
  * SeldOS - Humboldt Kernel Project
  * SNL Userland Utility: fetch (/bin/fetch)
- * Sovereign System Information & Mascot Display (GPLv3)
+ * Sovereign System Information & Mascot Display (AGPLv3 Hardened)
  */
 
 #include <stdio.h>
@@ -49,7 +49,7 @@ int main(int argc, char* argv[]) {
     seld_clear();
     printf("=======================================================================\n");
     printf("                          SNL (Seld Not Linux) Sovereign Shell v0.1\n");
-    printf("                          Ring 3 Sovereign CLI Environment (GPLv3)\n");
+    printf("                          Ring 3 Sovereign CLI Environment (Humboldt Hardened)\n");
     printf("                          Humboldt Framebuffer 680x334 | 39-Color Palette\n");
 #if defined(__riscv)
     printf("                          RISC-V 64-bit (RV64GC) Isolated Execution\n");

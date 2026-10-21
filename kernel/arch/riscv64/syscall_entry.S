@@ -4,7 +4,7 @@
  *
  * RISC-V 64-bit Userspace Ring Transition & Process Exit Primitives
  * Handles entering U-mode and returning control back to the kernel.
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 .section .data

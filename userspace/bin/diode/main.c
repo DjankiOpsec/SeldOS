@@ -9,7 +9,7 @@
  * 4. AES-128-GCM AEAD Fail-Closed Encryption & Memory Hygiene
  * 5. Ring 3 Seld-Pledge Sandboxing (PLEDGE_STDIO | PLEDGE_RPATH | PLEDGE_AUDIO)
  *
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #include <stdio.h>

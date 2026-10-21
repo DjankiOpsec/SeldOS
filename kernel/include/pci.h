@@ -4,7 +4,7 @@
  *
  * PCI (Peripheral Component Interconnect) Bus Subsystem Interface
  * OpSec Hardened Configuration Space Access & Device Enumeration.
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #ifndef SELD_PCI_H
@@ -48,6 +48,8 @@
 #define PCI_CLASS_DISPLAY     0x03
 #define PCI_CLASS_MULTIMEDIA  0x04
 #define PCI_CLASS_BRIDGE      0x06
+#define PCI_CLASS_SERIAL_BUS  0x0C
+#define PCI_SUBCLASS_USB      0x03
 
 struct pci_device {
     uint8_t  bus;
@@ -77,6 +79,7 @@ void pci_write_byte(uint8_t bus, uint8_t slot, uint8_t func, uint8_t offset, uin
 void pci_init(void);
 int  pci_quarantine_backdoors(void);
 int  pci_lockdown_dma_and_rom(void);
+int  pci_usb_quarantine_poweroff(void);
 int  pci_is_locked_down(void);
 int  pci_find_device(uint16_t vendor_id, uint16_t device_id, struct pci_device* dev_out);
 int  pci_find_class(uint8_t class_code, uint8_t subclass, struct pci_device* dev_out);

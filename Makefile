@@ -16,7 +16,7 @@ LIBC_SRCS = userspace/libc/src/syscall.c \
             userspace/libc/src/seld_tls.c \
             userspace/libc/src/seld_vless.c
 
-UTILS = init sh ls cat echo rm sha256sum uname ps fm download oracle fetch reboot poweroff purge stealth diode pinpad
+UTILS = init sh ls cat echo rm sha256sum uname ps fm download oracle fetch reboot poweroff purge stealth diode pinpad otp hi grep head tail less kill clip drop
 
 # ---------------------------------------------------------------------------
 # x86_64 Architecture Definitions
@@ -115,7 +115,8 @@ build/obj_bin_%.o: userspace/bin/%/main.c userspace/libc/include/*.h
 
 build/bin/%: $(X86_USER_CRT0) build/obj_bin_%.o $(X86_LIBSNL) userspace/linker.ld
 	@mkdir -p build/bin
-	ld -T userspace/linker.ld -nostdlib -o $@ $(X86_USER_CRT0) build/obj_bin_$*.o --whole-archive $(X86_LIBSNL) --no-whole-archive
+	ld -s -T userspace/linker.ld -nostdlib -o $@ $(X86_USER_CRT0) build/obj_bin_$*.o --whole-archive $(X86_LIBSNL) --no-whole-archive
+	strip --strip-all $@
 
 build/obj_tor_%.o: userspace/bin/tor/%.c userspace/bin/tor/*.h userspace/libc/include/*.h
 	@mkdir -p build
@@ -123,7 +124,8 @@ build/obj_tor_%.o: userspace/bin/tor/%.c userspace/bin/tor/*.h userspace/libc/in
 
 build/bin/tor: $(X86_USER_CRT0) $(addprefix build/obj_tor_, main.o socks5.o http.o html.o) $(X86_LIBSNL) userspace/linker.ld
 	@mkdir -p build/bin
-	ld -T userspace/linker.ld -nostdlib -o $@ $(X86_USER_CRT0) $(addprefix build/obj_tor_, main.o socks5.o http.o html.o) --whole-archive $(X86_LIBSNL) --no-whole-archive
+	ld -s -T userspace/linker.ld -nostdlib -o $@ $(X86_USER_CRT0) $(addprefix build/obj_tor_, main.o socks5.o http.o html.o) --whole-archive $(X86_LIBSNL) --no-whole-archive
+	strip --strip-all $@
 
 build/obj_diode_%.o: userspace/bin/diode/%.c userspace/bin/diode/*.h userspace/libc/include/*.h
 	@mkdir -p build
@@ -131,7 +133,8 @@ build/obj_diode_%.o: userspace/bin/diode/%.c userspace/bin/diode/*.h userspace/l
 
 build/bin/diode: $(X86_USER_CRT0) $(addprefix build/obj_diode_, main.o diode_crypto.o fsk.o qrcodegen.o) $(X86_LIBSNL) userspace/linker.ld
 	@mkdir -p build/bin
-	ld -T userspace/linker.ld -nostdlib -o $@ $(X86_USER_CRT0) $(addprefix build/obj_diode_, main.o diode_crypto.o fsk.o qrcodegen.o) --whole-archive $(X86_LIBSNL) --no-whole-archive
+	ld -s -T userspace/linker.ld -nostdlib -o $@ $(X86_USER_CRT0) $(addprefix build/obj_diode_, main.o diode_crypto.o fsk.o qrcodegen.o) --whole-archive $(X86_LIBSNL) --no-whole-archive
+	strip --strip-all $@
 
 
 build/obj_doom_%.o: userspace/doom/%.c
@@ -140,7 +143,8 @@ build/obj_doom_%.o: userspace/doom/%.c
 
 build/bin/doom: $(X86_USER_CRT0) $(DOOM_OBJS) $(X86_LIBSNL) userspace/linker.ld
 	@mkdir -p build/bin
-	ld -T userspace/linker.ld -nostdlib -o $@ $(X86_USER_CRT0) $(DOOM_OBJS) --whole-archive $(X86_LIBSNL) --no-whole-archive
+	ld -s -T userspace/linker.ld -nostdlib -o $@ $(X86_USER_CRT0) $(DOOM_OBJS) --whole-archive $(X86_LIBSNL) --no-whole-archive
+	strip --strip-all $@
 
 $(X86_USER_BIN): build/bin/init
 	@mkdir -p build
@@ -232,7 +236,8 @@ $(RV_DIR)/obj_tor_%.o: userspace/bin/tor/%.c userspace/bin/tor/*.h userspace/lib
 
 $(RV_BIN)/tor: $(RV_CRT0) $(addprefix $(RV_DIR)/obj_tor_, main.o socks5.o http.o html.o) $(RV_LIBSNL) userspace/linker_riscv64.ld
 	@mkdir -p $(RV_BIN)
-	$(LD_RV) -T userspace/linker_riscv64.ld -nostdlib -o $@ $(RV_CRT0) $(addprefix $(RV_DIR)/obj_tor_, main.o socks5.o http.o html.o) --whole-archive $(RV_LIBSNL) --no-whole-archive
+	$(LD_RV) -s -T userspace/linker_riscv64.ld -nostdlib -o $@ $(RV_CRT0) $(addprefix $(RV_DIR)/obj_tor_, main.o socks5.o http.o html.o) --whole-archive $(RV_LIBSNL) --no-whole-archive
+	$(OBJCOPY_RV) --strip-all $@
 
 $(RV_DIR)/obj_diode_%.o: userspace/bin/diode/%.c userspace/bin/diode/*.h userspace/libc/include/*.h
 	@mkdir -p $(RV_DIR)
@@ -240,12 +245,14 @@ $(RV_DIR)/obj_diode_%.o: userspace/bin/diode/%.c userspace/bin/diode/*.h userspa
 
 $(RV_BIN)/diode: $(RV_CRT0) $(addprefix $(RV_DIR)/obj_diode_, main.o diode_crypto.o fsk.o qrcodegen.o) $(RV_LIBSNL) userspace/linker_riscv64.ld
 	@mkdir -p $(RV_BIN)
-	$(LD_RV) -T userspace/linker_riscv64.ld -nostdlib -o $@ $(RV_CRT0) $(addprefix $(RV_DIR)/obj_diode_, main.o diode_crypto.o fsk.o qrcodegen.o) --whole-archive $(RV_LIBSNL) --no-whole-archive
+	$(LD_RV) -s -T userspace/linker_riscv64.ld -nostdlib -o $@ $(RV_CRT0) $(addprefix $(RV_DIR)/obj_diode_, main.o diode_crypto.o fsk.o qrcodegen.o) --whole-archive $(RV_LIBSNL) --no-whole-archive
+	$(OBJCOPY_RV) --strip-all $@
 
 
 $(RV_BIN)/%: $(RV_CRT0) $(RV_DIR)/obj_bin_%.o $(RV_LIBSNL) userspace/linker_riscv64.ld
 	@mkdir -p $(RV_BIN)
-	$(LD_RV) -T userspace/linker_riscv64.ld -nostdlib -o $@ $(RV_CRT0) $(RV_DIR)/obj_bin_$*.o --whole-archive $(RV_LIBSNL) --no-whole-archive
+	$(LD_RV) -s -T userspace/linker_riscv64.ld -nostdlib -o $@ $(RV_CRT0) $(RV_DIR)/obj_bin_$*.o --whole-archive $(RV_LIBSNL) --no-whole-archive
+	$(OBJCOPY_RV) --strip-all $@
 
 $(RV_USER_BIN): $(RV_BIN)/init
 	@mkdir -p $(RV_DIR)

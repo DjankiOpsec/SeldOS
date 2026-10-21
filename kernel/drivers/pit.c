@@ -5,7 +5,7 @@
  * Programmable Interval Timer (PIT 8253/8254) Implementation
  * Base frequency: 1.193182 MHz
  * Mode 3 (Square Wave Generator) on Channel 0
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #include "pit.h"

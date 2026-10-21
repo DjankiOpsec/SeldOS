@@ -3,7 +3,7 @@
  * SeldTLS - Native Sovereign TLS 1.3 Subsystem
  * Handshake and Record Layer Implementation (RFC 8446)
  * Pure C Freestanding Engine.
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #include "seld_tls.h"
@@ -13,6 +13,7 @@
 #include "sha256.h"
 #include <seld.h>
 #include <string.h>
+#include <stdio.h>
 
 static inline uint64_t rdtsc_entropy(void) {
 #if defined(__riscv)
@@ -27,11 +28,29 @@ static inline uint64_t rdtsc_entropy(void) {
 }
 
 static void seld_get_random_bytes(uint8_t* out, size_t len) {
-    static uint64_t state = 0x5E1DCAFE5E1D1337ULL;
-    for (size_t i = 0; i < len; i++) {
-        state ^= rdtsc_entropy();
-        state = state * 6364136223846793005ULL + 1442695040888963407ULL;
-        out[i] = (uint8_t)(state >> 33);
+    if (seld_getrandom(out, len) == (int)len || seld_getrandom(out, len) == 0) {
+        return;
+    }
+    // Fallback: SHA-256 sponge over rdtsc + pid entropy
+    static uint8_t sponge_key[32] = {
+        0x5e, 0x1d, 0xca, 0xfe, 0x13, 0x37, 0xba, 0xbe,
+        0x42, 0x99, 0x77, 0x11, 0x22, 0x33, 0x44, 0x55,
+        0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x01, 0x02,
+        0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a
+    };
+    size_t off = 0;
+    while (off < len) {
+        struct sha256_ctx ctx;
+        sha256_init(&ctx);
+        uint64_t t = rdtsc_entropy();
+        int pid = seld_getpid();
+        sha256_update(&ctx, sponge_key, 32);
+        sha256_update(&ctx, (const uint8_t*)&t, sizeof(t));
+        sha256_update(&ctx, (const uint8_t*)&pid, sizeof(pid));
+        sha256_final(&ctx, sponge_key);
+        size_t chunk = (len - off < 32) ? (len - off) : 32;
+        memcpy(out + off, sponge_key, chunk);
+        off += chunk;
     }
 }
 
@@ -135,6 +154,7 @@ static int domain_matches(const char* host, const char* pattern) {
     if (!host || !pattern || !*host || !*pattern) return 0;
     if (strcasecmp(host, pattern) == 0) return 1;
     if (pattern[0] == '*' && pattern[1] == '.') {
+        if (strcasecmp(host, pattern + 2) == 0) return 1;
         const char* p_suffix = pattern + 1; // ".example.com"
         size_t hlen = strlen(host);
         size_t slen = strlen(p_suffix);
@@ -208,7 +228,10 @@ static void parse_server_certificate(struct seld_tls_conn* conn, const uint8_t* 
     // 4. Root CA trust validation against sovereign & public PKI standards
     const char* icn = conn->peer_cert.issuer_cn;
     const char* iorg = conn->peer_cert.issuer_org;
-    if (strstr(icn, "DigiCert") || strstr(iorg, "DigiCert") ||
+    const char* scn = conn->peer_cert.subject_cn;
+    int is_self_signed = (scn[0] && icn[0] && strcmp(scn, icn) == 0);
+    if (!is_self_signed && (
+        strstr(icn, "DigiCert") || strstr(iorg, "DigiCert") ||
         strstr(icn, "Let's Encrypt") || strstr(iorg, "Let's Encrypt") || strstr(icn, "ISRG") ||
         strstr(icn, "Cloudflare") || strstr(iorg, "Cloudflare") ||
         strstr(icn, "Google") || strstr(iorg, "Google") || strstr(icn, "GTS") ||
@@ -216,7 +239,7 @@ static void parse_server_certificate(struct seld_tls_conn* conn, const uint8_t* 
         strstr(icn, "GlobalSign") || strstr(iorg, "GlobalSign") ||
         strstr(icn, "Amazon") || strstr(iorg, "Amazon") ||
         strstr(icn, "ZeroSSL") || strstr(iorg, "ZeroSSL") ||
-        strstr(icn, "SeldOS") || strstr(iorg, "SeldOS")) {
+        strstr(icn, "SeldOS") || strstr(iorg, "SeldOS"))) {
         conn->peer_cert.ca_verified = 1;
     }
 }
@@ -243,11 +266,10 @@ int seld_tls_handshake(struct seld_tls_conn* conn, int tcp_sock, const char* sni
     uint8_t ch_buf[2048];
     size_t sni_len = strlen(sni_hostname);
 
-    // Standard Browser / Tor Firefox ESR 115 Cipher Suites (15 suites)
+    // Standard Browser / Supported SeldTLS Cipher Suites
+    // TLS 1.3 engine supports mandatory RFC 8446 suite (0x1301 = TLS_AES_128_GCM_SHA256)
     static const uint16_t s_std_ciphers[] = {
-        0x1301, // TLS_AES_128_GCM_SHA256 (Primary TLS 1.3 negotiated suite)
-        0x1302, // TLS_AES_256_GCM_SHA384
-        0x1303, // TLS_CHACHA20_POLY1305_SHA256
+        0x1301, // TLS_AES_128_GCM_SHA256 (Supported TLS 1.3 negotiated suite)
         0xc02b, // TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
         0xc02f, // TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
         0xc02c, // TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
@@ -303,11 +325,10 @@ int seld_tls_handshake(struct seld_tls_conn* conn, int tcp_sock, const char* sni
     exts[ep++] = 0x00; exts[ep++] = 0x23;
     exts[ep++] = 0x00; exts[ep++] = 0x00;
 
-    // 7. Extension: ALPN (0x0010) -> h2, http/1.1
+    // 7. Extension: ALPN (0x0010) -> http/1.1
     exts[ep++] = 0x00; exts[ep++] = 0x10;
-    exts[ep++] = 0x00; exts[ep++] = 0x0e; // ext len 14
-    exts[ep++] = 0x00; exts[ep++] = 0x0c; // list len 12
-    exts[ep++] = 0x02; exts[ep++] = 'h'; exts[ep++] = '2';
+    exts[ep++] = 0x00; exts[ep++] = 0x0b; // ext len 11
+    exts[ep++] = 0x00; exts[ep++] = 0x09; // list len 9
     exts[ep++] = 0x08; exts[ep++] = 'h'; exts[ep++] = 't'; exts[ep++] = 't'; exts[ep++] = 'p';
     exts[ep++] = '/'; exts[ep++] = '1'; exts[ep++] = '.'; exts[ep++] = '1';
 
@@ -410,6 +431,9 @@ int seld_tls_handshake(struct seld_tls_conn* conn, int tcp_sock, const char* sni
     // Parse ServerHello key_share extension
     uint8_t* sh_body = conn->rx_record_buf + 4;
     uint8_t sh_sess_len = sh_body[34];
+    if (35 + sh_sess_len + 3 > sh_msg_len) return -5;
+    uint16_t chosen_cipher = ((uint16_t)sh_body[35 + sh_sess_len] << 8) | sh_body[36 + sh_sess_len];
+    if (chosen_cipher != 0x1301) return -5; // Unsupported cipher suite
     size_t sh_pos = 35 + sh_sess_len + 3; // skip session ID + cipher (2) + comp (1)
     if (sh_pos + 2 > sh_msg_len) return -5;
 
@@ -469,6 +493,7 @@ int seld_tls_handshake(struct seld_tls_conn* conn, int tcp_sock, const char* sni
     // 5. Receive Server Encrypted Handshake Records
     uint64_t s_hs_seq = 0;
     int server_finished_done = 0;
+    int cert_received = 0;
 
     static uint8_t reasm_buf[32768];
     size_t reasm_len = 0;
@@ -511,14 +536,50 @@ int seld_tls_handshake(struct seld_tls_conn* conn, int tcp_sock, const char* sni
 
             if (mtype == 11) { // Certificate (0x0B)
                 parse_server_certificate(conn, reasm_buf + pos + 4, mlen);
+                cert_received = 1;
             }
 
-            sha256_update(&tr_ctx, reasm_buf + pos, 4 + mlen);
             if (mtype == 20) { // Finished
+                if (!cert_received) {
+                    return -13; // Missing Server Certificate
+                }
+
+                // Strict OpSec Validation: reject MITM certificates with mismatched domain or unverified CA
+                int is_local_or_gw = (strcmp(conn->sni_host, "gateway") == 0 ||
+                                      strcmp(conn->sni_host, "localhost") == 0 ||
+                                      strcmp(conn->sni_host, "127.0.0.1") == 0 ||
+                                      strcmp(conn->sni_host, "10.0.2.2") == 0 ||
+                                      (conn->sni_host[0] >= '0' && conn->sni_host[0] <= '9'));
+                int is_onion = (strstr(conn->sni_host, ".onion") != NULL);
+                if (!is_local_or_gw) {
+                    if (!conn->peer_cert.valid || !conn->peer_cert.domain_matched || (!conn->peer_cert.ca_verified && !is_onion)) {
+                        return -14; // TLS_ERR_CERT_UNTRUSTED_OR_MITM
+                    }
+                }
+
+                // Verify Server Finished HMAC-SHA256
+                struct sha256_ctx tr_pre_fin;
+                memcpy(&tr_pre_fin, &tr_ctx, sizeof(tr_ctx));
+                uint8_t tr_hash_pre_fin[32];
+                sha256_final(&tr_pre_fin, tr_hash_pre_fin);
+
+                uint8_t s_fin_key[32];
+                seld_hkdf_expand_label(server_hs_secret, "finished", NULL, 0, 32, s_fin_key);
+
+                uint8_t s_fin_expected[32];
+                seld_hmac_sha256(s_fin_key, 32, tr_hash_pre_fin, 32, s_fin_expected);
+
+                if (mlen != 32 || memcmp(reasm_buf + pos + 4, s_fin_expected, 32) != 0) {
+                    return -12; // Server Finished HMAC verification failed
+                }
+
+                sha256_update(&tr_ctx, reasm_buf + pos, 4 + mlen);
                 server_finished_done = 1;
                 pos += 4 + mlen;
                 break;
             }
+
+            sha256_update(&tr_ctx, reasm_buf + pos, 4 + mlen);
             pos += 4 + mlen;
         }
 
@@ -589,6 +650,27 @@ int seld_tls_handshake(struct seld_tls_conn* conn, int tcp_sock, const char* sni
 
     conn->client_seq = 0;
     conn->server_seq = 0;
+
+    // OpSec Zeroization: Erase ephemeral cryptographic secrets from stack
+    memset(priv_key, 0, sizeof(priv_key));
+    memset(pub_key, 0, sizeof(pub_key));
+    memset(client_random, 0, sizeof(client_random));
+    memset(session_id, 0, sizeof(session_id));
+    memset(derived_early, 0, sizeof(derived_early));
+    memset(handshake_secret, 0, sizeof(handshake_secret));
+    memset(server_hs_secret, 0, sizeof(server_hs_secret));
+    memset(client_hs_secret, 0, sizeof(client_hs_secret));
+    memset(master_secret, 0, sizeof(master_secret));
+    memset(c_app_secret, 0, sizeof(c_app_secret));
+    memset(s_app_secret, 0, sizeof(s_app_secret));
+    memset(c_hs_key, 0, sizeof(c_hs_key));
+    memset(s_hs_key, 0, sizeof(s_hs_key));
+    memset(c_hs_iv, 0, sizeof(c_hs_iv));
+    memset(s_hs_iv, 0, sizeof(s_hs_iv));
+    memset(c_fin_key, 0, sizeof(c_fin_key));
+    memset(c_fin_verify, 0, sizeof(c_fin_verify));
+    memset(c_fin_msg, 0, sizeof(c_fin_msg));
+    memset(c_fin_plain, 0, sizeof(c_fin_plain));
 
     return 0; // Handshake successfully complete!
 }
@@ -697,5 +779,11 @@ void seld_tls_close(struct seld_tls_conn* conn) {
         seld_tcp_close(conn->sock);
         conn->sock = -1;
     }
+    // OpSec Zeroization: Erase symmetric session keys, IVs, and plaintext buffers
+    memset(conn->client_app_key, 0, sizeof(conn->client_app_key));
+    memset(conn->server_app_key, 0, sizeof(conn->server_app_key));
+    memset(conn->client_app_iv, 0, sizeof(conn->client_app_iv));
+    memset(conn->server_app_iv, 0, sizeof(conn->server_app_iv));
+    memset(conn->rx_decrypted_buf, 0, sizeof(conn->rx_decrypted_buf));
 }
 

@@ -3,7 +3,7 @@
  * Copyright (C) 2026 Free Software Foundation, Inc.
  *
  * PS/2 Keyboard Driver with Ring Buffer Implementation.
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #include "kbd.h"
@@ -42,7 +42,8 @@ static volatile int s_kbd_jitter_enabled = 0;
 static volatile uint32_t s_jitter_ticks = 0;
 static volatile uint32_t s_jitter_target = 5; /* 50ms at 100 Hz PIT */
 
-static int shift_pressed = 0;
+static int left_shift_held = 0;
+static int right_shift_pressed = 0;
 static int caps_lock = 0;
 
 static const char scancode_ascii_lower[128] = {
@@ -99,7 +100,8 @@ void kbd_init(void) {
     s_kbd_jitter_enabled = 0;
     s_jitter_ticks = 0;
     s_jitter_target = 5;
-    shift_pressed = 0;
+    left_shift_held = 0;
+    right_shift_pressed = 0;
     caps_lock = 0;
 }
 
@@ -178,7 +180,7 @@ void kbd_set_deadman(int enable) {
     s_deadman_enabled = enable ? 1 : 0;
     if (!s_deadman_enabled) {
         s_deadman_armed = 0;
-    } else if (shift_pressed) {
+    } else if (left_shift_held) {
         s_deadman_armed = 1;
     }
 }
@@ -217,18 +219,26 @@ void kbd_handle_scancode(uint8_t scancode) {
     }
 
     // 2. ASCII translation for console/shell
-    if (scancode == 0x2A || scancode == 0x36) { // Left/Right shift press
-        shift_pressed = 1;
+    if (scancode == 0x2A) { // Left Shift press -> Dead Man's Grip ONLY (no caps, no symbol shift)
+        left_shift_held = 1;
         if (s_deadman_enabled) {
             s_deadman_armed = 1;
         }
         return;
     }
-    if (scancode == 0xAA || scancode == 0xB6) { // Left/Right shift release
-        shift_pressed = 0;
+    if (scancode == 0xAA) { // Left Shift release -> Dead Man's Grip trigger
+        left_shift_held = 0;
         if (s_deadman_enabled && s_deadman_armed) {
             opsec_deadman_trigger_wipe();
         }
+        return;
+    }
+    if (scancode == 0x36) { // Right Shift press -> Typing modifier ONLY (Caps & symbols)
+        right_shift_pressed = 1;
+        return;
+    }
+    if (scancode == 0xB6) { // Right Shift release
+        right_shift_pressed = 0;
         return;
     }
     if (scancode == 0x3A) { // Caps lock press
@@ -241,12 +251,11 @@ void kbd_handle_scancode(uint8_t scancode) {
     }
 
     char c = 0;
-    int is_upper = shift_pressed ^ caps_lock;
-
-    if (is_upper && scancode < 128) {
-        c = scancode_ascii_upper[scancode];
-    } else if (scancode < 128) {
-        c = scancode_ascii_lower[scancode];
+    if (scancode < 128) {
+        char base = scancode_ascii_lower[scancode];
+        int is_alpha = (base >= 'a' && base <= 'z');
+        int use_upper = is_alpha ? (right_shift_pressed ^ caps_lock) : right_shift_pressed;
+        c = use_upper ? scancode_ascii_upper[scancode] : base;
     }
 
     if (c != 0) {
@@ -337,5 +346,44 @@ int kbd_poll_event(struct kbd_event* ev) {
         }
     }
     return 0;
+}
+
+void kbd_set_leds(uint8_t led_mask) {
+#if !defined(__riscv)
+    // Wait until 8042 controller input buffer is clear
+    for (int i = 0; i < 10000; i++) {
+        if (!(inb(0x64) & 2)) break;
+    }
+    // Command 0xED: Set/Reset LEDs
+    outb(0x60, 0xED);
+    // Wait for ACK (0xFA) or timeout
+    for (int i = 0; i < 10000; i++) {
+        if (inb(0x64) & 1) {
+            uint8_t ack = inb(0x60);
+            if (ack == 0xFA) break;
+        }
+    }
+    // Wait until controller input buffer is clear
+    for (int i = 0; i < 10000; i++) {
+        if (!(inb(0x64) & 2)) break;
+    }
+    // Send LED state byte: bit 0 = ScrollLock, bit 1 = NumLock, bit 2 = CapsLock
+    outb(0x60, (uint8_t)(led_mask & 0x07));
+    // Drain controller ACK
+    for (int i = 0; i < 10000; i++) {
+        if (inb(0x64) & 1) {
+            inb(0x60);
+            break;
+        }
+    }
+#else
+    (void)led_mask;
+#endif
+}
+
+void kbd_blackout_leds(void) {
+    // Extinguish all keyboard LEDs to deny optical sensors & photodiodes
+    kbd_set_leds(0x00);
+    serial_puts("[+] OpSec: Keyboard LEDs extinguished (Blackout 0x00).\n");
 }
 

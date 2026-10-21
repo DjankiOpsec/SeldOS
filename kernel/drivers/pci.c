@@ -3,7 +3,7 @@
  * Copyright (C) 2026 Free Software Foundation, Inc.
  *
  * PCI (Peripheral Component Interconnect) Bus Subsystem Implementation
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #include "pci.h"
@@ -311,6 +311,57 @@ int pci_lockdown_dma_and_rom(void) {
     serial_puts(").\n");
 
     return dma_revoked_count;
+}
+
+int pci_usb_quarantine_poweroff(void) {
+    int usb_quarantined_count = 0;
+
+    for (uint16_t bus = 0; bus < 256; bus++) {
+        for (uint8_t slot = 0; slot < 32; slot++) {
+            uint16_t vendor = pci_read_word((uint8_t)bus, slot, 0, PCI_REG_VENDOR_ID);
+            if (vendor == 0xFFFF) continue;
+
+            uint8_t header_type = pci_read_byte((uint8_t)bus, slot, 0, PCI_REG_HEADER_TYPE);
+            uint8_t num_funcs = (header_type & 0x80) ? 8 : 1;
+
+            for (uint8_t func = 0; func < num_funcs; func++) {
+                uint16_t ven = pci_read_word((uint8_t)bus, slot, func, PCI_REG_VENDOR_ID);
+                if (ven == 0xFFFF) continue;
+
+                uint8_t cc = pci_read_byte((uint8_t)bus, slot, func, PCI_REG_CLASS);
+                uint8_t sc = pci_read_byte((uint8_t)bus, slot, func, PCI_REG_SUBCLASS);
+
+                // Class 0x0C (Serial Bus), Subclass 0x03 (USB Controller - UHCI/OHCI/EHCI/xHCI)
+                if (cc == PCI_CLASS_SERIAL_BUS && sc == PCI_SUBCLASS_USB) {
+                    // Revoke all PCI Command bits: Bus Master, Memory Space, I/O Space (cmd = 0)
+                    pci_write_word((uint8_t)bus, slot, func, PCI_REG_COMMAND, 0);
+
+                    // Zero BARs to completely unmap device from memory/IO space
+                    pci_write_dword((uint8_t)bus, slot, func, PCI_REG_BAR0, 0);
+                    pci_write_dword((uint8_t)bus, slot, func, PCI_REG_BAR1, 0);
+
+                    // Disable Interrupt line
+                    pci_write_byte((uint8_t)bus, slot, func, PCI_REG_INTERRUPT, 0xFF);
+
+                    serial_puts("[!] OPSEC BLACKOUT: USB Controller quarantined & powered down at B/S/F ");
+                    serial_print_dec((uint32_t)bus);
+                    serial_puts("/");
+                    serial_print_dec((uint32_t)slot);
+                    serial_puts("/");
+                    serial_print_dec((uint32_t)func);
+                    serial_puts(". Hardware sniffer pins unpowered!\n");
+
+                    usb_quarantined_count++;
+                }
+            }
+        }
+    }
+
+    if (usb_quarantined_count == 0) {
+        serial_puts("[+] OpSec: 0 active USB controllers found on PCI bus.\n");
+    }
+
+    return usb_quarantined_count;
 }
 
 void pci_init(void) {

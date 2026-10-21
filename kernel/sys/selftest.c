@@ -5,7 +5,7 @@
  * Kernel Subsystem Self-Test Implementation
  * Tests memory allocator (kmalloc/kfree/magic), SHA-256 FIPS vector,
  * PMM allocation and bitmap integrity, and scheduler task creation/yield.
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #include "selftest.h"
@@ -561,7 +561,7 @@ int selftest_opsec(void) {
  */
 int selftest_run_all(void) {
     print_out("\n=======================================================================\n");
-    print_out("       SELD OS KERNEL SUBSYSTEM SELF-TEST SUITE (OpSec GPLv3)\n");
+    print_out("       SELD OS KERNEL SUBSYSTEM SELF-TEST SUITE (OpSec AGPLv3 Hardened)\n");
     print_out("=======================================================================\n");
 
     int passed = 0;

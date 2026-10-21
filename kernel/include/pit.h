@@ -4,7 +4,7 @@
  *
  * Programmable Interval Timer (PIT 8253/8254) Interface
  * Frequency calibration, tick accounting, and calibrated delays.
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #ifndef SELD_PIT_H

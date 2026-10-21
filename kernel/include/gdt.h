@@ -4,7 +4,7 @@
  *
  * GDT, TSS, and Privilege Boundary Interface
  * Sets up 64-bit Kernel Code/Data (Ring 0), User Code/Data (Ring 3), and TSS.
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #ifndef SELD_GDT_H

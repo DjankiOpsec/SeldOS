@@ -4,7 +4,7 @@
  * Standard Input / Output & Buffered Streams Implementation
  * Formatted Printing: %d, %i, %u, %x, %X, %p, %s, %c, %ld, %lx, %lu
  * Buffered Stream I/O: FILE*, stdin, stdout, stderr, fopen, fclose, fread, fwrite
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #include "stdio.h"

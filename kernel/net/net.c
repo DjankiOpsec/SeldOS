@@ -4,7 +4,7 @@
  *
  * OpSec Hardened Network Subsystem Implementation
  * Layer 2 (Ethernet), Layer 3 (ARP, IPv4), Layer 4 (ICMP).
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #include "net.h"
@@ -48,6 +48,10 @@ void net_set_airgap(int mode) {
 
 int net_get_airgap(void) {
     return s_net_airgap_mode;
+}
+
+void net_set_airgap_mode(int mode) {
+    net_set_airgap(mode);
 }
 
 void net_set_desync(int mode) {
@@ -454,6 +458,12 @@ static void net_handle_icmp(const uint8_t* frame, size_t frame_len, const struct
     s_stats.rx_icmp++;
 
     if (icmp->type == ICMP_TYPE_ECHO_REQUEST && icmp->code == 0) {
+        // OpSec Stealth Mode Invariant: Completely silent to external probes - drop ICMP Echo Request
+        if (s_net_airgap_mode == NET_AIRGAP_STEALTH) {
+            s_stats.rx_dropped++;
+            return;
+        }
+
         // Construct ICMP Echo Reply
         uint8_t reply_buf[ETH_MAX_LEN];
         if (ETH_HLEN + ip_tot_len > sizeof(reply_buf)) {
@@ -472,7 +482,7 @@ static void net_handle_icmp(const uint8_t* frame, size_t frame_len, const struct
         ip_out->ihl = 5;
         ip_out->tos = 0;
         ip_out->total_length = htons((uint16_t)(sizeof(struct ipv4_header) + icmp_len));
-        ip_out->id = htons(s_ip_id++);
+        ip_out->id = 0; // RFC 6864: Zero IP ID for non-fragmented DF packets
         ip_out->flags_frag = htons(0x4000); // DF
         ip_out->ttl = 64;
         ip_out->protocol = IP_PROTO_ICMP;
@@ -614,7 +624,7 @@ uint32_t net_get_synthetic_tsval(struct tcp_socket* s) {
     return (uint32_t)((int32_t)(base + s->ts_val_base) + dither);
 }
 
-static int net_send_tcp_packet_sock(struct tcp_socket* s, uint8_t flags, const void* payload, size_t payload_len) {
+static int net_send_tcp_packet_sock_ex(struct tcp_socket* s, uint8_t flags, const void* payload, size_t payload_len, uint8_t ttl, int is_fake) {
     if (!s) return -1;
     uint8_t tcp_buf[sizeof(struct tcp_header) + 64 + 1460];
     struct tcp_header* tcp = (struct tcp_header*)tcp_buf;
@@ -701,8 +711,8 @@ static int net_send_tcp_packet_sock(struct tcp_socket* s, uint8_t flags, const v
     size_t tcp_tot = hdr_len + payload_len;
     tcp->checksum = net_tcp_checksum(s_config.ip, s->remote_ip, tcp_buf, tcp_tot);
 
-    int err = net_send_ip(s->remote_ip, IP_PROTO_TCP, tcp_buf, tcp_tot);
-    if (err == 0) {
+    int err = net_send_ip_ttl(s->remote_ip, IP_PROTO_TCP, tcp_buf, tcp_tot, ttl ? ttl : 64);
+    if (err == 0 && !is_fake) {
         if (flags & (TCP_FLAG_SYN | TCP_FLAG_FIN)) {
             s->snd_nxt++;
         }
@@ -711,6 +721,10 @@ static int net_send_tcp_packet_sock(struct tcp_socket* s, uint8_t flags, const v
         }
     }
     return err;
+}
+
+static inline int net_send_tcp_packet_sock(struct tcp_socket* s, uint8_t flags, const void* payload, size_t payload_len) {
+    return net_send_tcp_packet_sock_ex(s, flags, payload, payload_len, 64, 0);
 }
 
 static void net_handle_tcp(const uint8_t* frame, size_t frame_len, const struct ipv4_header* ip_hdr) {
@@ -824,10 +838,10 @@ static void net_handle_tcp(const uint8_t* frame, size_t frame_len, const struct 
 static const uint8_t* dns_skip_name(const uint8_t* p, const uint8_t* end) {
     while (p < end) {
         if (*p == 0) {
-            return p + 1;
+            return (p + 1 <= end) ? (p + 1) : end;
         }
         if ((*p & 0xC0) == 0xC0) {
-            return p + 2;
+            return (p + 2 <= end) ? (p + 2) : end;
         }
         uint8_t l = *p;
         if (l > 63 || p + 1 + l > end) return end;
@@ -1036,7 +1050,7 @@ void net_poll(void) {
     net_chaff_tick();
 }
 
-int net_send_ip(uint32_t dest_ip, uint8_t protocol, const void* payload, size_t payload_len) {
+int net_send_ip_ttl(uint32_t dest_ip, uint8_t protocol, const void* payload, size_t payload_len, uint8_t ttl) {
     if (!nic_is_active() || !payload) return -1;
     if (sizeof(struct eth_header) + sizeof(struct ipv4_header) + payload_len > ETH_MAX_LEN) {
         return -2; // Frame too large
@@ -1088,7 +1102,7 @@ int net_send_ip(uint32_t dest_ip, uint8_t protocol, const void* payload, size_t 
     ip->total_length = htons((uint16_t)(sizeof(struct ipv4_header) + payload_len));
     ip->id = 0; // RFC 6864: Zero IP ID for non-fragmented DF packets (Linux 6.x standard)
     ip->flags_frag = htons(0x4000); // DF
-    ip->ttl = 64;
+    ip->ttl = ttl ? ttl : 64;
     ip->protocol = protocol;
     ip->checksum = 0;
     ip->src_ip = s_config.ip;
@@ -1125,6 +1139,10 @@ int net_send_ip(uint32_t dest_ip, uint8_t protocol, const void* payload, size_t 
         s_stats.tx_bytes += total_len;
     }
     return res;
+}
+
+int net_send_ip(uint32_t dest_ip, uint8_t protocol, const void* payload, size_t payload_len) {
+    return net_send_ip_ttl(dest_ip, protocol, payload, payload_len, 64);
 }
 
 int net_ping(uint32_t target_ip, uint16_t seq, uint32_t* rtt_ms) {
@@ -1220,19 +1238,25 @@ void net_chaff_tick(void) {
 
     s_in_chaff = 1;
 
-    // Generate decoy query / keepalive UDP frame
-    uint8_t decoy_payload[96];
-    rng_get_bytes(decoy_payload, sizeof(decoy_payload));
-    decoy_payload[0] = (uint8_t)(rng_get_u64() & 0xFF);
-    decoy_payload[1] = (uint8_t)((rng_get_u64() >> 8) & 0xFF);
-    decoy_payload[2] = 0x01; // Standard query
+    // Generate valid RFC 1035 decoy DNS query frame (prevents IDS malformed packet alerts)
+    uint8_t decoy_payload[32];
+    memset(decoy_payload, 0, sizeof(decoy_payload));
+    uint16_t decoy_qid = (uint16_t)rng_get_u64();
+    decoy_payload[0] = (uint8_t)(decoy_qid >> 8);
+    decoy_payload[1] = (uint8_t)(decoy_qid & 0xFF);
+    decoy_payload[2] = 0x01; // Flags: Standard query, RD=1
     decoy_payload[3] = 0x00;
-    decoy_payload[4] = 0x00;
-    decoy_payload[5] = 0x01; // 1 Question
+    decoy_payload[4] = 0x00; decoy_payload[5] = 0x01; // QDCOUNT: 1
+    // QNAME: \x09localhost\x00
+    decoy_payload[12] = 9;
+    memcpy(decoy_payload + 13, "localhost", 9);
+    decoy_payload[22] = 0; // Terminating null
+    decoy_payload[23] = 0x00; decoy_payload[24] = 0x01; // QTYPE: A (1)
+    decoy_payload[25] = 0x00; decoy_payload[26] = 0x01; // QCLASS: IN (1)
 
     uint32_t dest = s_config.gateway ? s_config.gateway : MAKE_IP(10, 0, 2, 2);
-    uint16_t src_p = 49152 + (uint16_t)(rng_get_u64() % 16000);
-    net_send_udp(dest, src_p, 53, decoy_payload, sizeof(decoy_payload));
+    uint16_t src_p = (uint16_t)(49152 + (rng_get_u64() % (65535 - 49152)));
+    net_send_udp(dest, src_p, 53, decoy_payload, 27);
     s_chaff_packets_sent++;
 
     s_in_chaff = 0;
@@ -1486,7 +1510,9 @@ int net_dns_resolve(const char* hostname, uint32_t* ip_out) {
     uint8_t query_buf[256];
     struct dns_header* dns = (struct dns_header*)query_buf;
 
-    uint16_t qid = ++s_dns_tx_id;
+    // RFC 5452: Cryptographically random 16-bit Transaction ID
+    uint16_t qid = (uint16_t)rng_get_u64();
+    if (qid == 0) qid = 0x5E1D;
     dns->id = htons(qid);
     dns->flags = htons(0x0100); // Standard query, recursion desired
     dns->qdcount = htons(1);
@@ -1527,19 +1553,15 @@ int net_dns_resolve(const char* hostname, uint32_t* ip_out) {
     s_dns_tracker.answered = 0;
     s_dns_tracker.resolved_ip = 0;
 
-    uint16_t client_port = (uint16_t)(45000 + (qid % 10000));
+    // RFC 5452: Ephemeral UDP client port randomization (49152..65535)
+    uint16_t client_port = (uint16_t)(49152 + (rng_get_u64() % (65535 - 49152)));
 
-    // Send query to Control D P2 Primary (76.76.2.2:53) and Secondary (76.76.10.2:53)
-    // plus local gateway DNS (10.0.2.3:53 / s_config.gateway) as fallback
-    net_send_udp(DNS_CONTROLD_P2_PRIMARY, client_port, DNS_PORT, query_buf, query_len);
-    net_send_udp(DNS_CONTROLD_P2_SECONDARY, client_port, DNS_PORT, query_buf, query_len);
-    if (s_config.dns != DNS_CONTROLD_P2_PRIMARY && s_config.dns != 0) {
-        net_send_udp(s_config.dns, client_port, DNS_PORT, query_buf, query_len);
-    }
-    if (s_config.gateway != 0 && s_config.gateway != s_config.dns) {
+    // Send query to configured primary DNS server without broadcast flooding
+    uint32_t primary_dns = s_config.dns ? s_config.dns : DNS_CONTROLD_P2_PRIMARY;
+    net_send_udp(primary_dns, client_port, DNS_PORT, query_buf, query_len);
+    if (s_config.gateway != 0 && s_config.gateway != primary_dns) {
         net_send_udp(s_config.gateway, client_port, DNS_PORT, query_buf, query_len);
     }
-    net_send_udp(MAKE_IP(10, 0, 2, 3), client_port, DNS_PORT, query_buf, query_len);
 
     uint64_t start_ms = pit_get_uptime_ms();
     uint64_t last_retransmit_ms = start_ms;
@@ -1563,16 +1585,15 @@ int net_dns_resolve(const char* hostname, uint32_t* ip_out) {
         }
 
         uint64_t elapsed = pit_get_uptime_ms() - last_retransmit_ms;
-        if (elapsed >= 250) {
+        if (elapsed >= 400) {
             last_retransmit_ms = pit_get_uptime_ms();
 
-            // Retransmit to Control D P2 primary, secondary, and gateway
-            net_send_udp(DNS_CONTROLD_P2_PRIMARY, client_port, DNS_PORT, query_buf, query_len);
+            // Retransmit to primary DNS and fallback secondary
+            net_send_udp(primary_dns, client_port, DNS_PORT, query_buf, query_len);
             net_send_udp(DNS_CONTROLD_P2_SECONDARY, client_port, DNS_PORT, query_buf, query_len);
-            if (s_config.gateway != 0) {
+            if (s_config.gateway != 0 && s_config.gateway != primary_dns) {
                 net_send_udp(s_config.gateway, client_port, DNS_PORT, query_buf, query_len);
             }
-            net_send_udp(MAKE_IP(10, 0, 2, 3), client_port, DNS_PORT, query_buf, query_len);
         }
 
         pit_sleep_ms(2);
@@ -1674,11 +1695,17 @@ int net_tcp_socket_send(int sock_id, const void* data, size_t len) {
             if (seg1_len > len) seg1_len = len;
 
             if (s_net_desync_mode == NET_DESYNC_FAKE) {
-                // Send a fake segment to confuse DPI state machine
-                uint8_t fake[32];
-                memset(fake, 0x00, sizeof(fake));
-                net_send_tcp_packet_sock(s, TCP_FLAG_ACK, fake, sizeof(fake));
-                s_desync_fakes++;
+                // Send a fake segment with low TTL (TTL=2) to confuse DPI state machine
+                // Only on WAN routes (>2 hops) to avoid stream collision on local subnets
+                int is_local = ((s->remote_ip & s_config.netmask) == (s_config.ip & s_config.netmask) ||
+                                s->remote_ip == s_config.gateway ||
+                                s->remote_ip == MAKE_IP(10, 0, 2, 2));
+                if (!is_local) {
+                    uint8_t fake[32];
+                    memset(fake, 0x00, sizeof(fake));
+                    net_send_tcp_packet_sock_ex(s, TCP_FLAG_ACK, fake, sizeof(fake), 2, 1);
+                    s_desync_fakes++;
+                }
             }
 
             int err1 = net_send_tcp_packet_sock(s, TCP_FLAG_ACK | TCP_FLAG_PSH, p, seg1_len);
@@ -1830,158 +1857,6 @@ int net_abort_all_connections(void) {
     memset(s_dns_cache, 0, sizeof(s_dns_cache));
     serial_puts("[+] OpSec: All TCP sockets severed and network caches purged.\n");
     return aborted;
-}
-
-int net_http_get(uint32_t server_ip, uint16_t port, const char* path, const char* host,
-                 uint8_t* out_buf, size_t max_out_len, size_t* out_len) {
-    if (!nic_is_active() || !path || !out_buf || max_out_len == 0) {
-        return -1;
-    }
-
-    int sock = net_tcp_socket_connect(server_ip, port);
-    if (sock < 0) {
-        return (sock == -4) ? -3 : -2;
-    }
-
-    char req[512];
-    const char* h = host ? host : "10.0.2.2:8080";
-    size_t req_len = 0;
-    const char* p1 = "GET ";
-    while (*p1 && req_len < sizeof(req) - 1) req[req_len++] = *p1++;
-    const char* p_path = path;
-    while (*p_path && req_len < sizeof(req) - 1) req[req_len++] = *p_path++;
-    const char* p2 = " HTTP/1.0\r\nHost: ";
-    while (*p2 && req_len < sizeof(req) - 1) req[req_len++] = *p2++;
-    while (*h && req_len < sizeof(req) - 1) req[req_len++] = *h++;
-    const char* p3 = "\r\nUser-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:115.0) Gecko/20100101 Firefox/115.0\r\nAccept: */*\r\nConnection: close\r\n\r\n";
-    while (*p3 && req_len < sizeof(req) - 1) req[req_len++] = *p3++;
-    req[req_len] = '\0';
-
-    if (net_tcp_socket_send(sock, req, req_len) <= 0) {
-        net_tcp_socket_close(sock);
-        return -3;
-    }
-
-    size_t total_received = 0;
-    size_t last_log = 0;
-    while (total_received < max_out_len) {
-        int n = net_tcp_socket_recv(sock, out_buf + total_received, max_out_len - total_received, 10000);
-        if (n > 0) {
-            total_received += (size_t)n;
-            if (total_received - last_log >= 262144) {
-                last_log = total_received;
-                serial_puts("[http_get] received ");
-                serial_print_dec((uint32_t)total_received);
-                serial_puts(" bytes\n");
-            }
-        } else if (n == 0 || n == -2) {
-            serial_puts("[http_get] loop broke with n=");
-            serial_print_dec((uint32_t)n);
-            serial_puts(" total=");
-            serial_print_dec((uint32_t)total_received);
-            serial_puts("\n");
-            break;
-        }
-    }
-
-    net_tcp_socket_close(sock);
-
-    if (total_received == 0) {
-        return -3;
-    }
-
-    const char* resp = (const char*)out_buf;
-    size_t hdr_len = 0;
-    for (size_t i = 0; i + 3 < total_received; i++) {
-        if (resp[i] == '\r' && resp[i+1] == '\n' && resp[i+2] == '\r' && resp[i+3] == '\n') {
-            hdr_len = i + 4;
-            break;
-        } else if (resp[i] == '\n' && resp[i+1] == '\n') {
-            hdr_len = i + 2;
-            break;
-        }
-    }
-
-    if (hdr_len == 0 || hdr_len >= total_received) {
-        if (out_len) *out_len = total_received;
-        return 0;
-    }
-
-    if (strncmp(resp, "HTTP/1.0 200", 12) != 0 &&
-        strncmp(resp, "HTTP/1.1 200", 12) != 0) {
-        serial_puts("[-] HTTP response not 200 OK\n");
-        return -4;
-    }
-
-    size_t body_len = total_received - hdr_len;
-
-    // Validate Content-Length if present in response header
-    const char* cl_ptr = strstr(resp, "Content-Length:");
-    if (!cl_ptr) cl_ptr = strstr(resp, "content-length:");
-    if (cl_ptr && (size_t)(cl_ptr - resp) < hdr_len) {
-        cl_ptr += 15;
-        while (*cl_ptr == ' ' || *cl_ptr == '\t') cl_ptr++;
-        char* endp = NULL;
-        uint64_t expected_len = strtoull(cl_ptr, &endp, 10);
-        if (expected_len > 0 && (uint64_t)body_len < expected_len) {
-            serial_puts("[-] net_http_get: Truncated transfer (expected ");
-            serial_print_dec((uint32_t)expected_len);
-            serial_puts(" bytes, got ");
-            serial_print_dec((uint32_t)body_len);
-            serial_puts(")\n");
-            return -5;
-        }
-    }
-
-    // In-band certified network time extraction
-    const char* date_ptr = strstr(resp, "Date:");
-    if (!date_ptr) date_ptr = strstr(resp, "date:");
-    if (date_ptr && (size_t)(date_ptr - resp) < hdr_len) {
-        uint64_t epoch = 0;
-        if (net_parse_http_date(date_ptr, &epoch) == 0 && epoch > 0) {
-            net_set_network_time_epoch(epoch);
-        }
-    }
-
-    memmove(out_buf, out_buf + hdr_len, body_len);
-    if (out_len) *out_len = body_len;
-
-    return 0;
-}
-
-int net_download_to_fs(uint32_t server_ip, uint16_t port, const char* path, const char* local_path) {
-    if (!path || !local_path) return -1;
-
-    size_t buf_cap = 6 * 1024 * 1024; // 6 MiB buffer (accommodates 4.2 MB WAD and large packages)
-    uint8_t* buf = (uint8_t*)kmalloc(buf_cap);
-    if (!buf) {
-        serial_puts("[-] net_download: Out of kernel memory\n");
-        return -2;
-    }
-
-    size_t actual_len = 0;
-    int res = -1;
-
-    // Attempt live network HTTP download via active network controller
-    if (nic_is_active()) {
-        res = net_http_get(server_ip, port, path, "10.0.2.2:8080", buf, buf_cap, &actual_len);
-    }
-
-    if (res != 0 || actual_len == 0) {
-        serial_puts("[-] net_download: Network transfer failed\n");
-        kfree(buf);
-        return (res != 0) ? res : -3;
-    }
-
-    int write_res = seldfs_write_file(local_path, buf, actual_len);
-    kfree(buf);
-
-    if (write_res != 0) {
-        serial_puts("[-] net_download: SeldFS write failed\n");
-        return -4;
-    }
-
-    return 0;
 }
 
 void net_init(void) {

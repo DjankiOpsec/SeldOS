@@ -2,7 +2,7 @@
  * SeldOS - Humboldt Kernel Project
  * In-Memory Ramdisk (Initrd) Driver Implementation
  * Multiboot 1 / Multiboot 2 module parser and memory-backed block I/O.
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #include "ramdisk.h"
@@ -23,18 +23,38 @@ extern const uint8_t disk_blob_start[] __attribute__((weak));
 extern const uint8_t disk_blob_end[] __attribute__((weak));
 extern const uint64_t disk_blob_size __attribute__((weak));
 
+#define RAMDISK_EXPAND_CAPACITY (34 * 1024 * 1024) // 34 MiB capacity (65536 data blocks + 2081 metadata blocks)
+#define RAMDISK_PAGE_SIZE 4096
+#define RAMDISK_MAX_PAGES (RAMDISK_EXPAND_CAPACITY / RAMDISK_PAGE_SIZE) // 8704 pages
+
+static uint8_t* s_sparse_pages[RAMDISK_MAX_PAGES];
+static uint8_t* s_initial_base = NULL;
+static uint64_t s_initial_size = 0;
+static int s_is_sparse = 0;
+
 void ramdisk_init(uint64_t mb_magic, uint64_t mb_info_addr) {
+    if (s_ramdisk.is_present && s_is_sparse) {
+        return;
+    }
     s_ramdisk.phys_start = 0;
     s_ramdisk.phys_end = 0;
     s_ramdisk.size = 0;
     s_ramdisk.virt_base = NULL;
     s_ramdisk.is_present = 0;
+    s_is_sparse = 0;
+    s_initial_base = NULL;
+    s_initial_size = 0;
+    memset(s_sparse_pages, 0, sizeof(s_sparse_pages));
 
-    if (disk_blob_start && disk_blob_end > disk_blob_start) {
+    if (disk_blob_start && (uintptr_t)disk_blob_end > (uintptr_t)disk_blob_start) {
         s_ramdisk.virt_base = (uint8_t*)disk_blob_start;
         s_ramdisk.size = (uint64_t)(disk_blob_end - disk_blob_start);
-        s_ramdisk.phys_start = 0;
-        s_ramdisk.phys_end = s_ramdisk.size;
+#if defined(__riscv)
+        s_ramdisk.phys_start = (uint64_t)disk_blob_start - KERNEL_VIRT_OFFSET + 0x80000000ULL;
+#else
+        s_ramdisk.phys_start = (uint64_t)disk_blob_start - KERNEL_VIRT_OFFSET;
+#endif
+        s_ramdisk.phys_end = s_ramdisk.phys_start + s_ramdisk.size;
         s_ramdisk.is_present = 1;
         serial_puts("[+] Ramdisk: Embedded SeldFS storage blob active (Size: ");
         serial_print_dec((uint32_t)(s_ramdisk.size / 1024));
@@ -96,50 +116,20 @@ void ramdisk_init(uint64_t mb_magic, uint64_t mb_info_addr) {
     }
 }
 
-#define RAMDISK_EXPAND_CAPACITY (34 * 1024 * 1024) // 34 MiB capacity (65536 data blocks + 2081 metadata blocks)
-
 void ramdisk_expand_in_ram(void) {
     if (!s_ramdisk.is_present || !s_ramdisk.virt_base || s_ramdisk.size >= RAMDISK_EXPAND_CAPACITY) {
         return;
     }
 
-    size_t target_size = RAMDISK_EXPAND_CAPACITY;
-    size_t target_frames = target_size / PAGE_SIZE;
-    void* new_phys = pmm_alloc_frames(target_frames);
+    s_initial_base = s_ramdisk.virt_base;
+    s_initial_size = s_ramdisk.size;
+    memset(s_sparse_pages, 0, sizeof(s_sparse_pages));
+    s_is_sparse = 1;
+    s_ramdisk.size = RAMDISK_EXPAND_CAPACITY;
 
-    if (!new_phys) {
-        // Fallback to 16 MiB if 34 MiB contiguous is not available
-        target_size = 16 * 1024 * 1024;
-        target_frames = target_size / PAGE_SIZE;
-        if (target_size > s_ramdisk.size) {
-            new_phys = pmm_alloc_frames(target_frames);
-        }
-    }
-
-    if (!new_phys) {
-        serial_puts("[-] Ramdisk: Unable to allocate expanded buffer, retaining packed image.\n");
-        return;
-    }
-
-    uint8_t* new_virt = (uint8_t*)phys_to_virt((uint64_t)new_phys);
-    memset(new_virt, 0, target_size);
-    memcpy(new_virt, s_ramdisk.virt_base, s_ramdisk.size);
-
-    // Free original frames if valid
-    if (s_ramdisk.phys_start != 0 && s_ramdisk.phys_end > s_ramdisk.phys_start) {
-        size_t old_start_frame = s_ramdisk.phys_start / PAGE_SIZE;
-        size_t old_count = (s_ramdisk.phys_end - s_ramdisk.phys_start + PAGE_SIZE - 1) / PAGE_SIZE;
-        pmm_free_frames((void*)(old_start_frame * PAGE_SIZE), old_count);
-    }
-
-    s_ramdisk.phys_start = (uint64_t)new_phys;
-    s_ramdisk.phys_end = (uint64_t)new_phys + target_size;
-    s_ramdisk.size = target_size;
-    s_ramdisk.virt_base = new_virt;
-
-    serial_puts("[+] Ramdisk: Expanded in RAM to ");
-    serial_print_dec((uint32_t)(target_size / (1024 * 1024)));
-    serial_puts(" MiB (Full SeldFS Read/Write capability online)\n");
+    serial_puts("[+] Ramdisk: Sparse On-Demand Ramdisk initialized (Capacity: ");
+    serial_print_dec((uint32_t)(s_ramdisk.size / (1024 * 1024)));
+    serial_puts(" MiB, On-Demand Allocation active)\n");
 }
 
 struct ramdisk_info* ramdisk_get_info(void) {
@@ -147,33 +137,118 @@ struct ramdisk_info* ramdisk_get_info(void) {
 }
 
 int ramdisk_read_sectors(uint32_t lba, uint32_t count, void* buffer) {
-    if (!s_ramdisk.is_present || !s_ramdisk.virt_base || !buffer) {
+    if (!s_ramdisk.is_present || !buffer) {
         return -1;
     }
+    if (count == 0) return 0;
 
     uint64_t offset = (uint64_t)lba * 512;
     uint64_t bytes = (uint64_t)count * 512;
 
-    if (offset + bytes > s_ramdisk.size) {
+    if (offset + bytes > s_ramdisk.size || offset + bytes < offset) {
         return -1;
     }
 
-    memcpy(buffer, s_ramdisk.virt_base + offset, bytes);
+    if (!s_is_sparse) {
+        if (!s_ramdisk.virt_base) return -1;
+        memcpy(buffer, s_ramdisk.virt_base + offset, bytes);
+        return 0;
+    }
+
+    uint8_t* dst = (uint8_t*)buffer;
+    uint64_t cur_offset = offset;
+    uint64_t remaining = bytes;
+
+    while (remaining > 0) {
+        size_t page_idx = (size_t)(cur_offset / RAMDISK_PAGE_SIZE);
+        if (page_idx >= RAMDISK_MAX_PAGES) return -1;
+
+        size_t offset_in_page = (size_t)(cur_offset % RAMDISK_PAGE_SIZE);
+        size_t chunk_len = RAMDISK_PAGE_SIZE - offset_in_page;
+        if (chunk_len > remaining) {
+            chunk_len = (size_t)remaining;
+        }
+
+        if (s_sparse_pages[page_idx] != NULL) {
+            memcpy(dst, s_sparse_pages[page_idx] + offset_in_page, chunk_len);
+        } else if (cur_offset < s_initial_size && s_initial_base != NULL) {
+            size_t avail = (cur_offset + chunk_len <= s_initial_size) ? chunk_len : (size_t)(s_initial_size - cur_offset);
+            memcpy(dst, s_initial_base + cur_offset, avail);
+            if (chunk_len > avail) {
+                memset(dst + avail, 0, chunk_len - avail);
+            }
+        } else {
+            memset(dst, 0, chunk_len);
+        }
+
+        dst += chunk_len;
+        cur_offset += chunk_len;
+        remaining -= chunk_len;
+    }
+
     return 0;
 }
 
 int ramdisk_write_sectors(uint32_t lba, uint32_t count, const void* buffer) {
-    if (!s_ramdisk.is_present || !s_ramdisk.virt_base || !buffer) {
+    if (!s_ramdisk.is_present || !buffer) {
         return -1;
     }
+    if (count == 0) return 0;
 
     uint64_t offset = (uint64_t)lba * 512;
     uint64_t bytes = (uint64_t)count * 512;
 
-    if (offset + bytes > s_ramdisk.size) {
+    if (offset + bytes > s_ramdisk.size || offset + bytes < offset) {
         return -1;
     }
 
-    memcpy(s_ramdisk.virt_base + offset, buffer, bytes);
+    if (!s_is_sparse) {
+        if (!s_ramdisk.virt_base) return -1;
+        memcpy(s_ramdisk.virt_base + offset, buffer, bytes);
+        return 0;
+    }
+
+    const uint8_t* src = (const uint8_t*)buffer;
+    uint64_t cur_offset = offset;
+    uint64_t remaining = bytes;
+
+    while (remaining > 0) {
+        size_t page_idx = (size_t)(cur_offset / RAMDISK_PAGE_SIZE);
+        if (page_idx >= RAMDISK_MAX_PAGES) return -1;
+
+        size_t offset_in_page = (size_t)(cur_offset % RAMDISK_PAGE_SIZE);
+        size_t chunk_len = RAMDISK_PAGE_SIZE - offset_in_page;
+        if (chunk_len > remaining) {
+            chunk_len = (size_t)remaining;
+        }
+
+        if (s_sparse_pages[page_idx] == NULL) {
+            void* frame = pmm_alloc_frame();
+            if (!frame) {
+                serial_puts("[-] Ramdisk: Out of memory allocating sparse sector frame\n");
+                return -1;
+            }
+            uint8_t* frame_virt = (uint8_t*)phys_to_virt((uint64_t)frame);
+            uint64_t page_start = (uint64_t)page_idx * RAMDISK_PAGE_SIZE;
+
+            if (page_start < s_initial_size && s_initial_base != NULL) {
+                size_t avail = (page_start + RAMDISK_PAGE_SIZE <= s_initial_size) ? RAMDISK_PAGE_SIZE : (size_t)(s_initial_size - page_start);
+                memcpy(frame_virt, s_initial_base + page_start, avail);
+                if (avail < RAMDISK_PAGE_SIZE) {
+                    memset(frame_virt + avail, 0, RAMDISK_PAGE_SIZE - avail);
+                }
+            } else {
+                memset(frame_virt, 0, RAMDISK_PAGE_SIZE);
+            }
+            s_sparse_pages[page_idx] = frame_virt;
+        }
+
+        memcpy(s_sparse_pages[page_idx] + offset_in_page, src, chunk_len);
+
+        src += chunk_len;
+        cur_offset += chunk_len;
+        remaining -= chunk_len;
+    }
+
     return 0;
 }

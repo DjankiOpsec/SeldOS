@@ -6,7 +6,7 @@
  * Real running initialization code lines, animated spinner, progress bar,
  * and high-fidelity Humboldt Penguin logo from seldos_logo.svgz.
  * Zero artificial latency (non-blocking).
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #include "boot_anim.h"
@@ -105,7 +105,7 @@ void boot_anim_init(void) {
     boot_anim_draw_logo(10, 10);
 
     // 3. Render Linux-style OS metadata header
-    vga_draw_string_at(11, 0, "SELD OS v0.1-sec (Humboldt Kernel Project) - GNU GPLv3", 15);
+    vga_draw_string_at(11, 0, "SELD OS v0.1-sec (Humboldt Kernel Project) - AGPLv3 Hardened", 15);
     vga_draw_string_at(11, 1, "x86_64 Long Mode Supervisor | 680x334 Display | 39-Palette", 30);
 
     uint32_t isize = 0;

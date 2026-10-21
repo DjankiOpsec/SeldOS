@@ -4,7 +4,7 @@
  *
  * Kernel Dynamic Memory Allocator (kmalloc / kfree) Implementation
  * Free-list first-fit allocator backed by PMM pages.
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #include "kmalloc.h"
@@ -14,7 +14,7 @@
 #include "serial.h"
 #include "panic.h"
 
-#define HEAP_INITIAL_PAGES 256  // 1 MiB initial heap
+#define HEAP_INITIAL_PAGES 64   // 256 KiB initial heap (reduced from 1024 KiB)
 
 static struct block_header* heap_head = NULL;
 static uint64_t heap_base = 0;
@@ -22,14 +22,32 @@ static uint64_t heap_total_size = 0;
 static size_t active_allocs = 0;
 
 void kmalloc_init(void) {
-    void* initial_frames = pmm_alloc_frames(HEAP_INITIAL_PAGES);
+    size_t initial_pages = HEAP_INITIAL_PAGES;
+    void* initial_frames = pmm_alloc_frames(initial_pages);
+    if (!initial_frames) {
+        // Fallback for extreme low-memory environments
+        initial_pages = 32;
+        initial_frames = pmm_alloc_frames(initial_pages);
+        if (!initial_frames) {
+            initial_pages = 16;
+            initial_frames = pmm_alloc_frames(initial_pages);
+            if (!initial_frames) {
+                initial_pages = 8;
+                initial_frames = pmm_alloc_frames(initial_pages);
+                if (!initial_frames) {
+                    initial_pages = 4;
+                    initial_frames = pmm_alloc_frames(initial_pages);
+                }
+            }
+        }
+    }
     if (!initial_frames) {
         serial_puts("[-] FATAL: Failed to allocate initial heap pages!\n");
         return;
     }
 
     heap_base = (uint64_t)phys_to_virt((uint64_t)initial_frames);
-    heap_total_size = HEAP_INITIAL_PAGES * PAGE_SIZE;
+    heap_total_size = initial_pages * PAGE_SIZE;
 
     heap_head = (struct block_header*)heap_base;
     heap_head->magic = KMALLOC_MAGIC;
@@ -66,22 +84,67 @@ static void split_block(struct block_header* block, size_t size) {
 }
 
 static void merge_blocks(struct block_header* block) {
-    // Merge with next block if free
-    if (block->next && block->next->is_free) {
+    // Merge with next block if free and strictly contiguous in memory
+    if (block->next && block->next->is_free &&
+        ((uint8_t*)block + BLOCK_HEADER_SIZE + block->size == (uint8_t*)block->next)) {
+        block->next->magic = 0;
         block->size += BLOCK_HEADER_SIZE + block->next->size;
         block->next = block->next->next;
         if (block->next) {
             block->next->prev = block;
         }
     }
-    // Merge with prev block if free
-    if (block->prev && block->prev->is_free) {
+    // Merge with prev block if free and strictly contiguous in memory
+    if (block->prev && block->prev->is_free &&
+        ((uint8_t*)block->prev + BLOCK_HEADER_SIZE + block->prev->size == (uint8_t*)block)) {
+        block->magic = 0;
         block->prev->size += BLOCK_HEADER_SIZE + block->size;
         block->prev->next = block->next;
         if (block->next) {
             block->next->prev = block->prev;
         }
     }
+}
+
+static struct block_header* heap_grow(size_t min_bytes) {
+    size_t min_pages = (min_bytes + BLOCK_HEADER_SIZE + PAGE_SIZE - 1) / PAGE_SIZE;
+    size_t alloc_pages = min_pages;
+    if (alloc_pages < 16) {
+        alloc_pages = 16;
+    }
+
+    void* new_pages = pmm_alloc_frames(alloc_pages);
+    if (!new_pages && alloc_pages > min_pages) {
+        // Fallback to minimal required pages if 16 contiguous frames unavailable
+        alloc_pages = min_pages;
+        new_pages = pmm_alloc_frames(alloc_pages);
+    }
+    if (!new_pages) {
+        return NULL; // Out of physical frames
+    }
+
+    // Append new block in Higher-Half Direct Map
+    struct block_header* new_block = (struct block_header*)phys_to_virt((uint64_t)new_pages);
+    new_block->magic = KMALLOC_MAGIC;
+    new_block->is_free = 1;
+    new_block->size = (alloc_pages * PAGE_SIZE) - BLOCK_HEADER_SIZE;
+    new_block->next = NULL;
+    new_block->prev = NULL;
+
+    // Find tail
+    struct block_header* tail = heap_head;
+    while (tail && tail->next) {
+        tail = tail->next;
+    }
+    if (tail) {
+        tail->next = new_block;
+        new_block->prev = tail;
+    } else {
+        heap_head = new_block;
+    }
+
+    heap_total_size += alloc_pages * PAGE_SIZE;
+    return new_block;
 }
 
 void* kmalloc(size_t size) {
@@ -107,35 +170,11 @@ void* kmalloc(size_t size) {
         curr = curr->next;
     }
 
-    // Try expanding heap if exhausted
-    size_t needed_pages = (size + BLOCK_HEADER_SIZE + PAGE_SIZE - 1) / PAGE_SIZE;
-    if (needed_pages < 16) needed_pages = 16;
-
-    void* new_pages = pmm_alloc_frames(needed_pages);
-    if (!new_pages) {
-        return NULL; // Out of physical frames
+    // Dynamic heap expansion via heap_grow
+    struct block_header* new_block = heap_grow(size);
+    if (!new_block) {
+        return NULL;
     }
-
-    // Append new block in Higher-Half Direct Map
-    struct block_header* new_block = (struct block_header*)phys_to_virt((uint64_t)new_pages);
-    new_block->magic = KMALLOC_MAGIC;
-    new_block->is_free = 1;
-    new_block->size = (needed_pages * PAGE_SIZE) - BLOCK_HEADER_SIZE;
-    new_block->next = NULL;
-
-    // Find tail
-    struct block_header* tail = heap_head;
-    while (tail && tail->next) {
-        tail = tail->next;
-    }
-    if (tail) {
-        tail->next = new_block;
-        new_block->prev = tail;
-    } else {
-        heap_head = new_block;
-    }
-
-    heap_total_size += needed_pages * PAGE_SIZE;
 
     split_block(new_block, size);
     new_block->is_free = 0;
@@ -157,6 +196,13 @@ void kfree(void* ptr) {
     struct block_header* block = (struct block_header*)((uint8_t*)ptr - BLOCK_HEADER_SIZE);
     if (block->magic != KMALLOC_MAGIC) {
         serial_puts("[-] ERROR: kfree corrupted block or invalid pointer at ");
+        serial_print_hex((uint64_t)ptr);
+        serial_puts("\n");
+        return;
+    }
+
+    if (block->is_free) {
+        serial_puts("[-] ERROR: kfree double free detected at ");
         serial_print_hex((uint64_t)ptr);
         serial_puts("\n");
         return;

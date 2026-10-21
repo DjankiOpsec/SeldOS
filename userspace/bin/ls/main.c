@@ -2,7 +2,7 @@
  * SeldOS - Humboldt Kernel Project
  * SNL Coreutils: ls - Directory and File Lister
  * Lists files on SeldFS with size, block count, and SHA-256 hash using listdir / stat.
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #include "stdio.h"

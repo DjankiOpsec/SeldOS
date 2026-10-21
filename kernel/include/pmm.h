@@ -4,7 +4,7 @@
  *
  * Physical Memory Manager (PMM) Interface
  * Bitmap frame allocator for 4KiB physical pages.
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #ifndef SELD_PMM_H

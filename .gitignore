@@ -6,3 +6,8 @@ __pycache__/
 tools/host_diode/src/
 tools/host_diode/pkg/
 iso/boot/grub/i386-pc/
+trailer_build/
+pytest.ini
+.pytest_cache/
+tests/
+site/

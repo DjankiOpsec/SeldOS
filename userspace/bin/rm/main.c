@@ -1,13 +1,18 @@
 /*
  * SeldOS - Humboldt Kernel Project
  * SNL Coreutils: rm - Remove Files from SeldFS Storage
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #include "stdio.h"
 #include "unistd.h"
+#include "seld.h"
 
 int main(int argc, char* argv[]) {
+    seld_pledge(PLEDGE_STDIO | PLEDGE_WPATH);
+    seld_unveil("/", "rwc");
+    seld_unveil(NULL, NULL);
+
     if (argc < 2) {
         printf("Usage: rm <file...>\n");
         return 1;

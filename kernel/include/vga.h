@@ -92,5 +92,6 @@ uint32_t* vga_get_fb_ptr(void);
 void vga_emergency_text_write(int col, int row, const char* text, uint8_t color_attr);
 void vga_set_tempest_dither(int enabled);
 int  vga_get_tempest_dither(void);
+void vga_draw_otp_text(size_t col, size_t row, const char* str, uint32_t seed);
 
 #endif

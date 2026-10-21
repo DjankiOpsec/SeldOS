@@ -2,7 +2,7 @@
  * SeldOS - Humboldt Kernel Project
  * In-Memory Ramdisk (Initrd) Subsystem
  * Supports Multiboot 1 and Multiboot 2 module loading.
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #ifndef SELD_RAMDISK_H

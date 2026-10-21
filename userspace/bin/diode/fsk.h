@@ -2,7 +2,7 @@
  * SeldOS - Humboldt Kernel Project
  * Sovereign Acoustic Air-Gap FSK (Frequency Shift Keying) Modulator
  * 1200 Hz (Space) / 2200 Hz (Mark) Synchronous Bitstream via PC Speaker / Sound Card
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #ifndef _FSK_H_

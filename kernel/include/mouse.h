@@ -1,7 +1,7 @@
 /*
  * SeldOS - Humboldt Kernel Project
  * PS/2 & VMMouse Touchscreen/Mouse Subsystem
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #ifndef SELD_MOUSE_H

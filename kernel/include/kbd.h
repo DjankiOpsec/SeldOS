@@ -40,4 +40,8 @@ void kbd_set_deadman(int enable);
 int  kbd_get_deadman(void);
 int  kbd_is_deadman_armed(void);
 
+/* OpSec Peripheral Blackout: Keyboard LED Extinguisher */
+void kbd_set_leds(uint8_t led_mask);
+void kbd_blackout_leds(void);
+
 #endif /* SELD_KBD_H */

@@ -4,7 +4,7 @@ SeldOS - Humboldt Kernel Project
 SeldFS Disk Image Provisioning Tool (scripts/mkdisk.py)
 Formats a raw disk image with SeldFS (v2 with allocation bitmap)
 and provisions all compiled ELF-64 userland binaries (/bin/*) and assets.
-GPLv3 Licensed.
+GNU AGPLv3 Licensed - Humboldt Underground.
 """
 
 import sys
@@ -17,7 +17,7 @@ SECTOR_SIZE = 512
 
 SELDFS_MAGIC = 0x53454C44  # "SELD" in ASCII
 SELDFS_VERSION = 2
-SELDFS_MAX_FILES = 32
+SELDFS_MAX_FILES = 64
 SELDFS_MAX_FILENAME = 32
 SELDFS_TOTAL_DATA_BLOCKS = 65536
 SELDFS_BITMAP_SECTORS = 16
@@ -199,7 +199,16 @@ def main():
         "purge",
         "stealth",
         "diode",
-        "pinpad"
+        "pinpad",
+        "otp",
+        "hi",
+        "grep",
+        "head",
+        "tail",
+        "less",
+        "kill",
+        "clip",
+        "drop"
     ]
 
     files_to_write = []
@@ -250,7 +259,11 @@ def main():
     corpus_path = "tools/host_test/data/corpus.txt"
     if os.path.exists(corpus_path):
         with open(corpus_path, "rb") as cf:
-            files_to_write.append(("oracle.txt", cf.read()))
+            # Provision compact high-entropy 128 KiB sacred corpus (~20,900 words)
+            files_to_write.append(("oracle.txt", cf.read(131072)))
+
+    # Permanently provision PC mode (clean 85x20 desktop terminal, NO mobile buttons)
+    files_to_write.append(("pcmode", b"1\n"))
 
     create_seldfs_image(output_disk, files_to_write, compact=compact)
 

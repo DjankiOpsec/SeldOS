@@ -2,7 +2,7 @@
  * SeldOS - Humboldt Kernel Project
  * Tor Browser (OpSec Sovereign Edition)
  * Privacy-Hardened HTTP/1.1 Client Engine
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #ifndef SELD_TOR_HTTP_H

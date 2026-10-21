@@ -4,7 +4,7 @@
  *
  * Intel e1000 Gigabit Ethernet Network Interface Driver Implementation
  * Supports Intel 82540EP (QEMU/VBox) & compatible Gigabit controllers.
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #include "e1000.h"

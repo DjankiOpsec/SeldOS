@@ -1,7 +1,7 @@
 /*
  * SeldOS - Humboldt Kernel Project
  * PS/2 Mouse & Touchscreen Subsystem Driver
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #include "mouse.h"

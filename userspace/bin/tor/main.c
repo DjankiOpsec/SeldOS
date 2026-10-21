@@ -2,7 +2,7 @@
  * SeldOS - Humboldt Kernel Project
  * Tor Browser (OpSec Sovereign Edition)
  * Real Interactive Privacy Browser with HTML Flow Engine & SOCKS5 Routing
- * Humboldt 680x334 Resolution | 39-Color Palette | GPLv3 Licensed.
+ * Humboldt 680x334 Resolution | 39-Color Palette | GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #include <stdio.h>
@@ -765,7 +765,7 @@ static void render_page(void) {
         put_pixel(c, 75, COL_NAV_BORDER);
     }
 
-    if (s_used_tor == 1 || strstr(s_current_url, ".onion") != NULL) {
+    if (s_used_tor == 1) {
         draw_text_5x7(10, 60, "CIRCUIT:", COL_GOLD_ACCENT);
         if (strstr(s_current_url, DDG_ONION_HOST) != NULL) {
             draw_text_5x7(60, 60, "[SeldOS] -> [SOCKS5] -> [Tor Network] -> [duckduckgo.onion]", COL_TEXT_WHITE);
@@ -1071,7 +1071,12 @@ int main(int argc, char* argv[]) {
         struct seld_kbd_event kev;
         while (seld_poll_key(&kev) > 0) {
             uint8_t sc = kev.scancode;
-            if (sc == 0x2A || sc == 0x36) {
+            /* Left Shift (0x2A): Dead Man's Grip ONLY */
+            if (sc == 0x2A) {
+                continue;
+            }
+            /* Right Shift (0x36): Typing modifier */
+            if (sc == 0x36) {
                 s_shift_down = kev.pressed;
                 continue;
             }

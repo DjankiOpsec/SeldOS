@@ -2,7 +2,7 @@
  * SeldOS - Humboldt Kernel Project
  * SNL C Standard Library (libsnl)
  * Native SNL Syscall Interface & Structures
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #ifndef _SELD_H_
@@ -78,6 +78,20 @@
 #define SYS_OPSEC_GET_HW_TELEMETRY 67
 #define SYS_NET_SET_BOOT_DELAY   68
 #define SYS_NET_GET_BOOT_DELAY   69
+#define SYS_GETRANDOM            70
+#define SYS_OPSEC_BLACKOUT       71
+#define SYS_OPSEC_FIRE_KILL      72
+#define SYS_OPSEC_OTP_DRAW       73
+#define SYS_REDIRECT_STDOUT      74
+#define SYS_REDIRECT_STDIN       75
+#define SYS_KILL                 76
+
+struct seld_otp_request {
+    uint32_t col;
+    uint32_t row;
+    uint32_t seed;
+    char text[128];
+};
 
 /* Seld-Unveil Permission Flags (OpenBSD-style Ring 3 Filesystem Sandboxing) */
 #define UNVEIL_READ         0x01  /* Read file: open(O_RDONLY), readfile, stat */
@@ -302,5 +316,12 @@ struct seld_hw_telemetry {
 int      seld_get_hw_telemetry(struct seld_hw_telemetry* info);
 int      seld_set_boot_delay(int enable, uint32_t delay_ms);
 int      seld_get_boot_delay(void);
+int      seld_getrandom(void* buf, size_t len);
+int      seld_opsec_blackout(void);
+void     seld_opsec_fire_kill(void);
+int      seld_opsec_otp_draw(uint32_t col, uint32_t row, const char* text, uint32_t seed);
+int      seld_redirect_stdout(int fd);
+int      seld_redirect_stdin(int fd);
+int      seld_kill(uint32_t pid, int sig);
 
 #endif /* _SELD_H_ */

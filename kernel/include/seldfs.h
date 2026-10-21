@@ -4,7 +4,7 @@
  *
  * SeldFS - Hardened Ring 0 Simple Block File System Interface
  * Flat inode structure with magic signature, direct block mapping, and atomic flush.
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #ifndef SELD_FS_H
@@ -14,7 +14,7 @@
 #include <stddef.h>
 
 #define SELDFS_MAGIC 0x53454C44 // "SELD" in ASCII
-#define SELDFS_MAX_FILES 32
+#define SELDFS_MAX_FILES 64
 #define SELDFS_MAX_FILENAME 32
 #define SELDFS_BLOCK_SIZE 512
 #define SELDFS_DATA_BLOCKS_PER_FILE 32768 // 16 MiB max per file

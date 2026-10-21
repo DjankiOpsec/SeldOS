@@ -4,7 +4,7 @@
  *
  * Fast System Call (SYSCALL / SYSRET) Interface
  * MSR Initialization, Register Conventions, and Entry Point.
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #ifndef SELD_FAST_SYSCALL_H
@@ -83,6 +83,20 @@
 #define SYS_OPSEC_GET_HW_TELEMETRY 67
 #define SYS_NET_SET_BOOT_DELAY   68
 #define SYS_NET_GET_BOOT_DELAY   69
+#define SYS_GETRANDOM            70
+#define SYS_OPSEC_BLACKOUT       71
+#define SYS_OPSEC_FIRE_KILL      72
+#define SYS_OPSEC_OTP_DRAW       73
+#define SYS_REDIRECT_STDOUT      74
+#define SYS_REDIRECT_STDIN       75
+#define SYS_KILL                 76
+
+struct seld_otp_request {
+    uint32_t col;
+    uint32_t row;
+    uint32_t seed;
+    char text[128];
+};
 
 struct seld_hw_telemetry {
     char manufacturer[32];
@@ -96,6 +110,8 @@ struct seld_hw_telemetry {
 };
 
 void cpu_flush_microarchitecture(void);
+void opsec_peripheral_blackout(void);
+void opsec_fire_and_kill(void);
 
 /* Seld-Unveil Permission Flags (OpenBSD-style Ring 3 Filesystem Sandboxing) */
 #define UNVEIL_READ         0x01  /* Read file: open(O_RDONLY), readfile, stat */
@@ -208,6 +224,7 @@ void syscall_init_fast(void);
 int jump_to_userspace(void (*user_func)(void), void* user_stack_top, uint64_t user_cr3);
 void user_exit_to_kernel(uint64_t exit_code);
 int elf_load_and_run(const char* path, int argc, char* argv[]);
+uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4);
 void fast_sys_reboot(void) __attribute__((noreturn));
 void fast_sys_poweroff(void) __attribute__((noreturn));
 

@@ -2,7 +2,7 @@
  * SeldOS - Humboldt Kernel Project
  * SeldTLS - Native Sovereign TLS 1.3 Subsystem
  * Curve25519 / X25519 Implementation (RFC 7748)
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #include "seld_x25519.h"

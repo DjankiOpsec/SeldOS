@@ -9,7 +9,7 @@
  * 0x18: User Data 64 (DPL 3, RPL 3 = 0x1B)
  * 0x20: User Code 64 (DPL 3, RPL 3 = 0x23)
  * 0x28: TSS 64-bit Descriptor (16 bytes)
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #include "gdt.h"

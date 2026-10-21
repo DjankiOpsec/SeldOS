@@ -2,7 +2,7 @@
  * SeldOS - Humboldt Kernel Project
  * SeldTLS - Native Sovereign TLS 1.3 Subsystem
  * AES-128 and AES-GCM (NIST SP 800-38D) Engine
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #ifndef _SELD_AES128_GCM_H_

@@ -4,7 +4,7 @@
  *
  * Supervisor Thread Scheduler (Ring 0 Preemptive & Cooperative Threads) Implementation
  * Thread context allocation on kmalloc heap with task_switch_asm.
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #include "sched.h"
@@ -366,3 +366,31 @@ int sched_purge_unauthorized_tasks(void) {
     spin_unlock_irqrestore(&sched_lock, rflags);
     return killed;
 }
+
+int sched_kill_task(uint32_t pid) {
+    uint64_t rflags = spin_lock_irqsave(&sched_lock);
+    for (size_t i = 1; i < MAX_TASKS; i++) {
+        if (tasks[i].id == pid && tasks[i].state != TASK_UNUSED && tasks[i].state != TASK_TERMINATED) {
+            tasks[i].state = TASK_TERMINATED;
+            if (i == current_task_idx) {
+                spin_unlock_irqrestore(&sched_lock, rflags);
+                serial_puts("[+] Sched: Current task terminated itself PID ");
+                serial_print_dec((uint64_t)pid);
+                serial_puts("\n");
+                sched_exit();
+                return 0;
+            }
+            if (tasks[i].stack_base) {
+                memset(tasks[i].stack_base, 0, TASK_STACK_SIZE);
+            }
+            spin_unlock_irqrestore(&sched_lock, rflags);
+            serial_puts("[+] Sched: Terminated task PID ");
+            serial_print_dec((uint64_t)pid);
+            serial_puts("\n");
+            return 0;
+        }
+    }
+    spin_unlock_irqrestore(&sched_lock, rflags);
+    return -1;
+}
+

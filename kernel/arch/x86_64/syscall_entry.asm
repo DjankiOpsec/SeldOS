@@ -1,7 +1,7 @@
 ; SeldOS Fast SYSCALL / SYSRET Assembly Entry
 ; Saves user RSP, switches to TSS.RSP0 stack, saves registers, calls C handler,
 ; and returns to Ring 3 via SYSRETQ. Supports nested Ring 3 executions (SYS_SPAWN).
-; GPLv3 Licensed.
+; GNU AGPLv3 Licensed - Humboldt Underground.
 
 bits 64
 section .text

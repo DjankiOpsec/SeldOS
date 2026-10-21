@@ -3,7 +3,7 @@
  * Copyright (C) 2026 Free Software Foundation, Inc.
  *
  * RISC-V 64-bit Supervisor Trap Handling & Syscall Vector Dispatcher
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #include <stdint.h>
@@ -12,6 +12,8 @@
 #include "serial.h"
 #include "fast_syscall.h"
 #include "pit.h"
+#include "pmm.h"
+#include "string.h"
 
 struct trap_frame {
     uint64_t ra;      // 0*8
@@ -82,6 +84,27 @@ void riscv_trap_handler(struct trap_frame* tf) {
         return;
     }
 
+    if (ex == 12 || ex == 13 || ex == 15) { // Instruction / Load / Store Page Fault
+        uint64_t fault_addr = tf->stval;
+        uint64_t pml4_phys = vmm_get_active_root();
+        if (pml4_phys != vmm_get_kernel_pml4() &&
+            fault_addr >= USER_STACK_BOTTOM && fault_addr < USER_STACK_PAGE) {
+            uint64_t page_va = fault_addr & ~0xFFFULL;
+            void* frame_phys = pmm_alloc_frame();
+            if (frame_phys) {
+                memset(phys_to_virt((uint64_t)frame_phys), 0, PAGE_SIZE);
+                uint64_t* pml4_virt = (uint64_t*)phys_to_virt(pml4_phys);
+                if (vmm_map_page(pml4_virt, page_va, (uint64_t)frame_phys,
+                                 VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE | VMM_FLAG_USER | VMM_FLAG_NO_EXECUTE) == 0) {
+                    __asm__ volatile ("sfence.vma %0, x0" : : "r"(page_va) : "memory");
+                    return;
+                } else {
+                    pmm_free_frame(frame_phys);
+                }
+            }
+        }
+    }
+
     // Unhandled exception diagnostic output
     serial_puts("\n[!] FATAL CPU EXCEPTION: scause=0x");
     serial_print_hex(tf->scause);
@@ -91,6 +114,15 @@ void riscv_trap_handler(struct trap_frame* tf) {
     serial_print_hex(tf->stval);
     serial_puts(" sstatus=0x");
     serial_print_hex(tf->sstatus);
+    serial_puts(" ra=0x");
+    serial_print_hex(tf->ra);
+    serial_puts(" sp=0x");
+    serial_print_hex(tf->sp);
+    if (tf->sp >= 0xFFFFFFC000000000ULL || (tf->sp >= 0x80000000ULL && tf->sp < 0x88000000ULL)) {
+        uint64_t* stk = (uint64_t*)tf->sp;
+        serial_puts(" saved_ra=0x");
+        serial_print_hex(stk[1]);
+    }
     serial_puts("\n");
 
     // If fault occurred in U-mode (SPP == 0), terminate the user process cleanly

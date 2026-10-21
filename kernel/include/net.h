@@ -3,7 +3,7 @@
  * Copyright (C) 2026 Free Software Foundation, Inc.
  *
  * OpSec Hardened Network Subsystem Interface (Ethernet / ARP / IPv4 / ICMP)
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #ifndef SELD_NET_H
@@ -182,12 +182,8 @@ int  net_arp_request(uint32_t target_ip);
 int  net_get_arp_table(struct arp_entry* out_entries, size_t max_entries);
 
 int  net_send_ip(uint32_t dest_ip, uint8_t protocol, const void* payload, size_t payload_len);
+int  net_send_ip_ttl(uint32_t dest_ip, uint8_t protocol, const void* payload, size_t payload_len, uint8_t ttl);
 int  net_ping(uint32_t target_ip, uint16_t seq, uint32_t* rtt_ms);
-
-/* TCP & HTTP Client API */
-int  net_http_get(uint32_t server_ip, uint16_t port, const char* path, const char* host,
-                  uint8_t* out_buf, size_t max_out_len, size_t* out_len);
-int  net_download_to_fs(uint32_t server_ip, uint16_t port, const char* path, const char* local_path);
 
 /* Streaming TCP Socket API */
 #define MAX_TCP_SOCKETS 4

@@ -3,7 +3,7 @@
  * SeldTLS - Native Sovereign TLS 1.3 Subsystem
  * AES-128 and AES-GCM (NIST SP 800-38D) Implementation
  * Constant-time and standard-compliant.
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #include "seld_aes128_gcm.h"

@@ -353,15 +353,25 @@ class OpSecGatewayHandler(BaseHTTPRequestHandler):
             self.proxy_external_url(github_tor_url, is_head)
             return
 
-        # DOOM package: Strictly fetch from remote GitHub repository over the Internet
+        # DOOM package: Serve local build/bin/doom first, fallback to GitHub
         if clean_path in ("doom", "bin/doom"):
+            local_doom = os.path.abspath("build/bin/doom")
+            if os.path.exists(local_doom):
+                log(f"SERVE LOCAL PACKAGE 'doom': {local_doom}")
+                self.serve_local_file(local_doom, is_head)
+                return
             github_doom_url = "https://raw.githubusercontent.com/DjankiOpsec/SeldOS/main/build/bin/doom"
             log(f"FETCH PACKAGE 'doom' from official GitHub repository: {github_doom_url}")
             self.proxy_external_url(github_doom_url, is_head)
             return
 
-        # DOOM WAD asset: Strictly fetch from remote GitHub repository over the Internet
+        # DOOM WAD asset: Serve local doom1.wad first, fallback to GitHub
         if clean_path in ("doom1.wad", "wad"):
+            local_wad = os.path.abspath("doom1.wad")
+            if os.path.exists(local_wad):
+                log(f"SERVE LOCAL ASSET 'doom1.wad': {local_wad}")
+                self.serve_local_file(local_wad, is_head)
+                return
             github_wad_url = "https://raw.githubusercontent.com/DjankiOpsec/SeldOS/main/doom1.wad"
             log(f"FETCH ASSET 'doom1.wad' from official GitHub repository: {github_wad_url}")
             self.proxy_external_url(github_wad_url, is_head)

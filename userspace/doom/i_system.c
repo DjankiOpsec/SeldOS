@@ -56,7 +56,7 @@
 #endif
 
 #define DEFAULT_RAM 6 /* MiB */
-#define MIN_RAM     6  /* MiB */
+#define MIN_RAM     3  /* MiB */
 
 
 typedef struct atexit_listentry_s atexit_listentry_t;

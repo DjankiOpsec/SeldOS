@@ -4,7 +4,7 @@
  *
  * ELF-64 Executable and Linkable Format Specification & Loader Interface
  * 64-bit x86_64 ELF loader and segment mapping.
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #ifndef SELD_ELF_H

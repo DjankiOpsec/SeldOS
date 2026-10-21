@@ -3,7 +3,7 @@
  * SNL C Standard Library (libsnl)
  * User-Mode Dynamic Heap Allocator (malloc / free / realloc / calloc)
  * First-Fit with Bidirectional Coalescing & Block Header Integrity.
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #include "stdlib.h"

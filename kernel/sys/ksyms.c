@@ -162,7 +162,7 @@ extern void audio_beep(void);
 extern void vga_putchar(void);
 extern void pic_mask_irq(void);
 extern void pit_sleep_ms(void);
-extern void net_download_to_fs(void);
+extern void net_get_config(void);
 extern void pci_find_class(void);
 extern void pit_get_uptime_sec(void);
 extern void kmalloc(void);
@@ -172,7 +172,7 @@ extern void audio_chime_boot(void);
 extern void tss_set_rsp0(void);
 extern void elf_load_binary(void);
 extern void sha256_final(void);
-extern void net_http_get(void);
+extern void net_set_airgap(void);
 extern void pit_get_uptime_ms(void);
 extern void sched_init(void);
 extern void vmm_map_page(void);
@@ -359,7 +359,7 @@ static const struct kernel_symbol g_kernel_symbols[] = {
     { (uint64_t)&vga_putchar, "vga_putchar", "kernel/drivers/vga.c", 274 },
     { (uint64_t)&pic_mask_irq, "pic_mask_irq", "kernel/sys/idt.c", 124 },
     { (uint64_t)&pit_sleep_ms, "pit_sleep_ms", "kernel/drivers/pit.c", 60 },
-    { (uint64_t)&net_download_to_fs, "net_download_to_fs", "kernel/net/net.c", 1319 },
+    { (uint64_t)&net_get_config, "net_get_config", "kernel/net/net.c", 1900 },
     { (uint64_t)&pci_find_class, "pci_find_class", "kernel/drivers/pci.c", 143 },
     { (uint64_t)&pit_get_uptime_sec, "pit_get_uptime_sec", "kernel/drivers/pit.c", 56 },
     { (uint64_t)&kmalloc, "kmalloc", "kernel/mm/kmalloc.c", 87 },
@@ -369,7 +369,7 @@ static const struct kernel_symbol g_kernel_symbols[] = {
     { (uint64_t)&tss_set_rsp0, "tss_set_rsp0", "kernel/sys/gdt.c", 41 },
     { (uint64_t)&elf_load_binary, "elf_load_binary", "kernel/sys/elf.c", 62 },
     { (uint64_t)&sha256_final, "sha256_final", "kernel/crypto/sha256.c", 115 },
-    { (uint64_t)&net_http_get, "net_http_get", "kernel/net/net.c", 1239 },
+    { (uint64_t)&net_set_airgap, "net_set_airgap", "kernel/net/net.c", 36 },
     { (uint64_t)&pit_get_uptime_ms, "pit_get_uptime_ms", "kernel/drivers/pit.c", 52 },
     { (uint64_t)&sched_init, "sched_init", "kernel/sched/sched.c", 46 },
     { (uint64_t)&vmm_map_page, "vmm_map_page", "kernel/mm/vmm.c", 35 },

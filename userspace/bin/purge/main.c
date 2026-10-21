@@ -1,7 +1,7 @@
 /*
  * SeldOS - Humboldt Kernel Project
  * SNL Userland Utility: purge (/bin/purge)
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #include <stdio.h>

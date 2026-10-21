@@ -1,0 +1,97 @@
+================================================================================
+                    THE SELDOS SOVEREIGN UNDERGROUND LICENSE
+        GNU Affero General Public License v3 (AGPLv3) with Sovereign Rider
+================================================================================
+
+Copyright (C) 2026 The SeldOS Sovereign Project / Humboldt Underground.
+All sovereign rights reserved.
+
+--------------------------------------------------------------------------------
+PART I: THE HUMBOLDT UNDERGROUND SOVEREIGN RIDER (ANTI-GLOWIE & ANTI-ENTERPRISE)
+--------------------------------------------------------------------------------
+
+SeldOS is an uncompromising, sovereign, anti-forensic, zero-trust operating system
+engineered from scratch to eradicate vendor telemetry, corporate bloatware, and
+state-sponsored surveillance.
+
+By running, modifying, distributing, or interacting with SeldOS, you acknowledge
+the following irrevocable sovereign terms:
+
+1. ABSOLUTE COPYLEFT & NO NETWORK LOOPHOLES:
+   In accordance with Section 13 of the GNU AGPLv3, any entity running SeldOS or
+   any derivative work over a network (including LAN, WAN, Tor, VPN, mesh networks,
+   or cloud infrastructure) MUST make the COMPLETE CORRESPONDING SOURCE CODE
+   freely available to ALL users interacting with it, without barriers, paywalls,
+   or NDA.
+
+2. TOTAL PROHIBITION ON SURVEILLANCE & POLICE STATE EXPLOITATION:
+   This software is explicitly FORBIDDEN from being used, deployed, integrated, or
+   analyzed by or on behalf of:
+   - Intelligence and security agencies (including but not limited to CIA, NSA,
+     FSB, GCHQ, Mossad, and their subcontractors).
+   - Entities operating Deep Packet Inspection (DPI), ТСПУ, SORM, PRISM, Pegasus,
+     or any automated mass surveillance / traffic filtering / censorship apparatus.
+   - Closed corporate monopolies seeking to build walled gardens, DRM systems,
+     proprietary hardware locks, or remote kill-switches.
+   Any such use is an immediate, automatic, and irrevocable termination of all
+   rights under this license.
+
+3. ANTI-TIVOIZATION & HARDWARE SOVEREIGNTY:
+   No distributor may package or run this code on hardware that restricts the user
+   from modifying the code, executing custom builds, or verifying the silicon root
+   of trust. Hardware root keys must belong solely to the physical operator of
+   the device.
+
+4. ETERNAL SOVEREIGNTY (NO COMMERCIAL EXCEPTIONS):
+   No commercial licenses, dual-licensing loopholes, closed-source exemptions, or
+   corporate relicensing rights shall ever be granted or sold. SeldOS belongs to the
+   underground.
+
+5. THIRD-PARTY COMPONENTS:
+   The Ring 3 DOOM port located in `userspace/doom/` is originally developed by
+   id Software and licensed under the GNU General Public License version 2 (GPLv2).
+   It is bundled as an isolated userspace user application crossing the syscall
+   boundary and retains its original id Software GPLv2 license.
+
+--------------------------------------------------------------------------------
+PART II: GNU AFFERO GENERAL PUBLIC LICENSE (Version 3, 19 November 2007)
+--------------------------------------------------------------------------------
+
+                    GNU AFFERO GENERAL PUBLIC LICENSE
+                       Version 3, 19 November 2007
+
+ Copyright (C) 2007 Free Software Foundation, Inc. <https://fsf.org/>
+ Everyone is permitted to copy and distribute verbatim copies
+ of this license document, but changing it is not allowed.
+
+                            Preamble
+
+  The GNU Affero General Public License is a free, copyleft license for
+software and other kinds of works, specifically designed to ensure
+cooperation with the community in the case of network server software.
+
+  The licenses for most software and other practical works are designed
+to take away your freedom to share and change the works.  By contrast,
+our general public licenses are intended to guarantee your freedom to
+share and change all versions of a program--to make sure it remains free
+software for all its users.
+
+  When we speak of free software, we are referring to freedom, not
+price.  Our General Public Licenses are designed to make sure that you
+have the freedom to distribute copies of free software (and charge for
+them if you wish), that you receive source code or can get it if you
+want it, that you can change the software or use pieces of it in new
+free programs, and that you know you can do these things.
+
+  Developers that use our indexes, or any other licenses, can specify
+either this license or any later version.
+
+  A program licensed under the GNU Affero General Public License gives
+every user who interacts with it through a computer network the right to
+receive the corresponding source code of the program.
+
+[Full GNU AGPLv3 terms and conditions apply: https://www.gnu.org/licenses/agpl-3.0.txt]
+
+================================================================================
+                           END OF TERMS AND CONDITIONS
+================================================================================

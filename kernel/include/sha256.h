@@ -4,7 +4,7 @@
  *
  * SHA-256 Cryptographic Hash Implementation
  * FIPS 180-4 standard secure hash for system verification and integrity.
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #ifndef SELD_SHA256_H

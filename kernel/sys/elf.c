@@ -5,7 +5,7 @@
  * ELF-64 Binary Loader & Process Address Space Initializer
  * Parses 64-bit ELF executables, establishes user PML4 page tables,
  * enforces W^X permissions on segments, zeroes BSS, and maps user stack.
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #include "elf.h"
@@ -89,17 +89,39 @@ int elf_load_binary(const void* elf_data, size_t data_len, uint64_t** out_pml4_v
     }
     uint64_t user_pml4_phys = virt_to_phys(user_pml4_virt);
 
-    /* 2. Allocate and map user stack at virtual 0x00007FFFFFFFE000ULL (64 KiB total stack) */
-    for (uint64_t va = USER_STACK_BOTTOM; va < USER_STACK_PAGE; va += PAGE_SIZE) {
+    /* 2. Allocate and map initial user stack (reduced to 4 pages / 16 KiB default).
+     * Allocated top-down from USER_STACK_TOP to ensure the initial argument page is present.
+     * In constrained memory environments (e.g. 8 MB RAM), if physical memory is critically low,
+     * we guarantee at least 2 pages (8 KiB) so that Ring 3 /bin/init and /bin/sh can launch.
+     * Additional stack pages down to USER_STACK_BOTTOM are allocated on demand via page fault.
+     */
+    uint64_t initial_stack_bottom = USER_STACK_PAGE - (4 * PAGE_SIZE);
+    int stack_pages_mapped = 0;
+    for (uint64_t va = USER_STACK_PAGE - PAGE_SIZE; ; va -= PAGE_SIZE) {
         void* stack_frame = pmm_alloc_frame();
         if (!stack_frame) {
-            serial_puts("[-] ELF: Failed to allocate physical frame for user stack.\n");
-            vmm_destroy_address_space(user_pml4_virt);
-            return -10;
+            if (stack_pages_mapped < 2) {
+                serial_puts("[-] ELF: Failed to allocate physical frame for user stack.\n");
+                vmm_destroy_address_space(user_pml4_virt);
+                return -10;
+            }
+            break;
         }
         memset(phys_to_virt((uint64_t)stack_frame), 0, PAGE_SIZE);
-        vmm_map_page(user_pml4_virt, va, (uint64_t)stack_frame,
-                     VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE | VMM_FLAG_USER | VMM_FLAG_NO_EXECUTE);
+        if (vmm_map_page(user_pml4_virt, va, (uint64_t)stack_frame,
+                         VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE | VMM_FLAG_USER | VMM_FLAG_NO_EXECUTE) != 0) {
+            pmm_free_frame(stack_frame);
+            if (stack_pages_mapped < 2) {
+                serial_puts("[-] ELF: Failed to map user stack page.\n");
+                vmm_destroy_address_space(user_pml4_virt);
+                return -10;
+            }
+            break;
+        }
+        stack_pages_mapped++;
+        if (va == initial_stack_bottom) {
+            break;
+        }
     }
 
     /* 3. Parse PT_LOAD segments, allocate physical frames, copy data, zero BSS, and map with strict permissions */
@@ -117,7 +139,7 @@ int elf_load_binary(const void* elf_data, size_t data_len, uint64_t** out_pml4_v
             continue;
         }
 
-        if (ph->p_offset + ph->p_filesz > data_len) {
+        if (ph->p_offset + ph->p_filesz < ph->p_offset || ph->p_offset + ph->p_filesz > data_len) {
             serial_puts("[-] ELF: Segment offset + filesz exceeds binary length.\n");
             vmm_destroy_address_space(user_pml4_virt);
             return -11;
@@ -129,8 +151,10 @@ int elf_load_binary(const void* elf_data, size_t data_len, uint64_t** out_pml4_v
             return -12;
         }
 
-        /* Verify canonical lower half userspace bounds (< 0x0000800000000000) */
-        if (ph->p_vaddr >= 0x0000800000000000ULL || ph->p_vaddr + ph->p_memsz > 0x0000800000000000ULL) {
+        /* Verify canonical lower half userspace bounds (< 0x0000800000000000) with overflow prevention */
+        if (ph->p_vaddr >= 0x0000800000000000ULL ||
+            ph->p_vaddr + ph->p_memsz < ph->p_vaddr ||
+            ph->p_vaddr + ph->p_memsz > 0x0000800000000000ULL) {
             serial_puts("[-] ELF: Segment virtual address out of userspace bounds.\n");
             vmm_destroy_address_space(user_pml4_virt);
             return -13;

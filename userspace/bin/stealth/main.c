@@ -2,7 +2,7 @@
  * SeldOS - Humboldt Kernel Project
  * /bin/stealth: Sovereign Anti-DPI & Stealth Network Controller
  * Controls In-Kernel TCP Desync, Air-Gap Stealth Mode, and Native VLESS Engine
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #include <stdio.h>
@@ -180,6 +180,20 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-    printf("Usage: stealth <status | on | off | desync | vless>\n");
+    if (strcmp(argv[1], "blackout") == 0) {
+        printf("[!] Activating Sovereign Peripheral Blackout...\n");
+        seld_opsec_blackout();
+        printf("[+] Peripheral Blackout ACTIVE: KBD LEDs extinguished, Audio DACs muted, USB controllers unmapped.\n");
+        return 0;
+    }
+
+    if (strcmp(argv[1], "firekill") == 0) {
+        printf("[!] Triggering Instant OpSec Fire-and-Kill...\n");
+        seld_opsec_fire_kill();
+        return 0; // Unreachable
+    }
+
+    printf("Usage: stealth <status | on | off | desync | vless | blackout | firekill>\n");
     return 1;
 }
+

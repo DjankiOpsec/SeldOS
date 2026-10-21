@@ -6,7 +6,7 @@
  * Prevents directional microphones and room eavesdroppers from
  * identifying passwords and PINs through physical keyboard acoustics.
  *
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #include "stdio.h"

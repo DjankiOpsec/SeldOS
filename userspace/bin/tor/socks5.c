@@ -3,7 +3,7 @@
  * Tor Browser (OpSec Sovereign Edition)
  * SOCKS5 Onion Protocol Client (RFC 1928 + Tor Extensions)
  * RFC 1928 ATYP=0x03 Domain Name Framing
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #include "socks5.h"

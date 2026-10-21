@@ -9,7 +9,7 @@ Receives data exfiltrated from SeldOS via physical air-gap diodes:
 3. Cryptography: AES-128-GCM AEAD decryption, HKDF-SHA256, plaintext SHA-256 integrity verification.
 
 Zero BadUSB risk. Zero bidirectional network feedback. Strict fail-closed OpSec.
-GPLv3 Licensed.
+GNU AGPLv3 Licensed - Humboldt Underground.
 """
 
 import sys

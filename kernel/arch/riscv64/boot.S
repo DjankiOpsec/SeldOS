@@ -4,7 +4,7 @@
  *
  * RISC-V 64-bit (rv64gc) Early Boot Entry Point
  * Sv39 Paging Setup & Higher-Half Transition.
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 .section .boot.text, "ax"

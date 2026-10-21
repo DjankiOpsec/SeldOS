@@ -4,7 +4,7 @@
  *
  * Kernel Zero-Trust Hardware Entropy & CSPRNG Implementation
  * Whitens CPU execution jitter and untrusted hardware feeds via SHA-256.
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #include "rand.h"

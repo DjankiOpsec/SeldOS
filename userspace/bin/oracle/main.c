@@ -14,7 +14,7 @@
  * - RDTSC high-entropy corpus seek preventing repetitive text openings
  * - Anti-repetition voice leading engine preventing 2-note/3-note cyclic loops
  * - Syntax: oracle [words] [seed]
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #include "stdio.h"

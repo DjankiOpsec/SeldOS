@@ -2,7 +2,7 @@
  * SeldOS - Humboldt Kernel Project
  * SeldTLS - Native Sovereign TLS 1.3 Subsystem
  * HMAC-SHA256 and HKDF (RFC 5869 / RFC 8446) Engine
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #ifndef _SELD_HKDF_H_

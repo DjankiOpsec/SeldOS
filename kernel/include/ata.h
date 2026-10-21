@@ -4,7 +4,7 @@
  *
  * ATA PIO Hard Drive Driver Interface
  * 28-bit LBA disk operations for Primary Master/Slave ATA drives.
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #ifndef SELD_ATA_H

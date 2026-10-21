@@ -2,7 +2,7 @@
  * SeldOS - Humboldt Kernel Project
  * SeldTLS - Native Sovereign TLS 1.3 Subsystem
  * Handshake and Secure Record Transport Layer (RFC 8446)
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #ifndef _SELD_TLS_H_

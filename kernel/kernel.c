@@ -44,7 +44,7 @@ static void print_banner(void) {
     vga_puts("=======================================================================\n");
 
     serial_puts("\n=======================================================================\n");
-    serial_puts(" SELD OS v0.1-sec (Humboldt Kernel) - GNU GPLv3 Free Software Foundation\n");
+    serial_puts(" SELD OS v0.1-sec (Humboldt Kernel) - GNU AGPLv3 (Humboldt Hardened)\n");
 #if defined(__riscv)
     serial_puts(" Hardened RISC-V 64-bit (RV64GC) Supervisor Kernel Initialized\n");
 #else

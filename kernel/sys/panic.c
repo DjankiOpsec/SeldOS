@@ -6,7 +6,7 @@
  * Real Linux-style kernel panic with compiler diagnostic error formatting,
  * exact problem and location reporting, register dump, stack unwinding,
  * acoustic alerts, and hardware halt.
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #include "panic.h"
@@ -341,7 +341,7 @@ static void kernel_panic_extended(const char* file, int line, const char* func, 
 
     // 2. Comprehensive Serial Log Output (Compiler Diagnostic & Linux-Style)
     serial_puts("\n================================================================================\n");
-    serial_puts(" [!] KERNEL PANIC: NOT SYNCING (Humboldt Kernel v0.1-sec - GPLv3)\n");
+    serial_puts(" [!] KERNEL PANIC: NOT SYNCING (Humboldt Kernel v0.1-sec - AGPLv3 Hardened)\n");
     serial_puts("================================================================================\n");
     serial_puts(" ");
     serial_puts(full_diagnostic);

@@ -2,7 +2,7 @@
  * SeldOS - Humboldt Kernel Project
  * SNL Sovereign Downloader (/bin/download)
  * Ring 3 Userspace Network Package Fetcher
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #include <stdio.h>

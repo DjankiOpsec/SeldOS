@@ -4,7 +4,7 @@
  *
  * Kernel Panic Subsystem Header
  * Hardware fault reporting, register dump, and system halt.
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #ifndef SELD_PANIC_H

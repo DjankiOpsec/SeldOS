@@ -2,7 +2,7 @@
  * SeldOS - Humboldt Kernel Project
  * Sovereign PC Speaker Sound Subsystem Interface
  * Direct 8254 PIT Timer 2 Square Wave Synthesis & Note Engine
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #ifndef SELD_AUDIO_H
@@ -35,5 +35,9 @@ int8_t   audio_freq_to_ona(uint32_t freq_hz);
 int      audio_play_pcm(const uint8_t* samples, size_t len, uint32_t sample_rate);
 void     audio_chime_boot(void);
 void     audio_timer_tick(void);
+
+/* OpSec Peripheral Blackout: Complete Audio Mute & DAC Reset */
+void     audio_blackout_mute(void);
+int      audio_is_blackout(void);
 
 #endif /* SELD_AUDIO_H */

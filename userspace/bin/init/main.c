@@ -3,7 +3,7 @@
  * SNL Init System: /bin/init - First Userspace Process (Ring 3)
  * Greets the user, performs autonomous subsystem self-checks,
  * and launches the interactive SNL Sovereign Shell (/bin/sh).
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #include "stdio.h"
@@ -17,9 +17,9 @@ static void print_banner(void) {
     printf("=======================================================================\n");
     printf(" [init]   SNL (Seld Not Linux) Sovereign Init System (PID 1, Ring 3)\n");
 #if defined(__riscv)
-    printf(" [init]   Humboldt Kernel Project - RISC-V 64-bit Hardened Architecture (GNU GPLv3)\n");
+    printf(" [init]   Humboldt Kernel Project - RISC-V 64-bit Hardened Architecture (GNU AGPLv3)\n");
 #else
-    printf(" [init]   Humboldt Kernel Project - x86_64 Hardened Architecture (GNU GPLv3)\n");
+    printf(" [init]   Humboldt Kernel Project - x86_64 Hardened Architecture (GNU AGPLv3)\n");
 #endif
     printf(" [init]   [OPSEC ALERT] ЗАЖИМАЙ SHIFT! (DEAD MAN'S GRIP ACTIVE)\n");
     printf(" [init]   Сессия защищена удержанием. Отпустишь - сброс и вайп ОЗУ!\n");

@@ -2,7 +2,7 @@
  * SeldOS - Humboldt Kernel Project
  * Sovereign Air-Gap Optical & Acoustic Cryptographic Subsystem
  * 40-Line Key Sheet Derivation, AES-128-GCM AEAD, Base64 & CRC32
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #ifndef _DIODE_CRYPTO_H_

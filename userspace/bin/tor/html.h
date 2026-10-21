@@ -2,7 +2,7 @@
  * SeldOS - Humboldt Kernel Project
  * Tor Browser (OpSec Sovereign Edition)
  * Fast Sovereign HTML Layout & Flow Engine
- * GPLv3 Licensed.
+ * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #ifndef SELD_TOR_HTML_H
