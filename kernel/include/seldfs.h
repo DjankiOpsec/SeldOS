@@ -46,8 +46,15 @@ struct seldfs_superblock {
     struct seldfs_inode inodes[SELDFS_MAX_FILES];
 };
 
+#define SELDFS_MAGIC_CRYPT 0x53454C43 // "SELC" (SeldFS Encrypted)
+
 void seldfs_init(void);
 int seldfs_format(void);
+int seldfs_format_encrypted(const uint8_t key[16]);
+int seldfs_set_encryption_key(const uint8_t key[16]);
+int seldfs_is_encrypted(void);
+void seldfs_clear_encryption_key(void);
+int seldfs_duress_wipe(void);
 int seldfs_list_files(void (*callback)(const char* name, uint32_t size));
 int seldfs_read_file(const char* filename, void* buf, size_t max_len, size_t* out_len);
 int seldfs_read_file_offset(const char* filename, uint32_t offset, void* buf, size_t len, size_t* out_read);

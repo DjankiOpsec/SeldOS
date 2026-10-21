@@ -23,6 +23,7 @@
 #define NIC_TYPE_PCNET 2
 
 static int s_nic_type = NIC_TYPE_NONE;
+static struct net_config s_config = {0};
 
 /* Air-Gap On-Demand & Network Defense State */
 static int s_net_airgap_mode = NET_AIRGAP_ONDEMAND;
@@ -32,6 +33,60 @@ static int s_net_leases = 0;
 static int s_net_desync_mode = NET_DESYNC_SPLIT;
 static uint32_t s_desync_splits = 0;
 static uint32_t s_desync_fakes = 0;
+
+/* Kernel Fail-Safe Killswitch & Zero-DNS State */
+static int s_net_killswitch_mode = NET_KILLSWITCH_OFF;
+static int s_net_zerodns_mode = NET_ZERODNS_OFF;
+
+void net_set_killswitch(int mode) {
+    s_net_killswitch_mode = mode;
+    serial_puts("[+] OpSec: Fail-Safe Killswitch set to: ");
+    serial_puts(mode == NET_KILLSWITCH_STRICT ? "STRICT (Default-Deny Clearnet Egress)" : "OFF");
+    serial_puts("\n");
+}
+
+int net_get_killswitch(void) {
+    return s_net_killswitch_mode;
+}
+
+void net_set_zerodns(int mode) {
+    s_net_zerodns_mode = mode;
+    serial_puts("[+] OpSec: Zero-DNS mode set to: ");
+    serial_puts(mode == NET_ZERODNS_ON ? "ON (Clearnet UDP DNS Disabled)" : "OFF");
+    serial_puts("\n");
+}
+
+int net_get_zerodns(void) {
+    return s_net_zerodns_mode;
+}
+
+int net_is_packet_allowed_killswitch(uint32_t dest_ip, uint16_t dest_port) {
+    if (s_net_killswitch_mode != NET_KILLSWITCH_STRICT) return 1;
+
+    // Loopback is always permitted
+    if (dest_ip == MAKE_IP(127, 0, 0, 1) || (dest_ip & 0xFF) == 127) return 1;
+
+    // Subnet broadcast
+    if (dest_ip == 0xFFFFFFFF) return 1;
+
+    // Local Gateway / Virtual Router communication
+    if (dest_ip == s_config.gateway) {
+        if (dest_port == 0) return 1; // Ping or ARP
+        // Allowed proxy & tunnel endpoints:
+        // 9050, 9150 (Tor SOCKS5), 8080 (OpSec Gateway), 9051, 9053 (Tor Control/DNS), 443, 8443 (VLESS/TLS)
+        if (dest_port == 9050 || dest_port == 9150 ||
+            dest_port == 8080 ||
+            dest_port == 9051 || dest_port == 9053 ||
+            dest_port == 53 ||
+            dest_port == 443 || dest_port == 8443) {
+            return 1;
+        }
+        return 0;
+    }
+
+    // Direct clearnet public IPs are strictly blocked
+    return 0;
+}
 
 void net_set_airgap(int mode) {
     s_net_airgap_mode = mode;
@@ -147,10 +202,9 @@ static inline int nic_poll_packet(void* buf, size_t max_len) {
     return 0;
 }
 
-static struct net_config s_config = {0};
 static struct net_stats  s_stats  = {0};
 static struct arp_entry  s_arp_table[ARP_TABLE_SIZE] = {0};
-static uint16_t          s_ip_id  = 0x1000;
+static uint16_t          s_ip_id __attribute__((unused)) = 0x1000;
 
 /* Active Ping Response Tracking */
 static struct {
@@ -179,7 +233,7 @@ struct dns_cache_entry {
 
 static struct dns_cache_entry s_dns_cache[DNS_CACHE_SIZE] = {0};
 static int s_dns_cache_idx = 0;
-static uint16_t s_dns_tx_id = 0x4A10;
+static uint16_t s_dns_tx_id __attribute__((unused)) = 0x4A10;
 
 static struct {
     uint16_t query_id;
@@ -1041,6 +1095,10 @@ void net_poll(void) {
             net_handle_arp(frame_buf, (size_t)len);
         } else if (ethertype == ETHERTYPE_IPV4) {
             net_handle_ipv4(frame_buf, (size_t)len);
+        } else if (ethertype == ETHERTYPE_IPV6) {
+            // OpSec Invariant: IPv6 completely disabled. Silently drop to prevent dual-stack leaks and NDP leakage.
+            s_stats.rx_ipv6_dropped++;
+            s_stats.rx_dropped++;
         } else {
             // Unsupported ethertype: drop
             s_stats.rx_dropped++;
@@ -1054,6 +1112,25 @@ int net_send_ip_ttl(uint32_t dest_ip, uint8_t protocol, const void* payload, siz
     if (!nic_is_active() || !payload) return -1;
     if (sizeof(struct eth_header) + sizeof(struct ipv4_header) + payload_len > ETH_MAX_LEN) {
         return -2; // Frame too large
+    }
+
+    // Kernel Fail-Safe Killswitch Verification (Strict Default-Deny)
+    uint16_t dest_port = 0;
+    if (protocol == IP_PROTO_TCP && payload_len >= sizeof(struct tcp_header)) {
+        dest_port = ntohs(((const struct tcp_header*)payload)->dest_port);
+    } else if (protocol == IP_PROTO_UDP && payload_len >= sizeof(struct udp_header)) {
+        dest_port = ntohs(((const struct udp_header*)payload)->dest_port);
+    }
+
+    if (!net_is_packet_allowed_killswitch(dest_ip, dest_port)) {
+        s_stats.tx_killswitch_blocked++;
+        s_stats.rx_dropped++;
+        serial_puts("[-] OpSec Killswitch: Blocked clearnet egress leak to ");
+        char ip_str[32];
+        net_format_ip(dest_ip, ip_str, sizeof(ip_str));
+        serial_puts(ip_str);
+        serial_puts(" (Strict Default-Deny active)\n");
+        return -7; // EPERM
     }
 
     // Determine next-hop IP (same subnet vs default gateway)
@@ -1488,11 +1565,13 @@ int net_dns_resolve(const char* hostname, uint32_t* ip_out) {
         return 0;
     }
 
-    // OpSec Stealth Mode Guard: Prohibit raw UDP DNS queries to public port 53.
-    // In stealth mode, DNS resolution must be performed via DoT / TLS or inside encrypted tunnel.
-    if (s_net_airgap_mode == NET_AIRGAP_STEALTH) {
-        serial_puts("[!] OpSec Stealth Mode: Refused raw UDP DNS query (anti-telemetry leak guard)\n");
-        return -10; // DNS_ERR_STEALTH_BLOCKED
+    // OpSec Zero-DNS & Stealth Mode Guard: Prohibit raw UDP DNS queries to public port 53.
+    // In Zero-DNS mode, clearnet DNS is blocked to prevent leaks. DNS must be resolved via Tor SOCKS5.
+    if (s_net_zerodns_mode == NET_ZERODNS_ON || s_net_airgap_mode == NET_AIRGAP_STEALTH) {
+        serial_puts("[-] OpSec Zero-DNS: Clearnet UDP DNS query blocked for '");
+        serial_puts(clean_host);
+        serial_puts("'. Delegate to Tor SOCKS5 (ATYP=0x03)!\n");
+        return -9; // EPERM
     }
 
     // 3. DNS Cache check (includes 0.0.0.0 sinkholed ads/trackers)
@@ -1606,6 +1685,16 @@ int net_tcp_socket_connect(uint32_t server_ip, uint16_t port) {
     if (!nic_is_active() || !net_is_traffic_allowed()) {
         serial_puts("[-] OpSec: TCP socket connection denied by Air-Gap Shield\n");
         return -1;
+    }
+
+    if (!net_is_packet_allowed_killswitch(server_ip, port)) {
+        s_stats.tx_killswitch_blocked++;
+        serial_puts("[-] OpSec Killswitch: Blocked direct TCP connect to clearnet IP: ");
+        char ip_str[32];
+        net_format_ip(server_ip, ip_str, sizeof(ip_str));
+        serial_puts(ip_str);
+        serial_puts(" -> DROPPED\n");
+        return -7; // EPERM
     }
 
     int sock_id = -1;

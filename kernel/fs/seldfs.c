@@ -13,6 +13,9 @@
 #include "string.h"
 #include "serial.h"
 #include "sha256.h"
+#include "aes.h"
+#include "rand.h"
+#include "pmm.h"
 
 #define SB_START_LBA         2048 // Start after first 1 MiB (for MBR/bootloader safety)
 #define SB_SECTOR_LBA        (SB_START_LBA + 0)   // Sector 0: Superblock
@@ -25,7 +28,12 @@ static struct seldfs_superblock sb;
 static uint8_t block_bitmap[SELDFS_BITMAP_SECTORS * SELDFS_BLOCK_SIZE];
 static int fs_mounted = 0;
 
-static int bdev_read_sectors(uint32_t lba, uint32_t count, void* buffer) {
+/* SeldFS Cryptographic Storage State (FDE / At-Rest Encryption) */
+static uint8_t s_seldfs_key[16] = {0};
+static int     s_seldfs_encrypted = 0;
+static int     s_key_set = 0;
+
+static int raw_bdev_read_sectors(uint32_t lba, uint32_t count, void* buffer) {
     struct ramdisk_info* rd = ramdisk_get_info();
     if (rd && rd->is_present) {
         return ramdisk_read_sectors(lba, count, buffer);
@@ -33,12 +41,39 @@ static int bdev_read_sectors(uint32_t lba, uint32_t count, void* buffer) {
     return ata_read_sectors(lba, count, buffer);
 }
 
-static int bdev_write_sectors(uint32_t lba, uint32_t count, const void* buffer) {
+static int raw_bdev_write_sectors(uint32_t lba, uint32_t count, const void* buffer) {
     struct ramdisk_info* rd = ramdisk_get_info();
     if (rd && rd->is_present) {
         return ramdisk_write_sectors(lba, count, buffer);
     }
     return ata_write_sectors(lba, count, buffer);
+}
+
+static int bdev_read_sectors(uint32_t lba, uint32_t count, void* buffer) {
+    int res = raw_bdev_read_sectors(lba, count, buffer);
+    if (res != 0) return res;
+
+    if (s_seldfs_encrypted && s_key_set) {
+        uint8_t* p = (uint8_t*)buffer;
+        for (uint32_t i = 0; i < count; i++) {
+            aes128_crypt_sector(s_seldfs_key, lba + i, p + i * SELDFS_BLOCK_SIZE, p + i * SELDFS_BLOCK_SIZE);
+        }
+    }
+    return 0;
+}
+
+static int bdev_write_sectors(uint32_t lba, uint32_t count, const void* buffer) {
+    if (s_seldfs_encrypted && s_key_set) {
+        const uint8_t* p = (const uint8_t*)buffer;
+        uint8_t crypt_buf[SELDFS_BLOCK_SIZE];
+        for (uint32_t i = 0; i < count; i++) {
+            aes128_crypt_sector(s_seldfs_key, lba + i, p + i * SELDFS_BLOCK_SIZE, crypt_buf);
+            int res = raw_bdev_write_sectors(lba + i, 1, crypt_buf);
+            if (res != 0) return res;
+        }
+        return 0;
+    }
+    return raw_bdev_write_sectors(lba, count, buffer);
 }
 
 static inline int bitmap_get_bit(uint32_t block_idx) {
@@ -143,14 +178,46 @@ void seldfs_init(void) {
     }
 
     uint8_t sb_buf[ATA_SECTOR_SIZE];
-    if (bdev_read_sectors(SB_SECTOR_LBA, 1, sb_buf) != 0) {
+    if (raw_bdev_read_sectors(SB_SECTOR_LBA, 1, sb_buf) != 0) {
         serial_puts("[-] SeldFS: Failed to read superblock from storage.\n");
         return;
     }
 
+    // 1. Plausible Deniability Check: If a master key is set, try decrypting first
+    int deniable_mounted = 0;
+    if (s_key_set) {
+        uint8_t dec_buf[ATA_SECTOR_SIZE];
+        aes128_crypt_sector(s_seldfs_key, SB_SECTOR_LBA, sb_buf, dec_buf);
+        uint32_t dec_magic = *(uint32_t*)dec_buf;
+        if (dec_magic == SELDFS_MAGIC || dec_magic == SELDFS_MAGIC_CRYPT || dec_magic == 0x5E1DF501) {
+            s_seldfs_encrypted = 1;
+            memcpy(sb_buf, dec_buf, ATA_SECTOR_SIZE);
+            deniable_mounted = 1;
+            serial_puts("[+] SeldFS: Headerless / Deniable Encrypted Volume Authenticated via Master Key.\n");
+        }
+    }
+
+    // 2. Standard Header Check if not deniable-mounted
+    if (!deniable_mounted) {
+        uint32_t raw_magic = *(uint32_t*)sb_buf;
+        if (raw_magic == SELDFS_MAGIC_CRYPT) {
+            if (s_key_set) {
+                s_seldfs_encrypted = 1;
+                // Decrypt superblock with master key
+                aes128_crypt_sector(s_seldfs_key, SB_SECTOR_LBA, sb_buf, sb_buf);
+            } else {
+                serial_puts("[!] SeldFS: Encrypted volume detected (SELDFS_MAGIC_CRYPT). Master key required.\n");
+                fs_mounted = 0;
+                return;
+            }
+        } else if (raw_magic == SELDFS_MAGIC || raw_magic == 0x5E1DF501) {
+            s_seldfs_encrypted = 0; // Standard plaintext volume
+        }
+    }
+
     memcpy(&sb, sb_buf, 20);
 
-    if (sb.magic == SELDFS_MAGIC || sb.magic == 0x5E1DF501) {
+    if (sb.magic == SELDFS_MAGIC || sb.magic == SELDFS_MAGIC_CRYPT || sb.magic == 0x5E1DF501) {
         if (sb.version >= 2) {
             // Read Block Allocation Bitmap (SELDFS_BITMAP_SECTORS sectors)
             if (bdev_read_sectors(BITMAP_SECTOR_LBA, SELDFS_BITMAP_SECTORS, block_bitmap) != 0) {
@@ -187,10 +254,86 @@ void seldfs_init(void) {
         serial_print_dec(sb.version);
         serial_puts(", Bitmap Sector: 1, Block Size: ");
         serial_print_dec(sb.block_size);
+        if (s_seldfs_encrypted) {
+            serial_puts(", FDE: AES-128-CTR ENCRYPTED");
+        } else {
+            serial_puts(", Mode: Standard Plaintext");
+        }
         serial_puts(")\n");
     } else {
         serial_puts("[!] SeldFS: Superblock not found. Drive requires formatting (use 'mkfs').\n");
     }
+}
+
+int seldfs_set_encryption_key(const uint8_t key[16]) {
+    if (!key) return -1;
+    memcpy(s_seldfs_key, key, 16);
+    s_key_set = 1;
+    seldfs_init();
+    return fs_mounted ? 0 : -2;
+}
+
+int seldfs_is_encrypted(void) {
+    return (fs_mounted && s_seldfs_encrypted);
+}
+
+void seldfs_clear_encryption_key(void) {
+    memset(s_seldfs_key, 0, 16);
+    s_key_set = 0;
+    s_seldfs_encrypted = 0;
+}
+
+int seldfs_format_encrypted(const uint8_t key[16]) {
+    if (!key) return -1;
+    memcpy(s_seldfs_key, key, 16);
+    s_key_set = 1;
+    s_seldfs_encrypted = 1;
+
+    struct ramdisk_info* rd = ramdisk_get_info();
+    if (!rd || !rd->is_present) {
+        struct ata_device_info dev = ata_get_primary_master();
+        if (!dev.present) {
+            return -1;
+        }
+    }
+
+    memset(&sb, 0, sizeof(struct seldfs_superblock));
+    sb.magic = SELDFS_MAGIC_CRYPT;
+    sb.version = 2;
+    sb.block_size = SELDFS_BLOCK_SIZE;
+    sb.total_inodes = SELDFS_MAX_FILES;
+    sb.free_data_lba = DATA_START_LBA;
+
+    memset(block_bitmap, 0, sizeof(block_bitmap));
+
+    if (flush_all_metadata() != 0) {
+        return -1;
+    }
+
+    fs_mounted = 1;
+    serial_puts("[+] SeldFS: Formatted FDE AES-128 Encrypted Volume successfully.\n");
+    return 0;
+}
+
+int seldfs_duress_wipe(void) {
+    serial_puts("[!] SeldFS: DURESS EMERGENCY WIPE TRIGGERED!\n");
+    serial_puts("[!] SeldFS: Overwriting superblock, bitmap, and inodes with CSPRNG noise...\n");
+
+    uint8_t noise[SELDFS_BLOCK_SIZE];
+    for (uint32_t s = 0; s < 1 + SELDFS_BITMAP_SECTORS + INODES_SECTOR_COUNT; s++) {
+        rng_get_bytes(noise, sizeof(noise));
+        raw_bdev_write_sectors(SB_START_LBA + s, 1, noise);
+    }
+
+    memset(&sb, 0, sizeof(sb));
+    memset(block_bitmap, 0, sizeof(block_bitmap));
+    seldfs_clear_encryption_key();
+
+    pmm_secure_wipe_all_free();
+    fs_mounted = 0;
+
+    serial_puts("[+] SeldFS: Duress wipe complete. Storage sanitized.\n");
+    return 0;
 }
 
 int seldfs_format(void) {

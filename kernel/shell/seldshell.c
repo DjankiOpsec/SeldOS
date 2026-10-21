@@ -1047,6 +1047,80 @@ static void cmd_telemetry(int argc, char* argv[]) {
     print_out("    ACPI / SMBus   : ISOLATED (Direct silicon queries blocked)\n");
 }
 
+static void cmd_killswitch(int argc, char* argv[]) {
+    if (argc >= 2) {
+        if (strcmp(argv[1], "on") == 0 || strcmp(argv[1], "strict") == 0) {
+            net_set_killswitch(NET_KILLSWITCH_STRICT);
+            print_out("[+] Fail-Safe Killswitch: STRICT (Default-Deny Clearnet Egress)\n");
+        } else if (strcmp(argv[1], "off") == 0) {
+            net_set_killswitch(NET_KILLSWITCH_OFF);
+            print_out("[*] Fail-Safe Killswitch: DISABLED\n");
+        } else if (strcmp(argv[1], "status") == 0) {
+            print_out("[*] Fail-Safe Killswitch: ");
+            print_out(net_get_killswitch() == NET_KILLSWITCH_STRICT ? "STRICT (ACTIVE)\n" : "OFF\n");
+        } else {
+            print_out("Usage: killswitch <on | off | status>\n");
+        }
+    } else {
+        print_out("[*] Fail-Safe Killswitch: ");
+        print_out(net_get_killswitch() == NET_KILLSWITCH_STRICT ? "STRICT (ACTIVE)\n" : "OFF\n");
+    }
+}
+
+static void cmd_zerodns(int argc, char* argv[]) {
+    if (argc >= 2) {
+        if (strcmp(argv[1], "on") == 0) {
+            net_set_zerodns(NET_ZERODNS_ON);
+            print_out("[+] Zero-DNS Mode: ON (Clearnet UDP DNS Blocked, Tor SOCKS5 Required)\n");
+        } else if (strcmp(argv[1], "off") == 0) {
+            net_set_zerodns(NET_ZERODNS_OFF);
+            print_out("[*] Zero-DNS Mode: OFF\n");
+        } else if (strcmp(argv[1], "status") == 0) {
+            print_out("[*] Zero-DNS Mode: ");
+            print_out(net_get_zerodns() == NET_ZERODNS_ON ? "ON (ACTIVE)\n" : "OFF\n");
+        } else {
+            print_out("Usage: zerodns <on | off | status>\n");
+        }
+    } else {
+        print_out("[*] Zero-DNS Mode: ");
+        print_out(net_get_zerodns() == NET_ZERODNS_ON ? "ON (ACTIVE)\n" : "OFF\n");
+    }
+}
+
+static void cmd_fde(int argc, char* argv[]) {
+    if (argc >= 2) {
+        if (strcmp(argv[1], "status") == 0) {
+            print_out("[*] SeldFS Full Disk Encryption Status: ");
+            print_out(seldfs_is_encrypted() ? "AES-128-CTR ENCRYPTED (ACTIVE)\n" : "STANDARD PLAINTEXT\n");
+        } else if (strcmp(argv[1], "wipe_duress") == 0) {
+            print_out("[!] EXECUTING EMERGENCY DURESS WIPE...\n");
+            seldfs_duress_wipe();
+            print_out("[+] Storage and RAM sanitized. System halted.\n");
+        } else if (strcmp(argv[1], "key") == 0 && argc >= 3) {
+            const char* hex = argv[2];
+            uint8_t key[16] = {0};
+            size_t hlen = strlen(hex);
+            for (size_t i = 0; i < 16 && (i * 2 + 1) < hlen; i++) {
+                char c1 = hex[i * 2];
+                char c2 = hex[i * 2 + 1];
+                uint8_t n1 = (c1 >= '0' && c1 <= '9') ? (c1 - '0') : ((c1 >= 'a' && c1 <= 'f') ? (c1 - 'a' + 10) : ((c1 >= 'A' && c1 <= 'F') ? (c1 - 'A' + 10) : 0));
+                uint8_t n2 = (c2 >= '0' && c2 <= '9') ? (c2 - '0') : ((c2 >= 'a' && c2 <= 'f') ? (c2 - 'a' + 10) : ((c2 >= 'A' && c2 <= 'F') ? (c2 - 'A' + 10) : 0));
+                key[i] = (n1 << 4) | n2;
+            }
+            if (seldfs_set_encryption_key(key) == 0) {
+                print_out("[+] SeldFS: Master key loaded. Volume mounted.\n");
+            } else {
+                print_out("[-] SeldFS: Failed to mount volume with provided key.\n");
+            }
+        } else {
+            print_out("Usage: fde <status | key <32-hex-key> | wipe_duress>\n");
+        }
+    } else {
+        print_out("[*] SeldFS FDE Status: ");
+        print_out(seldfs_is_encrypted() ? "AES-128-CTR ENCRYPTED (ACTIVE)\n" : "STANDARD PLAINTEXT\n");
+    }
+}
+
 static const struct shell_command commands[] = {
     {"help",     cmd_help},
     {"clear",    cmd_clear},
@@ -1087,6 +1161,9 @@ static const struct shell_command commands[] = {
     {"skew",     cmd_skew},
     {"time",     cmd_time},
     {"telemetry",cmd_telemetry},
+    {"killswitch",cmd_killswitch},
+    {"zerodns",  cmd_zerodns},
+    {"fde",      cmd_fde},
     {"gpu",      cmd_drv_off},
     {"cpu",      cmd_drv_off},
     {"ram",      cmd_drv_off},

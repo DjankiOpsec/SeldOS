@@ -1,16 +1,23 @@
 /*
  * SeldOS - Humboldt Kernel Project
  * Tor Browser (OpSec Sovereign Edition)
- * SOCKS5 Onion Protocol Client (RFC 1928 + Tor Extensions)
- * RFC 1928 ATYP=0x03 Domain Name Framing
+ * SOCKS5 Onion Protocol Client (RFC 1928 + RFC 1929 Tor Stream Isolation)
+ * RFC 1928 ATYP=0x03 Domain Name Framing & IsolateSOCKSAuth Circuit Protection
  * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
 #include "socks5.h"
 #include <seld.h>
 #include <string.h>
+#include <stdio.h>
 
-int socks5_connect(uint32_t proxy_ip, uint16_t proxy_port, const char* target_host, uint16_t target_port) {
+static uint32_t s_session_salt = 0;
+
+void socks5_set_session_salt(uint32_t salt) {
+    s_session_salt = salt;
+}
+
+int socks5_connect_isolated(uint32_t proxy_ip, uint16_t proxy_port, const char* target_host, uint16_t target_port, const char* isolation_token) {
     if (!target_host || target_port == 0) return -1;
     size_t host_len = strlen(target_host);
     if (host_len == 0 || host_len > 255) return -1;
@@ -21,8 +28,10 @@ int socks5_connect(uint32_t proxy_ip, uint16_t proxy_port, const char* target_ho
         return -10; // Proxy offline or connection refused
     }
 
-    // Step 2: SOCKS5 Authentication Negotiation (Method 0x00: No Auth)
-    uint8_t auth_req[3] = { 0x05, 0x01, 0x00 };
+    // Step 2: SOCKS5 Authentication Negotiation offering both:
+    // Method 0x00: No Authentication
+    // Method 0x02: Username/Password (RFC 1929) for Tor Circuit Stream Isolation
+    uint8_t auth_req[4] = { 0x05, 0x02, 0x00, 0x02 };
     if (seld_tcp_send(sock, auth_req, sizeof(auth_req)) != sizeof(auth_req)) {
         seld_tcp_close(sock);
         return -11;
@@ -30,9 +39,51 @@ int socks5_connect(uint32_t proxy_ip, uint16_t proxy_port, const char* target_ho
 
     uint8_t auth_resp[2];
     int n = seld_tcp_recv(sock, auth_resp, sizeof(auth_resp), 2000);
-    if (n != 2 || auth_resp[0] != 0x05 || auth_resp[1] != 0x00) {
+    if (n != 2 || auth_resp[0] != 0x05) {
         seld_tcp_close(sock);
         return -11; // Auth negotiation failed
+    }
+
+    if (auth_resp[1] == 0x02) {
+        // Method 0x02 selected by Tor daemon: negotiate RFC 1929 username/password
+        // Tor uses (User, Pass) as the stream isolation token (IsolateSOCKSAuth).
+        char iso_id[64];
+        const char* token = isolation_token ? isolation_token : target_host;
+        size_t tlen = strlen(token);
+        if (tlen > 44) tlen = 44;
+        memcpy(iso_id, token, tlen);
+        iso_id[tlen] = '\0';
+
+        if (s_session_salt != 0) {
+            char salt_buf[16];
+            snprintf(salt_buf, sizeof(salt_buf), "_%u", (unsigned int)s_session_salt);
+            strncat(iso_id, salt_buf, sizeof(iso_id) - strlen(iso_id) - 1);
+        }
+
+        size_t id_len = strlen(iso_id);
+        if (id_len > 255) id_len = 255;
+
+        uint8_t up_req[256];
+        up_req[0] = 0x01; // RFC 1929 version 1
+        up_req[1] = (uint8_t)id_len;
+        memcpy(up_req + 2, iso_id, id_len);
+        up_req[2 + id_len] = (uint8_t)id_len;
+        memcpy(up_req + 2 + id_len + 1, iso_id, id_len);
+
+        size_t up_total = 1 + 1 + id_len + 1 + id_len;
+        if (seld_tcp_send(sock, up_req, up_total) != (int)up_total) {
+            seld_tcp_close(sock);
+            return -11;
+        }
+
+        uint8_t up_resp[2];
+        if (seld_tcp_recv(sock, up_resp, 2, 2000) != 2 || up_resp[1] != 0x00) {
+            seld_tcp_close(sock);
+            return -11; // Auth rejected
+        }
+    } else if (auth_resp[1] != 0x00) {
+        seld_tcp_close(sock);
+        return -11; // Unsupported auth method
     }
 
     // Step 3: SOCKS5 CONNECT Request with ATYP=0x03 (Domain Name)
@@ -63,7 +114,7 @@ int socks5_connect(uint32_t proxy_ip, uint16_t proxy_port, const char* target_ho
     }
 
     if (resp_hdr[1] != 0x00) {
-        // Tor daemon reported error (e.g. 0x04 Host unreachable, 0x05 Conn refused)
+        // Tor daemon reported error
         seld_tcp_close(sock);
         return -13;
     }
@@ -86,6 +137,10 @@ int socks5_connect(uint32_t proxy_ip, uint16_t proxy_port, const char* target_ho
         seld_tcp_recv(sock, drain_buf, to_drain, 3000);
     }
 
-    // Handshake successful! Stream is cleanly tunneled through Tor circuit.
+    // Handshake successful! Stream is cleanly isolated and tunneled through Tor circuit.
     return sock;
+}
+
+int socks5_connect(uint32_t proxy_ip, uint16_t proxy_port, const char* target_host, uint16_t target_port) {
+    return socks5_connect_isolated(proxy_ip, proxy_port, target_host, target_port, target_host);
 }

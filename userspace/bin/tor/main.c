@@ -1189,6 +1189,8 @@ int main(int argc, char* argv[]) {
                     needs_page_render = 1;
                 } else if (ch == 'n' || ch == 'N') {
                     http_reset_tor_state();
+                    static uint32_t s_salt_counter = 1;
+                    socks5_set_session_salt(s_salt_counter++);
                     seld_beep(880, 50);
                     load_url("home");
                     needs_page_render = 1;

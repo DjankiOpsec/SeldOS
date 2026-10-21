@@ -19,6 +19,7 @@
 
 #define ETHERTYPE_IPV4 0x0800
 #define ETHERTYPE_ARP  0x0806
+#define ETHERTYPE_IPV6 0x86DD
 
 #define ARP_HTYPE_ETHERNET 1
 #define ARP_PTYPE_IPV4     0x0800
@@ -162,6 +163,8 @@ struct net_stats {
     uint64_t tx_icmp;
     uint64_t rx_dropped;
     uint64_t rx_checksum_errors;
+    uint64_t rx_ipv6_dropped;
+    uint64_t tx_killswitch_blocked;
 };
 
 /* OpSec Network Subsystem API */
@@ -240,5 +243,20 @@ int  net_parse_http_date(const char* date_header, uint64_t* out_epoch);
 int  net_set_config_static(uint32_t ip, uint32_t netmask, uint32_t gateway, uint32_t dns);
 void net_set_boot_delay(int enable, uint32_t delay_ms);
 int  net_get_boot_delay_active(void);
+
+/* Kernel Fail-Safe Killswitch (Strict Default-Deny Tor/VLESS Egress) */
+#define NET_KILLSWITCH_OFF    0
+#define NET_KILLSWITCH_STRICT 1
+
+void net_set_killswitch(int mode);
+int  net_get_killswitch(void);
+int  net_is_packet_allowed_killswitch(uint32_t dest_ip, uint16_t dest_port);
+
+/* Zero-DNS Clearnet Leak Elimination */
+#define NET_ZERODNS_OFF 0
+#define NET_ZERODNS_ON  1
+
+void net_set_zerodns(int mode);
+int  net_get_zerodns(void);
 
 #endif /* SELD_NET_H */

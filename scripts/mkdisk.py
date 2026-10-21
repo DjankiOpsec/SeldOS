@@ -11,11 +11,17 @@ import sys
 import os
 import struct
 import hashlib
+try:
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    HAS_CRYPTO = True
+except ImportError:
+    HAS_CRYPTO = False
 
 DISK_SIZE_BYTES = 32 * 1024 * 1024  # 32 MiB
 SECTOR_SIZE = 512
 
 SELDFS_MAGIC = 0x53454C44  # "SELD" in ASCII
+SELDFS_MAGIC_CRYPT = 0x53454C43  # "SELC" in ASCII
 SELDFS_VERSION = 2
 SELDFS_MAX_FILES = 64
 SELDFS_MAX_FILENAME = 32
@@ -48,7 +54,15 @@ INODE_SIZE = struct.calcsize(INODE_FMT)  # 84 bytes
 # uint32_t free_data_lba;
 SB_FMT = "<IIIII"
 
-def create_seldfs_image(output_path, files_to_write, compact=True):
+def crypt_sector(key, lba, sector_bytes):
+    if not HAS_CRYPTO or not key:
+        return bytes(sector_bytes)
+    iv = b'SELD' + struct.pack('>I', lba) + b'\x00' * 8
+    cipher = Cipher(algorithms.AES(key), modes.CTR(iv))
+    enc = cipher.encryptor()
+    return enc.update(bytes(sector_bytes)) + enc.finalize()
+
+def create_seldfs_image(output_path, files_to_write, compact=True, encrypt_key=None, headerless=False):
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
 
     total_data_blocks = sum(max(1, (len(data) + SECTOR_SIZE - 1) // SECTOR_SIZE) for _, data in files_to_write)
@@ -61,7 +75,7 @@ def create_seldfs_image(output_path, files_to_write, compact=True):
         disk_size = DISK_SIZE_BYTES
         print(f"[*] Initializing {disk_size // (1024 * 1024)} MiB SeldFS Raw Disk Image: {output_path}")
 
-    # Create raw image buffer initialized to zero
+    # Create raw image buffer initialized to zero (or CSPRNG noise if encrypted)
     with open(output_path, "wb") as f:
         f.seek(disk_size - 1)
         f.write(b"\0")
@@ -72,7 +86,8 @@ def create_seldfs_image(output_path, files_to_write, compact=True):
         inodes = []
         cur_data_block = 0  # relative to DATA_START_LBA
 
-        print("[*] Provisioning Userland Binaries & Files into SeldFS Root Index:")
+        enc_str = " (AES-128-CTR FDE Encrypted)" if encrypt_key else " (Plaintext)"
+        print(f"[*] Provisioning Userland Binaries & Files into SeldFS Root Index{enc_str}:")
         print(f"    {'TARGET PATH':<20} {'SIZE (BYTES)':<14} {'BLOCKS':<8} {'SHA-256 CHECKSUM'}")
         print("    " + "-" * 78)
 
@@ -98,13 +113,15 @@ def create_seldfs_image(output_path, files_to_write, compact=True):
                 blk_idx = cur_data_block + b
                 bitmap[blk_idx // 8] |= (1 << (blk_idx % 8))
 
-            # Write file payload into data blocks
-            img.seek(start_lba * SECTOR_SIZE)
-            img.write(source_data)
-            # Pad sector if needed
-            pad_len = (block_count * SECTOR_SIZE) - file_size
-            if pad_len > 0:
-                img.write(b"\0" * pad_len)
+            # Write file payload into data blocks with sector-level LBA encryption
+            for b in range(block_count):
+                chunk = source_data[b * SECTOR_SIZE : (b + 1) * SECTOR_SIZE]
+                if len(chunk) < SECTOR_SIZE:
+                    chunk = chunk + b"\0" * (SECTOR_SIZE - len(chunk))
+                if encrypt_key:
+                    chunk = crypt_sector(encrypt_key, start_lba + b, chunk)
+                img.seek((start_lba + b) * SECTOR_SIZE)
+                img.write(chunk)
 
             # Inode record
             encoded_name = target_name.encode("utf-8")[:31]
@@ -130,9 +147,10 @@ def create_seldfs_image(output_path, files_to_write, compact=True):
             inodes.append(b"\0" * INODE_SIZE)
 
         # 1. Write Superblock at Sector 2048
+        magic = SELDFS_MAGIC if (headerless or not encrypt_key) else SELDFS_MAGIC_CRYPT
         sb_header = struct.pack(
             SB_FMT,
-            SELDFS_MAGIC,
+            magic,
             SELDFS_VERSION,
             SECTOR_SIZE,
             SELDFS_MAX_FILES,
@@ -140,23 +158,33 @@ def create_seldfs_image(output_path, files_to_write, compact=True):
         )
         sb_sector = bytearray(SECTOR_SIZE)
         sb_sector[:len(sb_header)] = sb_header
+        if encrypt_key:
+            sb_sector = bytearray(crypt_sector(encrypt_key, SB_SECTOR_LBA, sb_sector))
 
         img.seek(SB_SECTOR_LBA * SECTOR_SIZE)
         img.write(sb_sector)
 
-        # 2. Write Bitmap at Sector 2049
-        img.seek(BITMAP_SECTOR_LBA * SECTOR_SIZE)
-        img.write(bitmap)
+        # 2. Write Bitmap at Sector 2049 (16 sectors)
+        for s in range(SELDFS_BITMAP_SECTORS):
+            b_chunk = bytes(bitmap[s * SECTOR_SIZE : (s + 1) * SECTOR_SIZE])
+            if encrypt_key:
+                b_chunk = crypt_sector(encrypt_key, BITMAP_SECTOR_LBA + s, b_chunk)
+            img.seek((BITMAP_SECTOR_LBA + s) * SECTOR_SIZE)
+            img.write(b_chunk)
 
-        # 3. Write Inodes at Sectors 2050..2065
+        # 3. Write Inodes at Sectors 2050..2065 (16 sectors)
         inodes_data = bytearray(INODES_SECTOR_COUNT * SECTOR_SIZE)
         offset = 0
         for inode in inodes:
             inodes_data[offset:offset + INODE_SIZE] = inode
             offset += INODE_SIZE
 
-        img.seek(INODES_START_LBA * SECTOR_SIZE)
-        img.write(inodes_data)
+        for s in range(INODES_SECTOR_COUNT):
+            i_chunk = bytes(inodes_data[s * SECTOR_SIZE : (s + 1) * SECTOR_SIZE])
+            if encrypt_key:
+                i_chunk = crypt_sector(encrypt_key, INODES_START_LBA + s, i_chunk)
+            img.seek((INODES_START_LBA + s) * SECTOR_SIZE)
+            img.write(i_chunk)
 
     print("    " + "-" * 78)
     print(f"[+] SeldFS formatted successfully: {len(files_to_write)} files installed, {cur_data_block} blocks used.")
@@ -166,6 +194,8 @@ def main():
     output_disk = "build/disk.img"
     compact = True
     bin_dir = "build/bin"
+    encrypt_key = None
+    headerless = False
 
     i = 1
     while i < len(sys.argv):
@@ -177,6 +207,17 @@ def main():
         elif arg == "--bin-dir" and i + 1 < len(sys.argv):
             bin_dir = sys.argv[i + 1]
             i += 1
+        elif arg == "--encrypt-key" and i + 1 < len(sys.argv):
+            key_raw = sys.argv[i + 1]
+            try:
+                encrypt_key = bytes.fromhex(key_raw)
+            except ValueError:
+                encrypt_key = hashlib.sha256(key_raw.encode('utf-8')).digest()[:16]
+            if len(encrypt_key) != 16:
+                encrypt_key = hashlib.sha256(encrypt_key).digest()[:16]
+            i += 1
+        elif arg == "--headerless":
+            headerless = True
         elif not arg.startswith("-"):
             output_disk = arg
         i += 1
@@ -265,7 +306,7 @@ def main():
     # Permanently provision PC mode (clean 85x20 desktop terminal, NO mobile buttons)
     files_to_write.append(("pcmode", b"1\n"))
 
-    create_seldfs_image(output_disk, files_to_write, compact=compact)
+    create_seldfs_image(output_disk, files_to_write, compact=compact, encrypt_key=encrypt_key, headerless=headerless)
 
 if __name__ == "__main__":
     main()

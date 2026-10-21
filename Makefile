@@ -1,7 +1,7 @@
 ARCH ?= x86_64
 
 # Common kernel C sources across all architectures
-C_SRCS_COMMON = kernel/kernel.c kernel/drivers/vga.c kernel/drivers/serial.c kernel/drivers/kbd.c kernel/drivers/mouse.c kernel/drivers/audio.c kernel/drivers/ramdisk.c kernel/drivers/ata.c kernel/drivers/pit.c kernel/drivers/pci.c kernel/drivers/e1000.c kernel/drivers/pcnet.c kernel/net/net.c kernel/sys/syscall.c kernel/sys/string.c kernel/sys/fast_syscall.c kernel/sys/selftest.c kernel/sys/elf.c kernel/sys/panic.c kernel/sys/ksyms.c kernel/sys/boot_anim.c kernel/shell/seldshell.c kernel/mm/pmm.c kernel/mm/vmm.c kernel/mm/kmalloc.c kernel/fs/seldfs.c kernel/crypto/rand.c kernel/crypto/sha256.c kernel/sched/sched.c
+C_SRCS_COMMON = kernel/kernel.c kernel/drivers/vga.c kernel/drivers/serial.c kernel/drivers/kbd.c kernel/drivers/mouse.c kernel/drivers/audio.c kernel/drivers/ramdisk.c kernel/drivers/ata.c kernel/drivers/pit.c kernel/drivers/pci.c kernel/drivers/e1000.c kernel/drivers/pcnet.c kernel/net/net.c kernel/sys/syscall.c kernel/sys/string.c kernel/sys/fast_syscall.c kernel/sys/selftest.c kernel/sys/elf.c kernel/sys/panic.c kernel/sys/ksyms.c kernel/sys/boot_anim.c kernel/shell/seldshell.c kernel/mm/pmm.c kernel/mm/vmm.c kernel/mm/kmalloc.c kernel/fs/seldfs.c kernel/crypto/rand.c kernel/crypto/sha256.c kernel/crypto/aes.c kernel/sched/sched.c
 
 LIBC_SRCS = userspace/libc/src/syscall.c \
             userspace/libc/src/memory.c \
