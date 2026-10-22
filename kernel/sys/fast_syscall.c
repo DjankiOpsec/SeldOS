@@ -565,7 +565,8 @@ int elf_load_and_run(const char* path, int argc, char* argv[]) {
     int is_net_tool = (strcmp(base_bin, "tor") == 0 ||
                        strcmp(base_bin, "torbrowser") == 0 ||
                        strcmp(base_bin, "download") == 0 ||
-                       strcmp(base_bin, "stealth") == 0);
+                       strcmp(base_bin, "stealth") == 0 ||
+                       strcmp(base_bin, "phantom") == 0);
     if (is_net_tool) {
         net_lease_acquire();
     }
@@ -825,6 +826,7 @@ static int check_pledge(uint64_t sys_num, uint64_t a1, uint64_t a2) {
         case SYS_NET_TCP_CLOSE:
         case SYS_NET_SET_DESYNC:
         case SYS_NET_GET_DESYNC:
+        case SYS_NET_RAW_INJECT:
             req = PLEDGE_NET;
             break;
 
@@ -1913,6 +1915,16 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
 
         case SYS_KILL: {
             return (uint64_t)sched_kill_task((uint32_t)a1);
+        }
+
+        case SYS_NET_RAW_INJECT: {
+            const void* buf = (const void*)a1;
+            size_t len = (size_t)a2;
+            if (len < 14 || len > 1518) return (uint64_t)-1;
+            if (!validate_user_buffer(buf, len, 0)) {
+                return (uint64_t)-1;
+            }
+            return (uint64_t)net_raw_send(buf, len);
         }
 
         case SYS_EXIT: {

@@ -16,7 +16,7 @@ LIBC_SRCS = userspace/libc/src/syscall.c \
             userspace/libc/src/seld_tls.c \
             userspace/libc/src/seld_vless.c
 
-UTILS = init sh ls cat echo rm sha256sum uname ps fm download oracle fetch reboot poweroff purge stealth diode pinpad otp hi grep head tail less kill clip drop
+UTILS = init sh ls cat echo rm sha256sum uname ps fm download oracle fetch reboot poweroff purge stealth diode pinpad otp hi grep head tail less kill clip drop jammer phantom
 
 # ---------------------------------------------------------------------------
 # x86_64 Architecture Definitions

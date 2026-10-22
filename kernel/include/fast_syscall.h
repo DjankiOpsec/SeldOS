@@ -90,6 +90,7 @@
 #define SYS_REDIRECT_STDOUT      74
 #define SYS_REDIRECT_STDIN       75
 #define SYS_KILL                 76
+#define SYS_NET_RAW_INJECT       77
 
 struct seld_otp_request {
     uint32_t col;

@@ -259,4 +259,7 @@ int  net_is_packet_allowed_killswitch(uint32_t dest_ip, uint16_t dest_port);
 void net_set_zerodns(int mode);
 int  net_get_zerodns(void);
 
+/* Raw Packet Injection & Network Sabotage */
+int  net_raw_send(const void* data, size_t len);
+
 #endif /* SELD_NET_H */

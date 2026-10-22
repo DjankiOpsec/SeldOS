@@ -202,6 +202,13 @@ static inline int nic_poll_packet(void* buf, size_t max_len) {
     return 0;
 }
 
+int net_raw_send(const void* data, size_t len) {
+    if (!data || len < ETH_HLEN || len > ETH_MAX_LEN) return -1;
+    if (s_nic_type == NIC_TYPE_E1000) return e1000_send_packet(data, len);
+    if (s_nic_type == NIC_TYPE_PCNET) return pcnet_send_packet(data, len);
+    return -1;
+}
+
 static struct net_stats  s_stats  = {0};
 static struct arp_entry  s_arp_table[ARP_TABLE_SIZE] = {0};
 static uint16_t          s_ip_id __attribute__((unused)) = 0x1000;
@@ -1736,6 +1743,12 @@ int net_tcp_socket_connect(uint32_t server_ip, uint16_t port) {
 
     uint64_t start_ms = pit_get_uptime_ms();
     int syn_retries = 0;
+    uint64_t retry_time = 400;
+    uint64_t timeout_limit = 1500;
+    if (s_config.netmask != 0 && (server_ip & s_config.netmask) == (s_config.ip & s_config.netmask)) {
+        retry_time = 120;
+        timeout_limit = 350;
+    }
     while (s->state != TCP_STATE_ESTABLISHED) {
         net_poll();
         if (s->state == TCP_STATE_CLOSED) {
@@ -1744,11 +1757,11 @@ int net_tcp_socket_connect(uint32_t server_ip, uint16_t port) {
             return -4;
         }
         uint64_t elapsed = pit_get_uptime_ms() - start_ms;
-        if (elapsed > 400 && syn_retries == 0) {
+        if (elapsed > retry_time && syn_retries == 0) {
             syn_retries++;
             net_send_tcp_packet_sock(s, TCP_FLAG_SYN, NULL, 0);
         }
-        if (elapsed > 1500) {
+        if (elapsed > timeout_limit) {
             s->state = TCP_STATE_CLOSED;
             kfree(s->rx_buf);
             memset(s, 0, sizeof(*s));

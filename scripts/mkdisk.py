@@ -249,7 +249,9 @@ def main():
         "less",
         "kill",
         "clip",
-        "drop"
+        "drop",
+        "jammer",
+        "phantom"
     ]
 
     files_to_write = []

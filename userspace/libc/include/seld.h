@@ -85,6 +85,7 @@
 #define SYS_REDIRECT_STDOUT      74
 #define SYS_REDIRECT_STDIN       75
 #define SYS_KILL                 76
+#define SYS_NET_RAW_INJECT       77
 
 struct seld_otp_request {
     uint32_t col;
@@ -323,5 +324,6 @@ int      seld_opsec_otp_draw(uint32_t col, uint32_t row, const char* text, uint3
 int      seld_redirect_stdout(int fd);
 int      seld_redirect_stdin(int fd);
 int      seld_kill(uint32_t pid, int sig);
+int      seld_net_raw_inject(const void* frame, size_t len);
 
 #endif /* _SELD_H_ */

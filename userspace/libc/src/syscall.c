@@ -1000,5 +1000,9 @@ int seld_kill(uint32_t pid, int sig) {
     return (int)seld_syscall(SYS_KILL, (long)pid, (long)sig, 0);
 }
 
+int seld_net_raw_inject(const void* frame, size_t len) {
+    return (int)seld_syscall(SYS_NET_RAW_INJECT, (long)frame, (long)len, 0);
+}
+
 
 

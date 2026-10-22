@@ -737,6 +737,8 @@ static void builtin_help(void) {
     printf("  pinpad          Scrambled On-Screen Pinpad (Acoustic Keystroke Evasion)\n");
     printf("  diode [cmd]     Air-Gap Optical & Acoustic Data Diode (keygen, send, beep, qr)\n");
     printf("  stealth [cmd]   Anti-TSPU/DPI Stealth Suite & Native C99 VLESS Client\n");
+    printf("  jammer [cmd]    Acoustic Ultrasonic Bug Blaster & TEMPEST RF Jammer (mic/speech/rf)\n");
+    printf("  phantom [cmd]   Offensive Raw Packet Forge, Stealth Scanner & TCP Sniper (scan/rst/arp)\n");
     printf("  ls              List files with size, blocks, and SHA-256 hash\n");
     printf("  cat <file>      Display contents of file\n");
     printf("  echo [args..]   Print arguments to stdout\n");
