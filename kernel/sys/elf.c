@@ -160,6 +160,13 @@ int elf_load_binary(const void* elf_data, size_t data_len, uint64_t** out_pml4_v
             return -13;
         }
 
+        /* Check for collision with the user stack region [USER_STACK_BOTTOM, USER_STACK_PAGE) */
+        if ((ph->p_vaddr < USER_STACK_PAGE) && (ph->p_vaddr + ph->p_memsz > USER_STACK_BOTTOM)) {
+            serial_puts("[-] ELF: Segment collides with user stack region.\n");
+            vmm_destroy_address_space(user_pml4_virt);
+            return -13;
+        }
+
         /* Determine page permissions according to W^X OpSec principle:
          * - PF_X without PF_W: Read-Only + Executable (VMM_FLAG_PRESENT | VMM_FLAG_USER)
          * - PF_W: Read-Write + No-Execute (VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE | VMM_FLAG_USER | VMM_FLAG_NO_EXECUTE)

@@ -336,10 +336,6 @@ int pci_usb_quarantine_poweroff(void) {
                     // Revoke all PCI Command bits: Bus Master, Memory Space, I/O Space (cmd = 0)
                     pci_write_word((uint8_t)bus, slot, func, PCI_REG_COMMAND, 0);
 
-                    // Zero BARs to completely unmap device from memory/IO space
-                    pci_write_dword((uint8_t)bus, slot, func, PCI_REG_BAR0, 0);
-                    pci_write_dword((uint8_t)bus, slot, func, PCI_REG_BAR1, 0);
-
                     // Disable Interrupt line
                     pci_write_byte((uint8_t)bus, slot, func, PCI_REG_INTERRUPT, 0xFF);
 

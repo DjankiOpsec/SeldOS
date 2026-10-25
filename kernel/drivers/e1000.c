@@ -25,6 +25,7 @@ static int      s_initialized = 0;
 static struct e1000_rx_desc* s_rx_descs = NULL;
 static uint8_t*              s_rx_buffers[E1000_NUM_RX_DESC];
 static uint32_t              s_rx_cur = 0;
+static int                   s_rx_discarding_multidesc = 0;
 
 static struct e1000_tx_desc* s_tx_descs = NULL;
 static uint8_t*              s_tx_buffers[E1000_NUM_TX_DESC];
@@ -391,7 +392,17 @@ int e1000_poll_packet(void* buf, size_t max_len) {
 
     int ret_len = 0;
 
-    if (errors == 0 && (status & E1000_RXD_STAT_EOP) && len <= max_len) {
+    if (s_rx_discarding_multidesc) {
+        // We are skipping the tail fragment(s) of an oversized or multi-descriptor frame
+        if (status & E1000_RXD_STAT_EOP) {
+            s_rx_discarding_multidesc = 0; // Final fragment consumed
+        }
+        s_stats.rx_dropped++;
+    } else if (!(status & E1000_RXD_STAT_EOP)) {
+        // First descriptor of a multi-descriptor frame: drop and discard subsequent fragments
+        s_rx_discarding_multidesc = 1;
+        s_stats.rx_dropped++;
+    } else if (errors == 0 && len <= max_len) {
         memcpy(buf, s_rx_buffers[cur], len);
         ret_len = (int)len;
         s_stats.rx_packets++;
@@ -410,6 +421,17 @@ int e1000_poll_packet(void* buf, size_t max_len) {
     e1000_write32(E1000_REG_RDT, cur);
 
     return ret_len;
+}
+
+void e1000_set_promisc(int enable) {
+    if (!s_initialized) return;
+    uint32_t rctl = e1000_read32(E1000_REG_RCTL);
+    if (enable) {
+        rctl |= (E1000_RCTL_UPE | E1000_RCTL_MPE);
+    } else {
+        rctl &= ~(E1000_RCTL_UPE | E1000_RCTL_MPE);
+    }
+    e1000_write32(E1000_REG_RCTL, rctl);
 }
 
 struct net_driver_stats e1000_get_stats(void) {

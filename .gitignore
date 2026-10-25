@@ -1,13 +1,64 @@
-scratch/
-scripts/__pycache__/
+# ==============================================================================
+# SeldOS (Humboldt Kernel Project) - Sovereign Git Exclusions
+# ==============================================================================
+# Ignores everything unnecessary for the core OS (Python, tests, media, binaries)
+# Markdown documentation (*.md) is strictly preserved.
+# ==============================================================================
+
+# --- Python & Scripting Toolchains ---
+*.py
+*.pyc
+*.pyo
 __pycache__/
-*.ppm
-*.tmp
-tools/host_diode/src/
-tools/host_diode/pkg/
-iso/boot/grub/i386-pc/
-trailer_build/
-pytest.ini
-.pytest_cache/
+scripts/
+tools/
+
+# --- Testing & Quality Assurance ---
 tests/
+.pytest_cache/
+pytest.ini
+
+# --- Media, Images, Video & Audio ---
+*.png
+*.jpg
+*.jpeg
+*.svg
+*.svgz
+*.ppm
+*.bmp
+*.gif
+*.mp4
+*.m3u8
+*.ts
+*.avi
+*.mkv
+*.wav
+*.mp3
+
+# --- Build Artifacts, Compilations & Binary Blobs ---
+build/*
+!build/bin/
+!build/bin/*
+*.elf
+*.o
+*.a
+*.iso
+*.img
+*.bin
+!cctv.bin
+*.wad
+!doom1.wad
+
+# --- Scratch, Staging & Temporary Files ---
+scratch/
+trailer_build/
 site/
+*.tmp
+*.log
+*.sock
+*.swp
+*~
+
+# --- PRESERVE ALL MARKDOWN DOCUMENTATION ---
+!*.md
+!**/*.md

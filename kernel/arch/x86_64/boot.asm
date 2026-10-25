@@ -164,6 +164,24 @@ higher_half_entry:
     ; Set RSP to a proper Higher-Half stack in .bss
     mov rsp, kernel_stack_top
 
+    ; Check and enable SMEP (Supervisor Mode Execution Prevention)
+    ; CPUID (EAX=7, ECX=0): EBX bit 7 = SMEP
+    push rbx
+    push rcx
+    push rdx
+    mov eax, 7
+    xor ecx, ecx
+    cpuid
+    test ebx, (1 << 7)
+    jz .no_smep
+    mov rax, cr4
+    or rax, (1 << 20)
+    mov cr4, rax
+.no_smep:
+    pop rdx
+    pop rcx
+    pop rbx
+
     ; Pass multiboot parameters (rdi = info, rsi = magic)
     ; Convert multiboot info pointer in rdi to HHDM pointer (if non-zero)
     test rdi, rdi

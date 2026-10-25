@@ -86,6 +86,8 @@
 #define SYS_REDIRECT_STDIN       75
 #define SYS_KILL                 76
 #define SYS_NET_RAW_INJECT       77
+#define SYS_NET_PROMISC          78
+#define SYS_NET_RAW_POLL         79
 
 struct seld_otp_request {
     uint32_t col;
@@ -325,5 +327,7 @@ int      seld_redirect_stdout(int fd);
 int      seld_redirect_stdin(int fd);
 int      seld_kill(uint32_t pid, int sig);
 int      seld_net_raw_inject(const void* frame, size_t len);
+int      seld_net_set_promisc(int enable);
+int      seld_net_raw_poll(void* buf, size_t max_len);
 
 #endif /* _SELD_H_ */

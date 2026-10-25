@@ -166,8 +166,28 @@ void isr_handler(struct interrupt_frame* frame) {
                 }
             }
         }
+        if ((frame->cs & 3) == 3) {
+            serial_puts("[-] Ring 3 Page Fault at 0x");
+            serial_print_hex(fault_addr);
+            serial_puts(" err=");
+            serial_print_hex(frame->err_code);
+            serial_puts(" rip=");
+            serial_print_hex(frame->rip);
+            serial_puts(". Terminating user process cleanly.\n");
+            user_exit_to_kernel(128 + 14);
+            return;
+        }
         kernel_panic_exception((uint8_t)frame->int_no, frame->err_code, frame);
     } else if (frame->int_no < 32) {
+        if ((frame->cs & 3) == 3) {
+            serial_puts("[-] Ring 3 Exception (int ");
+            serial_print_dec((uint64_t)frame->int_no);
+            serial_puts(", err 0x");
+            serial_print_hex((uint64_t)frame->err_code);
+            serial_puts("). Terminating user process cleanly.\n");
+            user_exit_to_kernel(128 + frame->int_no);
+            return;
+        }
         kernel_panic_exception((uint8_t)frame->int_no, frame->err_code, frame);
     } else if (frame->int_no == 32) {
         // Timer IRQ0

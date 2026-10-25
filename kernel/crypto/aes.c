@@ -190,7 +190,9 @@ void aes128_ctr_crypt(const uint8_t key[16], uint64_t nonce, uint32_t counter_st
 void aes128_crypt_sector(const uint8_t key[16], uint32_t lba,
                          const uint8_t in[512], uint8_t out[512]) {
     // 512 bytes = 32 AES blocks of 16 bytes.
-    // Nonce encodes magic "SELD" (0x53454C44) in high 32 bits and LBA in low 32 bits.
-    uint64_t nonce = (0x53454C44ULL << 32) | (uint64_t)lba;
+    // Derive unique volume salt from key material to prevent Two-Time Pad keystream reuse
+    uint32_t key_salt = (uint32_t)key[0] | ((uint32_t)key[1] << 8) |
+                        ((uint32_t)key[2] << 16) | ((uint32_t)key[3] << 24);
+    uint64_t nonce = ((0x53454C44ULL ^ (uint64_t)key_salt) << 32) | (uint64_t)lba;
     aes128_ctr_crypt(key, nonce, 0, in, out, 512);
 }

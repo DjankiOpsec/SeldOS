@@ -66,7 +66,7 @@ int brk(void* addr) {
 }
 
 void* malloc(size_t size) {
-    if (size == 0) return NULL;
+    if (size == 0 || size > (size_t)-16 || size > 0x40000000ULL) return NULL;
 
     size = ALIGN16(size);
 
@@ -156,6 +156,10 @@ void free(void* ptr) {
     struct block_header* block = (struct block_header*)((uint8_t*)ptr - BLOCK_HEADER_SIZE);
     if (block->magic != BLOCK_MAGIC) {
         return; /* Corrupted header or invalid pointer */
+    }
+
+    if (block->is_free) {
+        return; /* Double-free guard: block is already freed */
     }
 
     // OpSec Zero-on-Free: erase payload to destroy residual cryptographic material & buffers

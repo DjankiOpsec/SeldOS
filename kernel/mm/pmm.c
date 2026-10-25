@@ -26,6 +26,7 @@ static size_t total_frames = 0;
 static size_t used_frames = 0;
 static uint64_t total_physical_memory = 0;
 static int s_ram_drv_enabled = 1;
+static uint64_t s_kernel_reserved_end = 0;
 
 static inline void bitmap_set(size_t frame) {
     pmm_bitmap[BITMAP_INDEX(frame)] |= (1ULL << BITMAP_OFFSET(frame));
@@ -263,6 +264,7 @@ void pmm_init(uint64_t mb_magic, uint64_t mb_info_addr) {
             used_frames++;
         }
     }
+    s_kernel_reserved_end = (uint64_t)reserved_end_frame * PAGE_SIZE;
 #endif
 
     // Reserve In-Memory Ramdisk frames (if present)
@@ -355,8 +357,9 @@ void pmm_free_frame(void* ptr) {
         return; // Guard physical RAM boundaries & kernel region
     }
 #else
-    if (addr < 0x100000ULL || addr >= total_physical_memory) {
-        return; // Guard physical RAM boundaries
+    uint64_t min_safe_addr = s_kernel_reserved_end ? s_kernel_reserved_end : 0x100000ULL;
+    if (addr < min_safe_addr || addr >= total_physical_memory) {
+        return; // Guard physical RAM boundaries & kernel/bitmap region
     }
 #endif
     extern uint64_t kernel_pml4_phys;
@@ -377,8 +380,9 @@ void pmm_free_frames(void* ptr, size_t count) {
         return; // Guard physical RAM boundaries & kernel region
     }
 #else
-    if (addr < 0x100000ULL || addr >= total_physical_memory) {
-        return; // Guard physical RAM boundaries
+    uint64_t min_safe_addr = s_kernel_reserved_end ? s_kernel_reserved_end : 0x100000ULL;
+    if (addr < min_safe_addr || addr >= total_physical_memory) {
+        return; // Guard physical RAM boundaries & kernel/bitmap region
     }
 #endif
     size_t start_frame = addr / PAGE_SIZE;

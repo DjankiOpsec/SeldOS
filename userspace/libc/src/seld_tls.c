@@ -231,15 +231,19 @@ static void parse_server_certificate(struct seld_tls_conn* conn, const uint8_t* 
     const char* scn = conn->peer_cert.subject_cn;
     int is_self_signed = (scn[0] && icn[0] && strcmp(scn, icn) == 0);
     if (!is_self_signed && (
-        strstr(icn, "DigiCert") || strstr(iorg, "DigiCert") ||
-        strstr(icn, "Let's Encrypt") || strstr(iorg, "Let's Encrypt") || strstr(icn, "ISRG") ||
-        strstr(icn, "Cloudflare") || strstr(iorg, "Cloudflare") ||
-        strstr(icn, "Google") || strstr(iorg, "Google") || strstr(icn, "GTS") ||
-        strstr(icn, "Sectigo") || strstr(iorg, "Sectigo") ||
-        strstr(icn, "GlobalSign") || strstr(iorg, "GlobalSign") ||
-        strstr(icn, "Amazon") || strstr(iorg, "Amazon") ||
-        strstr(icn, "ZeroSSL") || strstr(iorg, "ZeroSSL") ||
-        strstr(icn, "SeldOS") || strstr(iorg, "SeldOS"))) {
+        strcmp(icn, "DigiCert Global Root CA") == 0 ||
+        strcmp(icn, "DigiCert Global Root G2") == 0 ||
+        strcmp(icn, "ISRG Root X1") == 0 ||
+        strcmp(icn, "ISRG Root X2") == 0 ||
+        strcmp(icn, "GTS Root R1") == 0 ||
+        strcmp(icn, "GTS Root R2") == 0 ||
+        strcmp(icn, "Cloudflare Inc ECC CA-3") == 0 ||
+        strcmp(icn, "SeldOS Sovereign Root CA") == 0 ||
+        (iorg[0] && (strcmp(iorg, "DigiCert Inc") == 0 ||
+                     strcmp(iorg, "Let's Encrypt") == 0 ||
+                     strcmp(iorg, "Google Trust Services LLC") == 0 ||
+                     strcmp(iorg, "Cloudflare, Inc.") == 0 ||
+                     strcmp(iorg, "SeldOS Foundation") == 0)))) {
         conn->peer_cert.ca_verified = 1;
     }
 }
@@ -494,6 +498,7 @@ int seld_tls_handshake(struct seld_tls_conn* conn, int tcp_sock, const char* sni
     uint64_t s_hs_seq = 0;
     int server_finished_done = 0;
     int cert_received = 0;
+    int cert_verify_received = 0;
 
     static uint8_t reasm_buf[32768];
     size_t reasm_len = 0;
@@ -539,17 +544,23 @@ int seld_tls_handshake(struct seld_tls_conn* conn, int tcp_sock, const char* sni
                 cert_received = 1;
             }
 
-            if (mtype == 20) { // Finished
+            if (mtype == 15) { // CertificateVerify (0x0F)
                 if (!cert_received) {
-                    return -13; // Missing Server Certificate
+                    return -15; // CertificateVerify before Certificate
+                }
+                cert_verify_received = 1;
+            }
+
+            if (mtype == 20) { // Finished
+                if (!cert_received || !cert_verify_received) {
+                    return -13; // Missing Server Certificate or CertificateVerify
                 }
 
                 // Strict OpSec Validation: reject MITM certificates with mismatched domain or unverified CA
                 int is_local_or_gw = (strcmp(conn->sni_host, "gateway") == 0 ||
                                       strcmp(conn->sni_host, "localhost") == 0 ||
                                       strcmp(conn->sni_host, "127.0.0.1") == 0 ||
-                                      strcmp(conn->sni_host, "10.0.2.2") == 0 ||
-                                      (conn->sni_host[0] >= '0' && conn->sni_host[0] <= '9'));
+                                      strcmp(conn->sni_host, "10.0.2.2") == 0);
                 int is_onion = (strstr(conn->sni_host, ".onion") != NULL);
                 if (!is_local_or_gw) {
                     if (!conn->peer_cert.valid || !conn->peer_cert.domain_matched || (!conn->peer_cert.ca_verified && !is_onion)) {

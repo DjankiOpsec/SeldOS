@@ -76,6 +76,11 @@ static void split_block(struct block_header* block, size_t size) {
         new_block->prev = block;
 
         if (block->next) {
+            if (block->next->magic != KMALLOC_MAGIC || block->next->prev != block) {
+                serial_puts("[-] FATAL: Kernel heap block corruption in split_block!\n");
+                kernel_panic("Kernel heap corruption detected: forward link broken in split");
+                return;
+            }
             block->next->prev = new_block;
         }
         block->next = new_block;
@@ -84,6 +89,20 @@ static void split_block(struct block_header* block, size_t size) {
 }
 
 static void merge_blocks(struct block_header* block) {
+    if (!block || block->magic != KMALLOC_MAGIC) return;
+
+    // Validate bidirectional integrity to prevent unlink exploitation
+    if (block->next && (block->next->magic != KMALLOC_MAGIC || block->next->prev != block)) {
+        serial_puts("[-] FATAL: Kernel heap block corruption in block->next!\n");
+        kernel_panic("Kernel heap corruption detected: forward link broken");
+        return;
+    }
+    if (block->prev && (block->prev->magic != KMALLOC_MAGIC || block->prev->next != block)) {
+        serial_puts("[-] FATAL: Kernel heap block corruption in block->prev!\n");
+        kernel_panic("Kernel heap corruption detected: backward link broken");
+        return;
+    }
+
     // Merge with next block if free and strictly contiguous in memory
     if (block->next && block->next->is_free &&
         ((uint8_t*)block + BLOCK_HEADER_SIZE + block->size == (uint8_t*)block->next)) {

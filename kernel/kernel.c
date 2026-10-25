@@ -179,23 +179,27 @@ void kernel_main(uint64_t mb_info_addr, uint64_t mb_magic) {
         int exit_code = elf_load_and_run("/bin/init", 1, init_argv);
 
         vga_set_color(VGA_LIGHT_RED, VGA_BLACK);
-        vga_puts("[!] /bin/init terminated with code: ");
+        vga_puts("\n[!] FATAL: PID 1 (/bin/init) terminated with code: ");
         vga_print_dec(exit_code);
-        vga_puts(". Falling back to Ring 0 SeldShell supervisor.\n\n");
-        serial_puts("[!] /bin/init terminated. Falling back to Ring 0 SeldShell.\n\n");
+        vga_puts(". Halting system.\n");
+        serial_puts("\n[!] FATAL: PID 1 (/bin/init) terminated. Halting system.\n");
+        while (1) {
+#if defined(__riscv)
+            __asm__ volatile ("wfi");
+#else
+            __asm__ volatile ("cli; hlt;");
+#endif
+        }
     }
 
-    vga_puts("[+] Initializing Ring 0 SeldShell environment...\n\n");
-    serial_puts("[+] Initializing Ring 0 SeldShell environment...\n\n");
-
-    seldshell_init();
-    seldshell_run();
-
+    vga_set_color(VGA_LIGHT_RED, VGA_BLACK);
+    vga_puts("\n[!] FATAL: /bin/init not found on storage. Halting system.\n");
+    serial_puts("\n[!] FATAL: /bin/init not found on storage. Halting system.\n");
     while (1) {
 #if defined(__riscv)
         __asm__ volatile ("wfi");
 #else
-        __asm__ volatile ("hlt");
+        __asm__ volatile ("cli; hlt;");
 #endif
     }
 }

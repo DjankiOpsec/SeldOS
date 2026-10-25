@@ -520,22 +520,24 @@ int seld_https_download(const char* host, const char* path, const char* local_pa
 int seld_download_url(const char* url, const char* local_path) {
     if (!url || !local_path) return -1;
 
-    // Tor Browser package: Local Gateway mirror first, fallback to GitHub over SeldTLS 1.3
+    // Tor Browser package: SeldTLS 1.3 Sovereign first, fallback to Local Gateway mirror
     if (strcmp(url, "tor") == 0 || strcmp(url, "torbrowser") == 0) {
-        int r = seld_net_download(0, 8080, "/tor", local_path);
-        if (r == 0) return 0;
-        return seld_https_download("raw.githubusercontent.com",
+        int r = seld_https_download("raw.githubusercontent.com",
                                    "/DjankiOpsec/SeldOS/main/build/bin/tor",
                                    local_path);
+        if (r == 0) return 0;
+        int r2 = seld_net_download(0, 8080, "/tor", local_path);
+        return (r2 == 0) ? 0 : r;
     }
 
-    // DOOM package: Local Gateway mirror first, fallback to GitHub over SeldTLS 1.3
+    // DOOM package: SeldTLS 1.3 Sovereign first, fallback to Local Gateway mirror
     if (strcmp(url, "doom") == 0) {
-        int r = seld_net_download(0, 8080, "/doom", local_path);
-        if (r == 0) return 0;
-        return seld_https_download("raw.githubusercontent.com",
+        int r = seld_https_download("raw.githubusercontent.com",
                                    "/DjankiOpsec/SeldOS/main/build/bin/doom",
                                    local_path);
+        if (r == 0) return 0;
+        int r2 = seld_net_download(0, 8080, "/doom", local_path);
+        return (r2 == 0) ? 0 : r;
     }
 
     // DOOM WAD game assets: Local Gateway mirror first, fallback to GitHub over SeldTLS 1.3
@@ -544,6 +546,25 @@ int seld_download_url(const char* url, const char* local_path) {
         if (r == 0) return 0;
         return seld_https_download("raw.githubusercontent.com",
                                    "/DjankiOpsec/SeldOS/main/doom1.wad",
+                                   local_path);
+    }
+
+    // CCTV Sovereign Binary: SeldTLS 1.3 Sovereign first, fallback to Local Gateway mirror
+    if (strcmp(url, "cctv") == 0 || strcmp(url, "cameras") == 0) {
+        int r = seld_https_download("raw.githubusercontent.com",
+                                   "/DjankiOpsec/SeldOS/main/build/bin/cctv",
+                                   local_path);
+        if (r == 0) return 0;
+        int r2 = seld_net_download(0, 8080, "/cctv", local_path);
+        return (r2 == 0) ? 0 : r;
+    }
+
+    // CCTV Worldwide Surveillance Matrix: Local Gateway mirror first, fallback to GitHub over SeldTLS 1.3
+    if (strcmp(url, "cctv.bin") == 0 || strcmp(url, "matrix") == 0) {
+        int r = seld_net_download(0, 8080, "/cctv.bin", local_path);
+        if (r == 0) return 0;
+        return seld_https_download("raw.githubusercontent.com",
+                                   "/DjankiOpsec/SeldOS/main/cctv.bin",
                                    local_path);
     }
 
@@ -1002,6 +1023,14 @@ int seld_kill(uint32_t pid, int sig) {
 
 int seld_net_raw_inject(const void* frame, size_t len) {
     return (int)seld_syscall(SYS_NET_RAW_INJECT, (long)frame, (long)len, 0);
+}
+
+int seld_net_set_promisc(int enable) {
+    return (int)seld_syscall(SYS_NET_PROMISC, (long)enable, 0, 0);
+}
+
+int seld_net_raw_poll(void* buf, size_t max_len) {
+    return (int)seld_syscall(SYS_NET_RAW_POLL, (long)buf, (long)max_len, 0);
 }
 
 

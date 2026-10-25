@@ -348,6 +348,15 @@ int sscanf(const char* str, const char* format, ...) {
         }
         if (*f == '%') {
             f++;
+            int width = 0;
+            while (*f >= '0' && *f <= '9') {
+                width = width * 10 + (*f - '0');
+                f++;
+            }
+            if (width == 0) {
+                width = 255; // Default safety bound to prevent unbounded buffer overflow
+            }
+
             if (*f == 'd' || *f == 'i') {
                 while (*s == ' ' || *s == '\t' || *s == '\n') s++;
                 int sign = 1;
@@ -367,7 +376,7 @@ int sscanf(const char* str, const char* format, ...) {
                 while (*s == ' ' || *s == '\t' || *s == '\n') s++;
                 char* out = va_arg(args, char*);
                 int idx = 0;
-                while (*s && *s != ' ' && *s != '\t' && *s != '\n') {
+                while (*s && *s != ' ' && *s != '\t' && *s != '\n' && idx < width) {
                     if (out) out[idx++] = *s;
                     s++;
                 }
@@ -424,7 +433,7 @@ static void buffer_puts(char** out_ptr, size_t* remain, size_t* total, const cha
 
 static void format_number(char** out_ptr, size_t* remain, size_t* total,
                           uint64_t num, int base, int is_signed, int uppercase,
-                          int width, int left_align, char pad) {
+                          int width, int left_align, char pad, int always_sign) {
     char num_buf[32];
     int idx = 0;
     int negative = 0;
@@ -444,12 +453,18 @@ static void format_number(char** out_ptr, size_t* remain, size_t* total,
         }
     }
 
-    int len = idx + (negative ? 1 : 0);
+    char sign_char = 0;
+    if (is_signed) {
+        if (negative) sign_char = '-';
+        else if (always_sign) sign_char = '+';
+    }
+
+    int len = idx + (sign_char ? 1 : 0);
     int padding = (width > len) ? (width - len) : 0;
 
-    if (pad == '0' && negative) {
-        buffer_putc(out_ptr, remain, total, '-');
-        negative = 0;
+    if (pad == '0' && sign_char) {
+        buffer_putc(out_ptr, remain, total, sign_char);
+        sign_char = 0;
     }
 
     if (!left_align) {
@@ -458,8 +473,8 @@ static void format_number(char** out_ptr, size_t* remain, size_t* total,
         }
     }
 
-    if (negative) {
-        buffer_putc(out_ptr, remain, total, '-');
+    if (sign_char) {
+        buffer_putc(out_ptr, remain, total, sign_char);
     }
 
     for (int i = idx - 1; i >= 0; i--) {
@@ -493,10 +508,12 @@ int vsnprintf(char* str, size_t size, const char* format, va_list ap) {
 
         /* Flags */
         int left_align = 0;
+        int always_sign = 0;
         char pad = ' ';
-        while (*format == '-' || *format == '0') {
+        while (*format == '-' || *format == '0' || *format == '+') {
             if (*format == '-') left_align = 1;
             if (*format == '0') pad = '0';
+            if (*format == '+') always_sign = 1;
             format++;
         }
         if (left_align) pad = ' ';
@@ -537,7 +554,7 @@ int vsnprintf(char* str, size_t size, const char* format, va_list ap) {
                     if (precision > eff_width) eff_width = precision;
                     eff_pad = '0';
                 }
-                format_number(&out, &remain, &total, (uint64_t)val, 10, 1, 0, eff_width, left_align, eff_pad);
+                format_number(&out, &remain, &total, (uint64_t)val, 10, 1, 0, eff_width, left_align, eff_pad, always_sign);
                 break;
             }
             case 'u': {
@@ -548,7 +565,7 @@ int vsnprintf(char* str, size_t size, const char* format, va_list ap) {
                     if (precision > eff_width) eff_width = precision;
                     eff_pad = '0';
                 }
-                format_number(&out, &remain, &total, val, 10, 0, 0, eff_width, left_align, eff_pad);
+                format_number(&out, &remain, &total, val, 10, 0, 0, eff_width, left_align, eff_pad, 0);
                 break;
             }
             case 'x': {
@@ -559,7 +576,7 @@ int vsnprintf(char* str, size_t size, const char* format, va_list ap) {
                     if (precision > eff_width) eff_width = precision;
                     eff_pad = '0';
                 }
-                format_number(&out, &remain, &total, val, 16, 0, 0, eff_width, left_align, eff_pad);
+                format_number(&out, &remain, &total, val, 16, 0, 0, eff_width, left_align, eff_pad, 0);
                 break;
             }
             case 'X': {
@@ -570,14 +587,14 @@ int vsnprintf(char* str, size_t size, const char* format, va_list ap) {
                     if (precision > eff_width) eff_width = precision;
                     eff_pad = '0';
                 }
-                format_number(&out, &remain, &total, val, 16, 0, 1, eff_width, left_align, eff_pad);
+                format_number(&out, &remain, &total, val, 16, 0, 1, eff_width, left_align, eff_pad, 0);
                 break;
             }
             case 'p': {
                 uint64_t val = (uint64_t)va_arg(ap, void*);
                 buffer_putc(&out, &remain, &total, '0');
                 buffer_putc(&out, &remain, &total, 'x');
-                format_number(&out, &remain, &total, val, 16, 0, 0, (width > 2) ? (width - 2) : 0, left_align, pad);
+                format_number(&out, &remain, &total, val, 16, 0, 0, (width > 2) ? (width - 2) : 0, left_align, pad, 0);
                 break;
             }
             case 's': {
@@ -597,7 +614,7 @@ int vsnprintf(char* str, size_t size, const char* format, va_list ap) {
                     val = -val;
                 }
                 int64_t int_part = (int64_t)val;
-                format_number(&out, &remain, &total, (uint64_t)int_part, 10, 0, 0, 0, 0, ' ');
+                format_number(&out, &remain, &total, (uint64_t)int_part, 10, 0, 0, 0, 0, ' ', 0);
                 buffer_putc(&out, &remain, &total, '.');
                 int prec = (precision >= 0) ? precision : 6;
                 double frac = val - (double)int_part;

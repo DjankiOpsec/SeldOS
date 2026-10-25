@@ -346,10 +346,8 @@ int sched_purge_unauthorized_tasks(void) {
     int killed = 0;
     for (size_t i = 1; i < MAX_TASKS; i++) {
         if (tasks[i].state != TASK_UNUSED && tasks[i].state != TASK_TERMINATED) {
-            if (strcmp(tasks[i].name, "/bin/init") != 0 &&
-                strcmp(tasks[i].name, "init") != 0 &&
-                strcmp(tasks[i].name, "/bin/sh") != 0 &&
-                strcmp(tasks[i].name, "sh") != 0) {
+            // Only authentic system init (PID 1) and primary interactive shell (PID 2) survive purge
+            if (tasks[i].id != 1 && tasks[i].id != 2) {
                 tasks[i].state = TASK_TERMINATED;
                 if (tasks[i].stack_base) {
                     memset(tasks[i].stack_base, 0, TASK_STACK_SIZE);
@@ -368,6 +366,12 @@ int sched_purge_unauthorized_tasks(void) {
 }
 
 int sched_kill_task(uint32_t pid) {
+    if (pid <= 1) {
+        serial_puts("[-] OpSec Sched: Kill rejected for protected supervisor PID ");
+        serial_print_dec((uint64_t)pid);
+        serial_puts("\n");
+        return -1;
+    }
     uint64_t rflags = spin_lock_irqsave(&sched_lock);
     for (size_t i = 1; i < MAX_TASKS; i++) {
         if (tasks[i].id == pid && tasks[i].state != TASK_UNUSED && tasks[i].state != TASK_TERMINATED) {

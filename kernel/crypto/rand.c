@@ -77,6 +77,19 @@ static uint64_t splitmix64(uint64_t* state) {
 }
 
 uint64_t rng_get_u64(void) {
+#if defined(__riscv)
+    uint64_t sstatus;
+    __asm__ volatile ("csrr %0, sstatus; csrci sstatus, 2" : "=r"(sstatus) : : "memory");
+#else
+    uint64_t rflags;
+    __asm__ volatile (
+        "pushfq\n\t"
+        "popq %0\n\t"
+        "cli"
+        : "=r"(rflags) : : "memory"
+    );
+#endif
+
     uint64_t raw_cpu_rdrand = 0;
 #if !defined(__riscv)
     if (rdrand_available) {
@@ -124,6 +137,17 @@ uint64_t rng_get_u64(void) {
 
     uint64_t result;
     memcpy(&result, s_entropy_pool, sizeof(uint64_t));
+
+#if defined(__riscv)
+    if (sstatus & 2) {
+        __asm__ volatile ("csrsi sstatus, 2" ::: "memory");
+    }
+#else
+    if (rflags & 0x200) {
+        __asm__ volatile ("sti" ::: "memory");
+    }
+#endif
+
     return result;
 }
 

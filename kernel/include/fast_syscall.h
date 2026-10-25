@@ -91,6 +91,8 @@
 #define SYS_REDIRECT_STDIN       75
 #define SYS_KILL                 76
 #define SYS_NET_RAW_INJECT       77
+#define SYS_NET_PROMISC          78
+#define SYS_NET_RAW_POLL         79
 
 struct seld_otp_request {
     uint32_t col;
@@ -219,6 +221,7 @@ struct user_process_state {
 
 extern uint64_t kernel_syscall_stack_top;
 extern struct user_process_state current_user_proc;
+extern uint64_t user_depth;
 
 int validate_user_buffer(const void* user_ptr, size_t size, int write);
 void syscall_init_fast(void);

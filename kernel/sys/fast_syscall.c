@@ -43,8 +43,10 @@ uint64_t kernel_syscall_stack_top = (uint64_t)&syscall_stack[sizeof(syscall_stac
 static uint64_t user_current_brk = 0;
 
 /* Seld-Pledge Process Sandboxing State */
-static uint32_t current_pledge_mask = 0xFFFFFFFF;
-static uint8_t  current_pledge_enforced = 0;
+#define DEFAULT_USER_PLEDGE (PLEDGE_STDIO | PLEDGE_RPATH | PLEDGE_WPATH | PLEDGE_EXEC | PLEDGE_NET | PLEDGE_DNS | PLEDGE_AUDIO)
+#define ADMIN_SYSTEM_PLEDGE (DEFAULT_USER_PLEDGE | PLEDGE_PURGE | PLEDGE_REBOOT)
+static uint32_t current_pledge_mask = ADMIN_SYSTEM_PLEDGE;
+static uint8_t  current_pledge_enforced = 1;
 
 /* Seld-Unveil Process Filesystem Sandboxing State (OpenBSD unveil(2)) */
 #define MAX_UNVEIL_RULES 16
@@ -141,8 +143,9 @@ void syscall_init_fast(void) {
     // 4. Setup FMASK MSR: mask IF (0x200) to disable interrupts upon syscall entry
     wrmsr(MSR_FMASK, 0x200);
 
-    // 5. Update TSS.RSP0
+    // 5. Update TSS.RSP0 and initialize IA32_KERNEL_GS_BASE
     tss_set_rsp0(kernel_syscall_stack_top);
+    wrmsr(0xC0000102, 0);
 
     // 6. Initialize FD table (0, 1, 2 reserved)
     memset(user_fds, 0, sizeof(user_fds));
@@ -427,6 +430,12 @@ static int check_unveil(const char* target_path, uint8_t req_perm) {
 int elf_load_and_run(const char* path, int argc, char* argv[]) {
     if (!path) return -1;
 
+    // Guard against kernel syscall stack underflow on recursive userland nesting
+    if (user_depth >= 7) {
+        serial_puts("[-] OpSec / Exec: Maximum Ring 3 nesting depth exceeded (MAX_USER_DEPTH). Spawn rejected.\n");
+        return -1;
+    }
+
     char resolved[SELDFS_MAX_FILENAME];
     resolve_seldfs_path(path, resolved);
 
@@ -539,10 +548,46 @@ int elf_load_and_run(const char* path, int argc, char* argv[]) {
     uint64_t saved_brk = user_current_brk;
     user_current_brk = DEFAULT_USER_HEAP_BASE;
 
+    // Isolate file descriptor table per-process
+    struct user_fd_entry saved_user_fds[MAX_USER_FDS];
+    memcpy(saved_user_fds, user_fds, sizeof(user_fds));
+    int saved_stdout_redirect = s_stdout_redirect_fd;
+    int saved_stdin_redirect = s_stdin_redirect_fd;
+    for (int i = 3; i < MAX_USER_FDS; i++) {
+        user_fds[i].used = 0;
+        user_fds[i].filename[0] = '\0';
+        user_fds[i].offset = 0;
+        user_fds[i].flags = 0;
+        user_fds[i].size = 0;
+    }
+    s_stdout_redirect_fd = -1;
+    s_stdin_redirect_fd = -1;
+
+    const char* base_bin = resolved;
+    if (strncmp(base_bin, "/bin/", 5) == 0) base_bin += 5;
+    else if (base_bin[0] == '/') base_bin += 1;
+
+    // Enforce one-way privilege inheritance and mandatory default sandboxing
     uint32_t saved_pledge_mask = current_pledge_mask;
     uint8_t  saved_pledge_enforced = current_pledge_enforced;
-    current_pledge_mask = 0xFFFFFFFF;
-    current_pledge_enforced = 0;
+
+    int is_admin_tool = (strcmp(base_bin, "init") == 0 ||
+                         strcmp(base_bin, "sh") == 0 ||
+                         strcmp(base_bin, "reboot") == 0 ||
+                         strcmp(base_bin, "poweroff") == 0 ||
+                         strcmp(base_bin, "purge") == 0 ||
+                         strcmp(base_bin, "jammer") == 0 ||
+                         strcmp(base_bin, "phantom") == 0 ||
+                         strcmp(base_bin, "radar") == 0 ||
+                         strcmp(base_bin, "cctv") == 0 ||
+                         strcmp(base_bin, "wiretap") == 0);
+
+    uint32_t child_pledge_mask = saved_pledge_mask;
+    if (!is_admin_tool) {
+        child_pledge_mask &= DEFAULT_USER_PLEDGE;
+    }
+    current_pledge_mask = child_pledge_mask;
+    current_pledge_enforced = 1;
 
     struct unveil_rule saved_unveil_rules[MAX_UNVEIL_RULES];
     memcpy(saved_unveil_rules, current_unveil_rules, sizeof(current_unveil_rules));
@@ -557,10 +602,6 @@ int elf_load_and_run(const char* path, int argc, char* argv[]) {
     }
 
     uint64_t parent_cr3 = vmm_get_active_root();
-
-    const char* base_bin = resolved;
-    if (strncmp(base_bin, "/bin/", 5) == 0) base_bin += 5;
-    else if (base_bin[0] == '/') base_bin += 1;
 
     int is_net_tool = (strcmp(base_bin, "tor") == 0 ||
                        strcmp(base_bin, "torbrowser") == 0 ||
@@ -593,6 +634,9 @@ int elf_load_and_run(const char* path, int argc, char* argv[]) {
 
     // Restore parent state
     user_current_brk = saved_brk;
+    memcpy(user_fds, saved_user_fds, sizeof(user_fds));
+    s_stdout_redirect_fd = saved_stdout_redirect;
+    s_stdin_redirect_fd = saved_stdin_redirect;
     current_pledge_mask = saved_pledge_mask;
     current_pledge_enforced = saved_pledge_enforced;
     memcpy(current_unveil_rules, saved_unveil_rules, sizeof(current_unveil_rules));
@@ -734,8 +778,6 @@ void opsec_fire_and_kill(void) {
 
 /* Seld-Pledge Capability Verification Engine */
 static int check_pledge(uint64_t sys_num, uint64_t a1, uint64_t a2) {
-    if (!current_pledge_enforced) return 0;
-
     uint32_t req = 0;
     switch (sys_num) {
         case SYS_EXIT:
@@ -755,19 +797,16 @@ static int check_pledge(uint64_t sys_num, uint64_t a1, uint64_t a2) {
         case SYS_UNVEIL:
         case SYS_OPSEC_SET_JITTER:
         case SYS_OPSEC_GET_JITTER:
-        case SYS_OPSEC_SET_DEADMAN:
         case SYS_OPSEC_GET_DEADMAN:
         case SYS_OPSEC_FLUSH_UARCH:
         case SYS_NET_SET_CHAFF:
         case SYS_NET_GET_CHAFF:
         case SYS_OPSEC_SET_TEMPEST:
         case SYS_OPSEC_GET_TEMPEST:
-        case SYS_PCI_LOCKDOWN:
         case SYS_NET_SET_SKEW_DEFENSE:
         case SYS_NET_GET_SKEW_DEFENSE:
         case SYS_NET_GET_TIME:
         case SYS_NET_SET_TIME:
-        case SYS_NET_SET_CONFIG:
         case SYS_OPSEC_GET_HW_TELEMETRY:
         case SYS_NET_SET_BOOT_DELAY:
         case SYS_NET_GET_BOOT_DELAY:
@@ -813,7 +852,7 @@ static int check_pledge(uint64_t sys_num, uint64_t a1, uint64_t a2) {
 
         case SYS_REDIRECT_STDOUT:
         case SYS_REDIRECT_STDIN:
-            req = PLEDGE_STDIO;
+            req = PLEDGE_PURGE; // Elevated administrative capability
             break;
 
         case SYS_NET_INFO:
@@ -826,8 +865,13 @@ static int check_pledge(uint64_t sys_num, uint64_t a1, uint64_t a2) {
         case SYS_NET_TCP_CLOSE:
         case SYS_NET_SET_DESYNC:
         case SYS_NET_GET_DESYNC:
-        case SYS_NET_RAW_INJECT:
             req = PLEDGE_NET;
+            break;
+
+        case SYS_NET_RAW_INJECT:
+        case SYS_NET_PROMISC:
+        case SYS_NET_RAW_POLL:
+            req = PLEDGE_PURGE; // Strict elevated capability for raw packet injection / sniffing
             break;
 
         case SYS_NET_DNS_RESOLVE:
@@ -845,6 +889,9 @@ static int check_pledge(uint64_t sys_num, uint64_t a1, uint64_t a2) {
         case SYS_NET_SET_LOCK:
         case SYS_NET_GET_LOCK:
         case SYS_OPSEC_BLACKOUT:
+        case SYS_OPSEC_SET_DEADMAN:
+        case SYS_PCI_LOCKDOWN:
+        case SYS_NET_SET_CONFIG:
             req = PLEDGE_PURGE;
             break;
 
@@ -1016,6 +1063,13 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
                 req_perm |= UNVEIL_CREATE;
             }
             if (!check_unveil(filename, req_perm)) {
+                return (uint64_t)-1;
+            }
+
+            if ((flags & (0x0001 | 0x0002 | 0x0040 | 0x0200)) && seldfs_is_sealed_file(filename)) {
+                serial_puts("[-] OpSec VFS: Write/truncate rejected for sealed system binary: '");
+                serial_puts(filename);
+                serial_puts("'\n");
                 return (uint64_t)-1;
             }
 
@@ -1285,6 +1339,12 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
             char resolved[SELDFS_MAX_FILENAME];
             resolve_seldfs_path(k_path, resolved);
             if (!check_unveil(resolved, UNVEIL_CREATE)) return (uint64_t)-1;
+            if (seldfs_is_sealed_file(resolved)) {
+                serial_puts("[-] OpSec VFS: Blocked unlink of sealed immutable binary: '");
+                serial_puts(resolved);
+                serial_puts("'\n");
+                return (uint64_t)-1;
+            }
             return (uint64_t)seldfs_delete_file(resolved);
         }
 
@@ -1302,8 +1362,8 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
                 user_tasks[copied].id = k_tasks[i].id;
                 memcpy(user_tasks[copied].name, k_tasks[i].name, sizeof(user_tasks[copied].name));
                 user_tasks[copied].state = (uint32_t)k_tasks[i].state;
-                user_tasks[copied].rsp = k_tasks[i].rsp;
-                user_tasks[copied].stack_base = k_tasks[i].stack_base;
+                user_tasks[copied].rsp = 0; // OpSec: Prevent kernel stack pointer disclosure
+                user_tasks[copied].stack_base = 0; // OpSec: Prevent kernel stack base disclosure
                 user_tasks[copied].sleep_until_ticks = k_tasks[i].sleep_until_ticks;
                 user_tasks[copied].runtime_ticks = k_tasks[i].runtime_ticks;
                 copied++;
@@ -1378,6 +1438,13 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
             resolve_seldfs_path(k_path, resolved);
 
             if (!check_unveil(resolved, UNVEIL_WRITE)) {
+                return (uint64_t)-1;
+            }
+
+            if (seldfs_is_sealed_file(resolved)) {
+                serial_puts("[-] OpSec VFS: Blocked writefile to sealed immutable binary: '");
+                serial_puts(resolved);
+                serial_puts("'\n");
                 return (uint64_t)-1;
             }
 
@@ -1904,12 +1971,24 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
         }
 
         case SYS_REDIRECT_STDOUT: {
-            s_stdout_redirect_fd = (int)a1;
+            int target_fd = (int)a1;
+            if (target_fd != -1) {
+                if (target_fd < 0 || target_fd >= MAX_USER_FDS || !user_fds[target_fd].used) {
+                    return (uint64_t)-1;
+                }
+            }
+            s_stdout_redirect_fd = target_fd;
             return 0;
         }
 
         case SYS_REDIRECT_STDIN: {
-            s_stdin_redirect_fd = (int)a1;
+            int target_fd = (int)a1;
+            if (target_fd != -1) {
+                if (target_fd < 0 || target_fd >= MAX_USER_FDS || !user_fds[target_fd].used) {
+                    return (uint64_t)-1;
+                }
+            }
+            s_stdin_redirect_fd = target_fd;
             return 0;
         }
 
@@ -1925,6 +2004,20 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
                 return (uint64_t)-1;
             }
             return (uint64_t)net_raw_send(buf, len);
+        }
+
+        case SYS_NET_PROMISC: {
+            return (uint64_t)net_set_promisc((int)a1);
+        }
+
+        case SYS_NET_RAW_POLL: {
+            void* buf = (void*)a1;
+            size_t max_len = (size_t)a2;
+            if (!buf || max_len == 0) return 0;
+            if (!validate_user_buffer(buf, max_len, 1)) {
+                return (uint64_t)-1;
+            }
+            return (uint64_t)net_raw_poll(buf, max_len);
         }
 
         case SYS_EXIT: {

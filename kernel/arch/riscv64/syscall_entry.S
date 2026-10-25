@@ -89,11 +89,11 @@ jump_to_userspace_asm:
     # 4. Program CSRs for U-mode transition
     csrw sepc, a0
 
-    # sstatus: SPP = 0 (U-mode), SPIE = 1 (enable IRQ on sret), SUM = 1 (allow access to user memory)
+    # sstatus: SPP = 0 (U-mode), SPIE = 1 (enable IRQ on sret), SUM = 0 (disable supervisor user memory access)
     csrr t0, sstatus
-    li t1, ~(1 << 8)
+    li t1, ~((1 << 8) | (1 << 18))
     and t0, t0, t1
-    li t1, (1 << 5) | (1 << 18)
+    li t1, (1 << 5)
     or t0, t0, t1
     csrw sstatus, t0
 

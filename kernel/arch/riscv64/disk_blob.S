@@ -3,7 +3,7 @@
  * GNU AGPLv3 Licensed - Humboldt Underground.
  */
 
-.section .rodata
+.section .data
 .global disk_blob_start
 .global disk_blob_end
 .global disk_blob_size

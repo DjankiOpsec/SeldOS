@@ -16,7 +16,7 @@ LIBC_SRCS = userspace/libc/src/syscall.c \
             userspace/libc/src/seld_tls.c \
             userspace/libc/src/seld_vless.c
 
-UTILS = init sh ls cat echo rm sha256sum uname ps fm download oracle fetch reboot poweroff purge stealth diode pinpad otp hi grep head tail less kill clip drop jammer phantom
+UTILS = init sh ls cat echo rm sha256sum uname ps fm download oracle fetch reboot poweroff purge stealth diode pinpad otp hi grep head tail less kill clip drop jammer phantom radar wiretap
 
 # ---------------------------------------------------------------------------
 # x86_64 Architecture Definitions
@@ -91,7 +91,7 @@ RV_ALL_KOBJS = $(RV_C_KOBJS) $(RV_ASM_KOBJS)
 # Target Dispatch
 # ---------------------------------------------------------------------------
 ifeq ($(filter $(ARCH),riscv riscv64),)
-all: $(X86_ISO_IMAGE) $(X86_DISK_IMG) build/bin/tor build/bin/doom build/bin/diode
+all: $(X86_ISO_IMAGE) $(X86_DISK_IMG) build/bin/tor build/bin/doom build/bin/diode build/bin/cctv
 else
 all: $(RV_KERNEL_ELF) $(RV_DISK_IMG) $(RV_BIN)/tor $(RV_BIN)/diode
 endif
@@ -134,6 +134,15 @@ build/obj_diode_%.o: userspace/bin/diode/%.c userspace/bin/diode/*.h userspace/l
 build/bin/diode: $(X86_USER_CRT0) $(addprefix build/obj_diode_, main.o diode_crypto.o fsk.o qrcodegen.o) $(X86_LIBSNL) userspace/linker.ld
 	@mkdir -p build/bin
 	ld -s -T userspace/linker.ld -nostdlib -o $@ $(X86_USER_CRT0) $(addprefix build/obj_diode_, main.o diode_crypto.o fsk.o qrcodegen.o) --whole-archive $(X86_LIBSNL) --no-whole-archive
+	strip --strip-all $@
+
+build/obj_cctv_%.o: userspace/bin/cctv/%.c userspace/bin/cctv/*.h userspace/libc/include/*.h
+	@mkdir -p build
+	$(CC) $(X86_USER_CFLAGS) -Iuserspace/bin/cctv -c $< -o $@
+
+build/bin/cctv: $(X86_USER_CRT0) $(addprefix build/obj_cctv_, main.o nanojpeg.o) $(X86_LIBSNL) userspace/linker.ld
+	@mkdir -p build/bin
+	ld -s -T userspace/linker.ld -nostdlib -o $@ $(X86_USER_CRT0) $(addprefix build/obj_cctv_, main.o nanojpeg.o) --whole-archive $(X86_LIBSNL) --no-whole-archive
 	strip --strip-all $@
 
 

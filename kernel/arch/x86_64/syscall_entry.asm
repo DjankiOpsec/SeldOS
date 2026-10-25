@@ -24,6 +24,7 @@ global user_rsp_storage
 user_rsp_storage: dq 0
 
 ; Nesting depth and per-depth kernel stack offset
+global user_depth
 user_depth: dq 0
 user_stack_offset: dq 0
 
@@ -42,6 +43,9 @@ syscall_entry_asm:
     ; CPU saves RIP -> RCX, RFLAGS -> R11
     ; CPU sets CS = STAR[47:32] (0x08), SS = STAR[47:32] + 8 (0x10)
     ; Interrupts are disabled by FMASK (bit 9 cleared)
+
+    ; Swap GS to kernel GS base
+    swapgs
 
     ; Save user RSP
     mov [rel user_rsp_storage], rsp
@@ -101,6 +105,9 @@ syscall_entry_asm:
     pop r11 ; Restore user RFLAGS
     pop rsp ; Restore user RSP
 
+    ; Swap GS back to user GS base
+    swapgs
+
     ; Return to Ring 3 (SYSRETQ sets CS = STAR[63:48]+16 = 0x23, SS = STAR[63:48]+8 = 0x1B)
     o64 sysret
 
@@ -122,10 +129,13 @@ jump_to_userspace_asm:
     mov [rel kernel_saved_r13 + rax*8], r13
     mov [rel kernel_saved_r14 + rax*8], r14
     mov [rel kernel_saved_r15 + rax*8], r15
+
+    ; Calculate per-depth kernel stack offset (depth 0 = 0, depth 7 = 57344)
+    mov r10, rax
+    shl r10, 13 ; 8192 bytes per depth level
+    mov [rel user_stack_offset], r10
+
     inc qword [rel user_depth]
-    mov rax, [rel user_depth]
-    shl rax, 13 ; 8192 bytes per depth level
-    mov [rel user_stack_offset], rax
 .depth_cap:
 
     ; Switch to user address space (CR3) if provided
@@ -201,9 +211,16 @@ user_exit_to_kernel:
     dec rax
     mov [rel user_depth], rax
 .depth_zero:
+    test rax, rax
+    jz .offset_zero
     mov rdx, rax
+    dec rdx
     shl rdx, 13 ; 8192 bytes per depth level
     mov [rel user_stack_offset], rdx
+    jmp .offset_done
+.offset_zero:
+    mov qword [rel user_stack_offset], 0
+.offset_done:
 
     ; Restore supervisor registers from active depth
     mov rsp, [rel kernel_saved_rsp + rax*8]

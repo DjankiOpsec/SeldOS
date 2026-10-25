@@ -251,7 +251,9 @@ def main():
         "clip",
         "drop",
         "jammer",
-        "phantom"
+        "phantom",
+        "radar",
+        "wiretap"
     ]
 
     files_to_write = []

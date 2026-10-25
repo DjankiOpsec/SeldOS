@@ -13,6 +13,7 @@
 #include "pmm.h"
 #include "vmm.h"
 #include "string.h"
+#include "sched.h"
 
 /* PC Speaker Hardware I/O Ports */
 #define SPEAKER_PIT_CMD   0x43
@@ -523,17 +524,19 @@ int audio_play_pcm(const uint8_t* samples, size_t len, uint32_t sample_rate) {
         }
     }
 
-    // 3. Modulate PC Speaker tone based on waveform amplitude
-    uint32_t avg = 0;
-    size_t sample_count = len > 64 ? 64 : len;
-    for (size_t i = 0; i < sample_count; i++) {
-        avg += samples[i];
+    // 3. Modulate PC Speaker tone non-blockingly only if no hardware audio device is active
+    if (!(s_audio_info.active_devices & (AUDIO_DEV_AC97 | AUDIO_DEV_SB16))) {
+        uint32_t avg = 0;
+        size_t sample_count = len > 64 ? 64 : len;
+        for (size_t i = 0; i < sample_count; i++) {
+            avg += samples[i];
+        }
+        avg /= sample_count;
+        uint32_t tone_freq = 200 + (avg * 6);
+        audio_play_tone(tone_freq);
+        sched_yield();
+        audio_stop_tone();
     }
-    avg /= sample_count;
-    uint32_t tone_freq = 200 + (avg * 6);
-    audio_play_tone(tone_freq);
-    pit_sleep_ms(25);
-    audio_stop_tone();
 
     return (int)len;
 }

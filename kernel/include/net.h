@@ -262,4 +262,8 @@ int  net_get_zerodns(void);
 /* Raw Packet Injection & Network Sabotage */
 int  net_raw_send(const void* data, size_t len);
 
+/* Raw Packet Capture & Promiscuous Sniffing */
+int  net_set_promisc(int enable);
+int  net_raw_poll(void* buf, size_t max_len);
+
 #endif /* SELD_NET_H */

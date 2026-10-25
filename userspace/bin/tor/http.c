@@ -198,39 +198,25 @@ int http_fetch(const char* url, uint32_t proxy_ip, uint16_t proxy_port, struct h
                 if (sock >= 0) {
                     used_tor = 1;
                 } else {
-                    s_tor_socks_down = 1; // SOCKS daemon not responding, fall back to native clearnet
-                }
-            }
-
-            // Fallback: Native DNS & Direct TCP if Tor daemon is offline or refused
-            if (sock < 0) {
-                uint32_t ip = parse_ipv4(host);
-                if (ip == 0 && (strcmp(host, "gateway") == 0 || strcmp(host, "localhost") == 0)) {
-                    struct seld_net_info ninfo;
-                    if (seld_net_info(&ninfo) == 0) {
-                        ip = (strcmp(host, "gateway") == 0) ? ninfo.gateway : ninfo.ip;
+                    // Try OpSec Gateway proxy on port 8080
+                    int gw_sock = seld_tcp_connect(proxy_ip, 8080);
+                    if (gw_sock >= 0) {
+                        sock = gw_sock;
+                        used_tor = 1;
+                        is_https = 0; // Gateway handles TLS termination
+                    } else {
+                        // Fail-Closed: Refuse to leak DNS queries or direct TCP over clearnet
+                        return -10; // ERR_TOR_OFFLINE
                     }
                 }
-
-                if (ip == 0) {
-                    if (is_onion || (strlen(host) >= 6 && strcmp(host + strlen(host) - 6, ".onion") == 0)) {
-                        return -10; // RFC 7686 Guard: Onion domains must never be resolved via clearnet DNS
-                    }
-                    struct seld_net_info ninfo;
-                    if (seld_net_info(&ninfo) == 0 && !ninfo.link_up) {
-                        return -15; // Network interface offline
-                    }
-                    int dns_err = seld_dns_resolve(host, &ip);
-                    if (dns_err != 0 || ip == 0) {
-                        return (dns_err == -4) ? -15 : -3; // DNS resolution failed
-                    }
-                }
-
-                if (ip != 0) {
-                    sock = seld_tcp_connect(ip, port);
-                    if (sock >= 0) {
-                        used_tor = (is_https ? 2 : 0);
-                    }
+            } else {
+                int gw_sock = seld_tcp_connect(proxy_ip, 8080);
+                if (gw_sock >= 0) {
+                    sock = gw_sock;
+                    used_tor = 1;
+                    is_https = 0;
+                } else {
+                    return -10; // ERR_TOR_OFFLINE: Fail-Closed
                 }
             }
         }

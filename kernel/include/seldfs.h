@@ -68,6 +68,7 @@ int seldfs_get_all_inodes(struct seldfs_inode* out_inodes, size_t max_count);
 int seldfs_get_file_count(void);
 void seldfs_get_bitmap_stats(uint32_t* total_blocks, uint32_t* used_blocks, uint32_t* free_blocks);
 int seldfs_is_authorized_file(const char* filename);
+int seldfs_is_sealed_file(const char* filename);
 int seldfs_purge_untrusted(void);
 
 #endif /* SELD_FS_H */

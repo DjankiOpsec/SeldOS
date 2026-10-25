@@ -209,6 +209,40 @@ int net_raw_send(const void* data, size_t len) {
     return -1;
 }
 
+#define RAW_SNIFF_RING_SIZE 32
+#define RAW_SNIFF_PKT_MAX   1536
+
+static struct {
+    uint8_t  buf[RAW_SNIFF_PKT_MAX];
+    uint16_t len;
+} s_raw_sniff_ring[RAW_SNIFF_RING_SIZE];
+static uint16_t s_raw_sniff_head = 0;
+static uint16_t s_raw_sniff_tail = 0;
+static int s_raw_sniff_active = 0;
+
+int net_set_promisc(int enable) {
+    s_raw_sniff_active = enable ? 1 : 0;
+    if (s_nic_type == NIC_TYPE_E1000) {
+        e1000_set_promisc(enable);
+    }
+    if (!enable) {
+        s_raw_sniff_head = 0;
+        s_raw_sniff_tail = 0;
+    }
+    return 0;
+}
+
+int net_raw_poll(void* buf, size_t max_len) {
+    if (!buf || max_len == 0) return 0;
+    net_poll();
+    if (s_raw_sniff_head == s_raw_sniff_tail) return 0;
+    size_t pkt_len = s_raw_sniff_ring[s_raw_sniff_tail].len;
+    size_t copy_sz = pkt_len > max_len ? max_len : pkt_len;
+    memcpy(buf, s_raw_sniff_ring[s_raw_sniff_tail].buf, copy_sz);
+    s_raw_sniff_tail = (s_raw_sniff_tail + 1) % RAW_SNIFF_RING_SIZE;
+    return (int)copy_sz;
+}
+
 static struct net_stats  s_stats  = {0};
 static struct arp_entry  s_arp_table[ARP_TABLE_SIZE] = {0};
 static uint16_t          s_ip_id __attribute__((unused)) = 0x1000;
@@ -246,7 +280,12 @@ static struct {
     uint16_t query_id;
     uint8_t  answered;
     uint32_t resolved_ip;
+    uint16_t client_port;
+    uint32_t server_ip;
 } s_dns_tracker = {0};
+
+static uint32_t s_arp_pending_ip = 0;
+static uint64_t s_arp_pending_time = 0;
 
 /* Internet Checksum Algorithm (RFC 1071) */
 uint16_t net_checksum(const void* data, size_t length) {
@@ -430,6 +469,9 @@ int net_arp_request(uint32_t target_ip) {
     memset(arp->target_mac, 0, ETH_ALEN);
     arp->target_ip = target_ip;
 
+    s_arp_pending_ip = target_ip;
+    s_arp_pending_time = pit_get_uptime_ms();
+
     int res = nic_send_packet(frame_buf, sizeof(frame_buf));
     if (res == 0) {
         s_stats.tx_arp++;
@@ -466,8 +508,32 @@ static void net_handle_arp(const uint8_t* frame, size_t len) {
     uint16_t opcode = ntohs(arp->opcode);
     s_stats.rx_arp++;
 
-    // Update ARP cache with sender details
-    net_arp_update(arp->sender_ip, arp->sender_mac);
+    // Strict Anti-Spoofing: Only update ARP cache if:
+    // 1. We have an active pending ARP request for this IP sent within 3000ms, or
+    // 2. An entry for this non-gateway IP already exists in the cache.
+    // Unsolicited ARP updates for the gateway IP or new unrequested IPs are dropped.
+    int is_pending = (s_arp_pending_ip != 0 && arp->sender_ip == s_arp_pending_ip &&
+                      (pit_get_uptime_ms() - s_arp_pending_time) < 3000);
+    int is_existing = 0;
+    for (int i = 0; i < ARP_TABLE_SIZE; i++) {
+        if (s_arp_table[i].valid && s_arp_table[i].ip == arp->sender_ip) {
+            is_existing = 1;
+            break;
+        }
+    }
+
+    if (is_pending || (is_existing && arp->sender_ip != s_config.gateway)) {
+        net_arp_update(arp->sender_ip, arp->sender_mac);
+        if (is_pending) {
+            s_arp_pending_ip = 0;
+        }
+    } else {
+        serial_puts("[!] OpSec: Dropped unsolicited ARP packet for IP ");
+        char ip_str[16];
+        net_format_ip(arp->sender_ip, ip_str, sizeof(ip_str));
+        serial_puts(ip_str);
+        serial_puts("\n");
+    }
 
     // If ARP Request asking for our IP: send ARP Reply
     if (opcode == ARP_OP_REQUEST && arp->target_ip == s_config.ip) {
@@ -867,7 +933,12 @@ static void net_handle_tcp(const uint8_t* frame, size_t frame_len, const struct 
 
     if (s->state == TCP_STATE_ESTABLISHED) {
         if (tcp->flags & TCP_FLAG_RST) {
-            s->state = TCP_STATE_CLOSED;
+            // RFC 5961 Blind TCP Reset defense: validate sequence number within receive window
+            if (seg_seq == s->rcv_nxt || (seg_seq >= s->rcv_nxt && seg_seq < s->rcv_nxt + 32768)) {
+                s->state = TCP_STATE_CLOSED;
+            } else {
+                serial_puts("[!] OpSec: Dropped out-of-window TCP RST\n");
+            }
             return;
         }
 
@@ -941,6 +1012,17 @@ static void net_handle_udp(const uint8_t* frame, size_t frame_len, const struct 
 
     // Process DNS response (UDP port 53)
     if (src_port == DNS_PORT && payload_len >= sizeof(struct dns_header)) {
+        // OpSec DNS validation: ensure response is addressed to our client port and from our DNS server
+        if (s_dns_tracker.client_port != 0 && dest_port != s_dns_tracker.client_port) {
+            s_stats.rx_dropped++;
+            return;
+        }
+        if (s_dns_tracker.server_ip != 0 && ip_hdr->src_ip != s_dns_tracker.server_ip &&
+            ip_hdr->src_ip != s_config.dns && ip_hdr->src_ip != s_config.gateway) {
+            s_stats.rx_dropped++;
+            return;
+        }
+
         const struct dns_header* dns = (const struct dns_header*)payload;
         uint16_t id = ntohs(dns->id);
 
@@ -1094,6 +1176,17 @@ void net_poll(void) {
 
         s_stats.rx_frames++;
         s_stats.rx_bytes += len;
+
+        // OpSec Raw Sniffer Hook: Copy frame into raw sniffer ring if active
+        if (s_raw_sniff_active) {
+            uint16_t next_head = (s_raw_sniff_head + 1) % RAW_SNIFF_RING_SIZE;
+            if (next_head != s_raw_sniff_tail) {
+                size_t copy_len = len > RAW_SNIFF_PKT_MAX ? RAW_SNIFF_PKT_MAX : (size_t)len;
+                memcpy(s_raw_sniff_ring[s_raw_sniff_head].buf, frame_buf, copy_len);
+                s_raw_sniff_ring[s_raw_sniff_head].len = (uint16_t)copy_len;
+                s_raw_sniff_head = next_head;
+            }
+        }
 
         const struct eth_header* eth = (const struct eth_header*)frame_buf;
         uint16_t ethertype = ntohs(eth->ethertype);
@@ -1634,16 +1727,18 @@ int net_dns_resolve(const char* hostname, uint32_t* ip_out) {
 
     size_t query_len = (size_t)(dst - query_buf);
 
+    // RFC 5452: Ephemeral UDP client port randomization (49152..65535)
+    uint16_t client_port = (uint16_t)(49152 + (rng_get_u64() % (65535 - 49152)));
+    uint32_t primary_dns = s_config.dns ? s_config.dns : DNS_CONTROLD_P2_PRIMARY;
+
     // Setup DNS Tracker
     s_dns_tracker.query_id = qid;
     s_dns_tracker.answered = 0;
     s_dns_tracker.resolved_ip = 0;
-
-    // RFC 5452: Ephemeral UDP client port randomization (49152..65535)
-    uint16_t client_port = (uint16_t)(49152 + (rng_get_u64() % (65535 - 49152)));
+    s_dns_tracker.client_port = client_port;
+    s_dns_tracker.server_ip = primary_dns;
 
     // Send query to configured primary DNS server without broadcast flooding
-    uint32_t primary_dns = s_config.dns ? s_config.dns : DNS_CONTROLD_P2_PRIMARY;
     net_send_udp(primary_dns, client_port, DNS_PORT, query_buf, query_len);
     if (s_config.gateway != 0 && s_config.gateway != primary_dns) {
         net_send_udp(s_config.gateway, client_port, DNS_PORT, query_buf, query_len);

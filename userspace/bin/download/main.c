@@ -22,6 +22,7 @@ int main(int argc, char* argv[]) {
         printf("Examples:\n");
         printf("  download tor                   (fetch Tor Browser package from repo)\n");
         printf("  download doom                  (fetch DOOM game package from repo)\n");
+        printf("  download cctv                  (fetch CCTV worldwide matrix from repo)\n");
         printf("  download http://10.0.2.2:8080/tor /bin/tor\n");
         printf("  download http://10.0.2.2:8080/file.txt /file.txt\n");
         return 1;
@@ -46,6 +47,10 @@ int main(int argc, char* argv[]) {
             dest = "/bin/doom";
         } else if (strcmp(target, "wad") == 0 || strcmp(target, "doom1.wad") == 0) {
             dest = "/doom1.wad";
+        } else if (strcmp(target, "cctv") == 0 || strcmp(target, "cameras") == 0) {
+            dest = "/bin/cctv";
+        } else if (strcmp(target, "cctv.bin") == 0 || strcmp(target, "matrix") == 0) {
+            dest = "/etc/cctv.bin";
         } else {
             const char* slash = strrchr(target, '/');
             if (slash && *(slash + 1)) {
@@ -74,6 +79,13 @@ int main(int argc, char* argv[]) {
                 printf("[*] Use 'download doom force' to re-fetch from GitHub.\n");
             } else if (strcmp(dest, "/doom1.wad") == 0) {
                 printf("[*] DOOM game assets are installed.\n");
+            } else if (strcmp(dest, "/bin/cctv") == 0) {
+                printf("[*] CCTV Worldwide Surveillance client is ready to use.\n");
+                printf("[*] Type 'cctv <city>' (e.g. 'cctv tokyo') to launch. Use 'download cctv force' to re-fetch.\n");
+            } else if (strcmp(dest, "/etc/cctv.bin") == 0) {
+                printf("[*] CCTV Worldwide Surveillance Matrix is ready to use.\n");
+                printf("[*] Type 'cctv <city>' (e.g. 'cctv tokyo') to launch.\n");
+                printf("[*] Use 'download cctv.bin force' to re-fetch from GitHub.\n");
             }
             return 0;
         }
@@ -81,7 +93,8 @@ int main(int argc, char* argv[]) {
 
     printf("[*] SNL Downloader v0.1 (Hardened Network Client)\n");
     if (strcmp(target, "tor") == 0 || strcmp(target, "torbrowser") == 0 ||
-        strcmp(target, "doom") == 0 || strcmp(target, "wad") == 0 || strcmp(target, "doom1.wad") == 0) {
+        strcmp(target, "doom") == 0 || strcmp(target, "wad") == 0 || strcmp(target, "doom1.wad") == 0 ||
+        strcmp(target, "cctv") == 0 || strcmp(target, "cameras") == 0) {
         printf("[*] Fetch Target   : %s (DjankiOpsec/SeldOS @ GitHub)\n", target);
     } else {
         printf("[*] Fetch Target   : %s\n", target);
@@ -118,6 +131,17 @@ int main(int argc, char* argv[]) {
             }
         } else if (strcmp(dest, "/doom1.wad") == 0) {
             printf("[*] DOOM game assets installed. Type 'doom' to play.\n");
+        } else if (strcmp(dest, "/bin/cctv") == 0) {
+            printf("[*] CCTV Sovereign Client installed. Type 'cctv <city>' to launch.\n");
+            struct seld_stat cctv_st;
+            if (seld_stat("/etc/cctv.bin", &cctv_st) != 0 && seld_stat("cctv.bin", &cctv_st) != 0) {
+                printf("[*] Notice: Worldwide camera matrix (/etc/cctv.bin) not detected.\n");
+                printf("[*] Fetching CCTV worldwide surveillance matrix from repo...\n");
+                seld_download_url("cctv.bin", "/etc/cctv.bin");
+            }
+        } else if (strcmp(dest, "/etc/cctv.bin") == 0) {
+            printf("[*] CCTV Worldwide Camera Matrix installed.\n");
+            printf("[*] Type 'cctv <city>' (e.g. 'cctv tokyo', 'cctv 606000') to launch optical intercept.\n");
         }
     } else {
         printf("[-] Warning: Failed to query file status after download.\n");

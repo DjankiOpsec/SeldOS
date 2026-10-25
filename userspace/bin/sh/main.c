@@ -739,6 +739,9 @@ static void builtin_help(void) {
     printf("  stealth [cmd]   Anti-TSPU/DPI Stealth Suite & Native C99 VLESS Client\n");
     printf("  jammer [cmd]    Acoustic Ultrasonic Bug Blaster & TEMPEST RF Jammer (mic/speech/rf)\n");
     printf("  phantom [cmd]   Offensive Raw Packet Forge, Stealth Scanner & TCP Sniper (scan/rst/arp)\n");
+    printf("  radar           Tactical Air Surveillance & Mode-S ADS-B Radar (PPI Phosphor Scope)\n");
+    printf("  wiretap [mode]  Tactical VoIP Wiretap, G.711 RTP Audio Interceptor & Tor Relay (680x334)\n");
+    printf("  cctv [1-8/id]   Live Surveillance Camera Interception & Tor Video Streamer (680x334)\n");
     printf("  ls              List files with size, blocks, and SHA-256 hash\n");
     printf("  cat <file>      Display contents of file\n");
     printf("  echo [args..]   Print arguments to stdout\n");
@@ -1839,6 +1842,7 @@ static void builtin_drv_off(int argc, char* argv[]) {
         printf("[!] Brutally disabling RAM memory manager and heap allocator...\n");
         seld_drv_off("ram");
         printf("[!] RAM driver terminated.\n");
+        sbrk(4096);
     } else {
         printf("snl: drv: unknown subsystem '%s'. Available: gpu, cpu, ram\n", target);
     }
@@ -2140,8 +2144,12 @@ static int execute_single_command(int argc, char* argv[]) {
     } else if (strcmp(cmd, "firekill") == 0) {
         builtin_firekill();
         return 0;
-    } else if (strcmp(cmd, "sh") == 0 && argc >= 2) {
-        return run_script(argv[1]);
+    } else if (strcmp(cmd, "sh") == 0 || strcmp(cmd, "/bin/sh") == 0) {
+        if (argc >= 2) {
+            return run_script(argv[1]);
+        }
+        printf("snl: already running in sovereign shell session\n");
+        return 0;
     }
 
     // External binary execution from SeldFS

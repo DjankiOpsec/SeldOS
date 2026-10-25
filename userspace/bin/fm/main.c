@@ -157,12 +157,16 @@ struct fm_item {
     uint8_t sha256[32];
 };
 
+#define MAX_FM_ITEMS 128
+
 static struct seld_fb_info s_fb;
 static uint32_t* s_backbuf = NULL;
 
-static struct fm_item s_items[32];
+static struct fm_item s_items[MAX_FM_ITEMS];
+static struct seld_dirent s_dirents[MAX_FM_ITEMS];
 static int s_num_items = 0;
 static int s_selected_idx = 0;
+static int s_scroll_row = 0;
 static int s_current_view = 0; // 0=Root, 1=Binaries, 2=Storage, 3=Network
 
 static int s_mouse_x = 0;
@@ -328,47 +332,76 @@ static void format_size(uint32_t bytes, char* buf, size_t buflen) {
     }
 }
 
+static void update_scroll(void) {
+    if (s_num_items <= 0) {
+        s_scroll_row = 0;
+        return;
+    }
+    int cols = 5;
+    int max_vis_rows = 4;
+    int sel_row = s_selected_idx / cols;
+    int total_rows = (s_num_items + cols - 1) / cols;
+    int max_scroll = (total_rows > max_vis_rows) ? (total_rows - max_vis_rows) : 0;
+
+    if (sel_row < s_scroll_row) {
+        s_scroll_row = sel_row;
+    } else if (sel_row >= s_scroll_row + max_vis_rows) {
+        s_scroll_row = sel_row - max_vis_rows + 1;
+    }
+
+    if (s_scroll_row > max_scroll) s_scroll_row = max_scroll;
+    if (s_scroll_row < 0) s_scroll_row = 0;
+}
+
 static void load_directory(int view_mode) {
     s_num_items = 0;
     s_selected_idx = 0;
+    s_scroll_row = 0;
 
-    struct seld_dirent dirents[32];
-    int count = seld_listdir("/", dirents, 32);
+    int count = seld_listdir("/", s_dirents, MAX_FM_ITEMS);
     if (count <= 0) return;
 
     if (view_mode == 0) {
         // Root View: Folder "bin", plus files at root
-        s_items[s_num_items++] = (struct fm_item){
-            "bin", "/bin", 0, TYPE_FOLDER, {0}
-        };
+        if (s_num_items < MAX_FM_ITEMS) {
+            s_items[s_num_items++] = (struct fm_item){
+                "bin", "/bin", 0, TYPE_FOLDER, {0}
+            };
+        }
 
         for (int i = 0; i < count; i++) {
-            if (strncmp(dirents[i].name, "/bin/", 5) != 0) {
+            if (strncmp(s_dirents[i].name, "/bin/", 5) != 0) {
+                if (s_num_items >= MAX_FM_ITEMS) break;
                 struct fm_item it;
-                strncpy(it.name, dirents[i].name, 31);
+                strncpy(it.name, s_dirents[i].name, 31);
                 it.name[31] = '\0';
-                strncpy(it.full_path, dirents[i].name, 63);
-                it.size = dirents[i].size;
+                strncpy(it.full_path, s_dirents[i].name, 63);
+                it.full_path[63] = '\0';
+                it.size = s_dirents[i].size;
                 it.type = detect_type(it.name);
-                memcpy(it.sha256, dirents[i].sha256, 32);
+                memcpy(it.sha256, s_dirents[i].sha256, 32);
                 s_items[s_num_items++] = it;
             }
         }
     } else if (view_mode == 1) {
         // Binaries View (/bin/)
-        s_items[s_num_items++] = (struct fm_item){
-            "..", "/", 0, TYPE_FOLDER, {0}
-        };
+        if (s_num_items < MAX_FM_ITEMS) {
+            s_items[s_num_items++] = (struct fm_item){
+                "..", "/", 0, TYPE_FOLDER, {0}
+            };
+        }
 
         for (int i = 0; i < count; i++) {
-            if (strncmp(dirents[i].name, "/bin/", 5) == 0) {
+            if (strncmp(s_dirents[i].name, "/bin/", 5) == 0) {
+                if (s_num_items >= MAX_FM_ITEMS) break;
                 struct fm_item it;
-                strncpy(it.name, dirents[i].name + 5, 31); // strip "/bin/"
+                strncpy(it.name, s_dirents[i].name + 5, 31); // strip "/bin/"
                 it.name[31] = '\0';
-                strncpy(it.full_path, dirents[i].name, 63);
-                it.size = dirents[i].size;
+                strncpy(it.full_path, s_dirents[i].name, 63);
+                it.full_path[63] = '\0';
+                it.size = s_dirents[i].size;
                 it.type = TYPE_BINARY;
-                memcpy(it.sha256, dirents[i].sha256, 32);
+                memcpy(it.sha256, s_dirents[i].sha256, 32);
                 s_items[s_num_items++] = it;
             }
         }
@@ -482,12 +515,19 @@ static void render_screen(void) {
     int cell_w = 98;
     int cell_h = 62;
     int cols = 5;
+    int max_vis_rows = 4;
+    int total_rows = (s_num_items + cols - 1) / cols;
 
     for (int i = 0; i < s_num_items; i++) {
         int r = i / cols;
         int c = i % cols;
+        int vis_r = r - s_scroll_row;
+        if (vis_r < 0 || vis_r >= max_vis_rows) {
+            continue;
+        }
+
         int cx = grid_x + c * cell_w;
-        int cy = grid_y + r * cell_h;
+        int cy = grid_y + vis_r * cell_h;
 
         int selected = (i == s_selected_idx);
         if (selected) {
@@ -522,6 +562,21 @@ static void render_screen(void) {
         }
     }
 
+    // Scrollbar indicator
+    if (total_rows > max_vis_rows) {
+        int bar_x = 642;
+        int bar_y = 38;
+        int bar_w = 4;
+        int bar_h = max_vis_rows * cell_h - 4;
+        fill_rect(bar_x, bar_y, bar_w, bar_h, 0xFF14202E);
+
+        int thumb_h = (bar_h * max_vis_rows) / total_rows;
+        if (thumb_h < 24) thumb_h = 24;
+        int max_scroll = total_rows - max_vis_rows;
+        int thumb_y = bar_y + (bar_h - thumb_h) * s_scroll_row / max_scroll;
+        fill_rect(bar_x, thumb_y, bar_w, thumb_h, COL_BORDER_FOCUS);
+    }
+
     // 5. Bottom Status Bar
     int status_y = SCR_H - 20;
     draw_rect(0, status_y, SCR_W, 20, COL_BORDER, COL_BG_STATUS);
@@ -530,14 +585,17 @@ static void render_screen(void) {
         char st_line[128];
         struct fm_item* it = &s_items[s_selected_idx];
         if (it->type == TYPE_FOLDER) {
-            snprintf(st_line, sizeof(st_line), "Folder: %s (Directory)", it->name);
+            snprintf(st_line, sizeof(st_line), "Folder: %s (Directory) [%d/%d]", it->name, s_selected_idx + 1, s_num_items);
         } else {
-            snprintf(st_line, sizeof(st_line), "File: %s (%u bytes) | SHA-256 Verified", it->name, it->size);
+            snprintf(st_line, sizeof(st_line), "File: %s (%u bytes) [%d/%d]", it->name, it->size, s_selected_idx + 1, s_num_items);
         }
         draw_text_5x7(12, status_y + 6, st_line, COL_TEXT_LIGHT);
     }
 
-    draw_text_5x7(450, status_y + 6, "[Enter: Open] [Q/ESC: Exit]", COL_FOLDER_TAB);
+    if (total_rows > max_vis_rows) {
+        draw_text_5x7(360, status_y + 6, "[Scroll: ^v]", COL_FOLDER_TAB);
+    }
+    draw_text_5x7(460, status_y + 6, "[Enter: Open] [Q/ESC: Exit]", COL_FOLDER_TAB);
 
     // 6. Modal Viewer Overlay (if active)
     if (s_modal_active) {
@@ -665,25 +723,26 @@ int main(int argc, char* argv[]) {
                                         "Security: W^X Non-Executable Userland");
                     }
                     needs_render = 1;
-                } else if (s_mouse_x >= 147 && s_mouse_y >= 38) {
+                } else if (s_mouse_x >= 147 && s_mouse_x < 637 && s_mouse_y >= 38 && s_mouse_y < 38 + 4 * 62) {
                     // Click on grid
                     int c = (s_mouse_x - 147) / 98;
                     int r = (s_mouse_y - 38) / 62;
-                    int idx = r * 5 + c;
+                    int idx = (r + s_scroll_row) * 5 + c;
                     if (c >= 0 && c < 5 && idx >= 0 && idx < s_num_items) {
                         if (s_selected_idx == idx) {
                             activate_item(&s_items[idx]);
                         } else {
                             s_selected_idx = idx;
+                            update_scroll();
                         }
                         needs_render = 1;
                     }
                 }
-            } else if (s_mouse_x >= 147 && s_mouse_y >= 38) {
+            } else if (s_mouse_x >= 147 && s_mouse_x < 637 && s_mouse_y >= 38 && s_mouse_y < 38 + 4 * 62) {
                 // Hover highlight
                 int c = (s_mouse_x - 147) / 98;
                 int r = (s_mouse_y - 38) / 62;
-                int idx = r * 5 + c;
+                int idx = (r + s_scroll_row) * 5 + c;
                 if (c >= 0 && c < 5 && idx >= 0 && idx < s_num_items && idx != s_selected_idx) {
                     s_selected_idx = idx;
                     needs_render = 1;
@@ -707,13 +766,51 @@ int main(int argc, char* argv[]) {
                 }
             } else if (!s_modal_active) {
                 if (sc == 0x4B) { // Left
-                    if (s_selected_idx > 0) { s_selected_idx--; needs_render = 1; }
+                    if (s_selected_idx > 0) {
+                        s_selected_idx--;
+                        update_scroll();
+                        needs_render = 1;
+                    }
                 } else if (sc == 0x4D) { // Right
-                    if (s_selected_idx < s_num_items - 1) { s_selected_idx++; needs_render = 1; }
+                    if (s_selected_idx < s_num_items - 1) {
+                        s_selected_idx++;
+                        update_scroll();
+                        needs_render = 1;
+                    }
                 } else if (sc == 0x48) { // Up
-                    if (s_selected_idx >= 5) { s_selected_idx -= 5; needs_render = 1; }
+                    if (s_selected_idx >= 5) {
+                        s_selected_idx -= 5;
+                        update_scroll();
+                        needs_render = 1;
+                    }
                 } else if (sc == 0x50) { // Down
-                    if (s_selected_idx + 5 < s_num_items) { s_selected_idx += 5; needs_render = 1; }
+                    if (s_selected_idx + 5 < s_num_items) {
+                        s_selected_idx += 5;
+                        update_scroll();
+                        needs_render = 1;
+                    } else if (s_selected_idx < s_num_items - 1 && (s_selected_idx / 5) < ((s_num_items - 1) / 5)) {
+                        s_selected_idx = s_num_items - 1;
+                        update_scroll();
+                        needs_render = 1;
+                    }
+                } else if (sc == 0x49) { // Page Up
+                    if (s_selected_idx >= 20) s_selected_idx -= 20;
+                    else s_selected_idx = 0;
+                    update_scroll();
+                    needs_render = 1;
+                } else if (sc == 0x51) { // Page Down
+                    if (s_selected_idx + 20 < s_num_items) s_selected_idx += 20;
+                    else s_selected_idx = s_num_items - 1;
+                    update_scroll();
+                    needs_render = 1;
+                } else if (sc == 0x47) { // Home
+                    s_selected_idx = 0;
+                    update_scroll();
+                    needs_render = 1;
+                } else if (sc == 0x4F) { // End
+                    s_selected_idx = s_num_items - 1;
+                    update_scroll();
+                    needs_render = 1;
                 } else if (sc == 0x1C) { // Enter
                     if (s_selected_idx >= 0 && s_selected_idx < s_num_items) {
                         activate_item(&s_items[s_selected_idx]);

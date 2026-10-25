@@ -28,6 +28,15 @@ static struct seldfs_superblock sb;
 static uint8_t block_bitmap[SELDFS_BITMAP_SECTORS * SELDFS_BLOCK_SIZE];
 static int fs_mounted = 0;
 
+/* SeldFS Cryptographic Root of Trust (Immutable Sealed Baseline Table) */
+struct seldfs_sealed_record {
+    char    filename[SELDFS_MAX_FILENAME];
+    uint8_t sha256[32];
+    uint8_t sealed;
+};
+static struct seldfs_sealed_record s_sealed_table[SELDFS_MAX_FILES];
+static size_t s_sealed_count = 0;
+
 /* SeldFS Cryptographic Storage State (FDE / At-Rest Encryption) */
 static uint8_t s_seldfs_key[16] = {0};
 static int     s_seldfs_encrypted = 0;
@@ -260,6 +269,28 @@ void seldfs_init(void) {
             serial_puts(", Mode: Standard Plaintext");
         }
         serial_puts(")\n");
+
+        // OpSec Root of Trust: Snapshot and cryptographically seal system binaries
+        s_sealed_count = 0;
+        for (size_t i = 0; i < SELDFS_MAX_FILES; i++) {
+            if (sb.inodes[i].used && seldfs_is_authorized_file(sb.inodes[i].filename)) {
+                const char* b = sb.inodes[i].filename;
+                if (strncmp(b, "/bin/", 5) == 0) b += 5;
+                else if (strncmp(b, "/etc/", 5) == 0) b += 5;
+                else if (b[0] == '/') b += 1;
+                if (strcmp(b, "doom") == 0 || strcmp(b, "tor") == 0 || strcmp(b, "cctv") == 0 ||
+                    strcmp(b, "doom1.wad") == 0 || strcmp(b, "cctv.bin") == 0) {
+                    continue;
+                }
+                strncpy(s_sealed_table[s_sealed_count].filename, sb.inodes[i].filename, SELDFS_MAX_FILENAME - 1);
+                memcpy(s_sealed_table[s_sealed_count].sha256, sb.inodes[i].sha256, 32);
+                s_sealed_table[s_sealed_count].sealed = 1;
+                s_sealed_count++;
+            }
+        }
+        serial_puts("[+] SeldFS Gatekeeper: Sealed Root of Trust with ");
+        serial_print_dec((uint64_t)s_sealed_count);
+        serial_puts(" immutable binaries.\n");
     } else {
         serial_puts("[!] SeldFS: Superblock not found. Drive requires formatting (use 'mkfs').\n");
     }
@@ -471,6 +502,12 @@ int seldfs_write_file(const char* filename, const void* data, size_t len) {
     if (len > SELDFS_DATA_BLOCKS_PER_FILE * SELDFS_BLOCK_SIZE) {
         return -1; // Exceeds file limit
     }
+    if (seldfs_is_sealed_file(filename)) {
+        serial_puts("[-] OpSec SeldFS: Modification of sealed immutable binary rejected: '");
+        serial_puts(filename);
+        serial_puts("'\n");
+        return -1;
+    }
 
     int target_inode = -1;
     // Check if file already exists
@@ -558,6 +595,12 @@ int seldfs_write_file(const char* filename, const void* data, size_t len) {
 
 int seldfs_delete_file(const char* filename) {
     if (!fs_mounted || !filename) return -1;
+    if (seldfs_is_sealed_file(filename)) {
+        serial_puts("[-] OpSec SeldFS: Deletion of sealed immutable binary rejected: '");
+        serial_puts(filename);
+        serial_puts("'\n");
+        return -1;
+    }
 
     for (size_t i = 0; i < SELDFS_MAX_FILES; i++) {
         if (sb.inodes[i].used && strcmp(sb.inodes[i].filename, filename) == 0) {
@@ -588,20 +631,46 @@ int seldfs_is_authorized_file(const char* filename) {
     if (!filename) return 0;
     const char* base = filename;
     if (strncmp(base, "/bin/", 5) == 0) base += 5;
+    else if (strncmp(base, "/etc/", 5) == 0) base += 5;
     else if (base[0] == '/') base += 1;
 
     static const char* const authorized[] = {
         "init", "sh", "ls", "cat", "echo", "rm", "sha256sum",
         "reboot", "poweroff", "fetch", "fm", "oracle", "ps",
         "uname", "download", "tor", "torbrowser", "doom", "purge", "stealth",
-        "diode", "pinpad", "otp", "hi", "jammer", "phantom",
+        "diode", "pinpad", "otp", "hi", "jammer", "phantom", "radar", "cctv", "wiretap",
         "grep", "head", "tail", "less", "kill", "clip", "drop",
         "readme.txt", "opsec.txt", "oracle.txt", "doom1.wad", "pcmode",
-        "secret.txt", "airgap.key",
+        "secret.txt", "airgap.key", "cctv.bin",
         NULL
     };
     for (int i = 0; authorized[i] != NULL; i++) {
         if (strcmp(base, authorized[i]) == 0) return 1;
+    }
+    return 0;
+}
+
+int seldfs_is_sealed_file(const char* filename) {
+    if (!filename) return 0;
+    const char* base = filename;
+    if (strncmp(base, "/bin/", 5) == 0) base += 5;
+    else if (strncmp(base, "/etc/", 5) == 0) base += 5;
+    else if (base[0] == '/') base += 1;
+
+    // Mutable userland packages are explicitly allowed to be written/downloaded
+    if (strcmp(base, "doom") == 0 || strcmp(base, "tor") == 0 || strcmp(base, "cctv") == 0 ||
+        strcmp(base, "doom1.wad") == 0 || strcmp(base, "cctv.bin") == 0) {
+        return 0;
+    }
+
+    for (size_t i = 0; i < s_sealed_count; i++) {
+        const char* in_base = s_sealed_table[i].filename;
+        if (strncmp(in_base, "/bin/", 5) == 0) in_base += 5;
+        else if (strncmp(in_base, "/etc/", 5) == 0) in_base += 5;
+        else if (in_base[0] == '/') in_base += 1;
+        if (strcmp(in_base, base) == 0) {
+            return 1;
+        }
     }
     return 0;
 }
@@ -654,12 +723,32 @@ int seldfs_verify_file(const char* filename) {
     uint8_t computed_hash[32];
     sha256_final(&ctx, computed_hash);
 
-    if (memcmp(computed_hash, sb.inodes[target_idx].sha256, 32) == 0) {
+    const uint8_t* expected_hash = sb.inodes[target_idx].sha256;
+    int is_sealed = 0;
+    for (size_t i = 0; i < s_sealed_count; i++) {
+        const char* in_base = s_sealed_table[i].filename;
+        if (strncmp(in_base, "/bin/", 5) == 0) in_base += 5;
+        else if (strncmp(in_base, "/etc/", 5) == 0) in_base += 5;
+        else if (in_base[0] == '/') in_base += 1;
+
+        const char* q_base = filename;
+        if (strncmp(q_base, "/bin/", 5) == 0) q_base += 5;
+        else if (strncmp(q_base, "/etc/", 5) == 0) q_base += 5;
+        else if (q_base[0] == '/') q_base += 1;
+
+        if (strcmp(in_base, q_base) == 0) {
+            expected_hash = s_sealed_table[i].sha256;
+            is_sealed = 1;
+            break;
+        }
+    }
+
+    if (memcmp(computed_hash, expected_hash, 32) == 0) {
         return 0; // Verified OK
     } else {
-        serial_puts("[-] SeldFS: SHA-256 integrity check FAILED for: ");
+        serial_puts("[-] SeldFS: Root of Trust integrity check FAILED for: ");
         serial_puts(filename);
-        serial_puts(" (hash mismatch)\n");
+        serial_puts(is_sealed ? " (tampered binary deviates from sealed baseline)\n" : " (hash mismatch)\n");
         return -2; // Hash mismatch
     }
 }
