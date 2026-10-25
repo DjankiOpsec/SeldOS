@@ -812,7 +812,14 @@ static int fetch_live_frame(void) {
     seld_net_lease_acquire();
 
     uint32_t ip = SELD_MAKE_IP(10, 0, 2, 2);
+    struct seld_net_info net;
+    if (seld_net_info(&net) == 0 && net.gateway != 0) {
+        ip = net.gateway;
+    }
     int sock = seld_tcp_connect(ip, 8080);
+    if (sock < 0 && ip != SELD_MAKE_IP(10, 0, 2, 2)) {
+        sock = seld_tcp_connect(SELD_MAKE_IP(10, 0, 2, 2), 8080);
+    }
     if (sock < 0) {
         sock = seld_tcp_connect(SELD_MAKE_IP(127, 0, 0, 1), 8080);
     }
