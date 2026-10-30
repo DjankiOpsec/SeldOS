@@ -549,14 +549,13 @@ int seld_download_url(const char* url, const char* local_path) {
                                    local_path);
     }
 
-    // CCTV Sovereign Binary: SeldTLS 1.3 Sovereign first, fallback to Local Gateway mirror
+    // CCTV Sovereign Binary: Local Gateway mirror first, fallback to GitHub over SeldTLS 1.3
     if (strcmp(url, "cctv") == 0 || strcmp(url, "cameras") == 0) {
-        int r = seld_https_download("raw.githubusercontent.com",
+        int r = seld_net_download(0, 8080, "/cctv", local_path);
+        if (r == 0) return 0;
+        return seld_https_download("raw.githubusercontent.com",
                                    "/DjankiOpsec/SeldOS/main/build/bin/cctv",
                                    local_path);
-        if (r == 0) return 0;
-        int r2 = seld_net_download(0, 8080, "/cctv", local_path);
-        return (r2 == 0) ? 0 : r;
     }
 
     // CCTV Worldwide Surveillance Matrix: Local Gateway mirror first, fallback to GitHub over SeldTLS 1.3

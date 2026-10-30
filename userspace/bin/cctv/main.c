@@ -646,43 +646,41 @@ struct direct_seed {
 };
 
 static const struct direct_seed s_direct_seeds[] = {
+    // Slot 0: Volga Sector (Lenin Square)
     { "dz-lenin-square",    {109, 170, 96, 131}, 2003,  "/cgi-bin/snapshot.cgi", "109.170.96.131:2003" },
-    { "dz-",                {109, 170, 96, 131}, 2003,  "/cgi-bin/snapshot.cgi", "109.170.96.131:2003" },
-    { "nn-",                {109, 170, 96, 131}, 2003,  "/cgi-bin/snapshot.cgi", "109.170.96.131:2003" },
-    { "raw-109-170-96-131", {109, 170, 96, 131}, 2003,  "/cgi-bin/snapshot.cgi", "109.170.96.131:2003" },
+    // Slot 1: Moscow Central Hub
     { "raw-85-172-105-181", {85, 172, 105, 181}, 1027,  "/cgi-bin/snapshot.cgi", "85.172.105.181:1027" },
+    // Slot 2: Moscow West Kuntsevo
     { "raw-5-149-155-88",   {5, 149, 155, 88},   8082,  "/cgi-bin/snapshot.cgi", "5.149.155.88:8082" },
-    { "inetcom-",           {85, 172, 105, 181}, 1027,  "/cgi-bin/snapshot.cgi", "85.172.105.181:1027" },
-    { "raw-108-52-105-4",   {108, 52, 105, 4},   50002, "/SnapshotJPEG?Resolution=640x480&Quality=Clarity", "108.52.105.4:50002" },
-    { "raw-208-65-183-226", {208, 65, 183, 226}, 82,    "/SnapshotJPEG?Resolution=640x480&Quality=Clarity", "208.65.183.226:82" },
-    { "raw-80-13-184-18",   {80, 13, 184, 18},   98,    "/SnapshotJPEG?Resolution=640x480&Quality=Clarity", "80.13.184.18:98" },
-    { "raw-81-250-228-238", {81, 250, 228, 238}, 88,    "/SnapshotJPEG?Resolution=640x480&Quality=Clarity", "81.250.228.238:88" },
-    { "raw-93-66-40-62",    {93, 66, 40, 62},    8050,  "/SnapshotJPEG?Resolution=640x480&Quality=Clarity", "93.66.40.62:8050" },
-    { "raw-82-85-225-70",   {82, 85, 225, 70},   8010,  "/SnapshotJPEG?Resolution=640x480&Quality=Clarity", "82.85.225.70:8010" },
-    { "raw-153-198-1-158",  {153, 198, 1, 158},  60001, "/SnapshotJPEG?Resolution=640x480&Quality=Clarity", "153.198.1.158:60001" },
-    { "raw-183-77-159-247", {183, 77, 159, 247}, 5223,  "/SnapshotJPEG?Resolution=640x480&Quality=Clarity", "183.77.159.247:5223" },
-    { "raw-114-184-246-240", {114, 184, 246, 240}, 50000, "/SnapshotJPEG?Resolution=640x480&Quality=Clarity", "114.184.246.240:50000" },
+    // Slot 3: Berlin Center Alexanderplatz
     { "raw-31-17-87-107",   {31, 17, 87, 107},   83,    "/SnapshotJPEG?Resolution=640x480&Quality=Clarity", "31.17.87.107:83" },
+    // Slot 4: Paris Center Chatelet
+    { "raw-80-13-184-18",   {80, 13, 184, 18},   98,    "/SnapshotJPEG?Resolution=640x480&Quality=Clarity", "80.13.184.18:98" },
+    // Slot 5: Berlin Ring West Charlottenburg
     { "raw-95-223-165-58",  {95, 223, 165, 58},  83,    "/snapshot.cgi?user=admin&pwd=", "95.223.165.58:83" },
-    { "raw-79-224-22-232",  {79, 224, 22, 232},  5010,  "/snapshot.cgi?user=admin&pwd=", "79.224.22.232:5010" },
-    { "raw-31-125-95-247",  {31, 125, 95, 247},  50000, "/SnapshotJPEG?Resolution=640x480&Quality=Clarity", "31.125.95.247:50000" },
-    { "raw-89-240-255-235", {89, 240, 255, 235}, 8000,  "/SnapshotJPEG?Resolution=640x480&Quality=Clarity", "89.240.255.235:8000" }
+    // Slot 6: NYC Manhattan Broadway
+    { "raw-208-65-183-226", {208, 65, 183, 226}, 82,    "/SnapshotJPEG?Resolution=640x480&Quality=Clarity", "208.65.183.226:82" },
+    // Slot 7: Paris North Montmartre
+    { "raw-81-250-228-238", {81, 250, 228, 238}, 88,    "/SnapshotJPEG?Resolution=640x480&Quality=Clarity", "81.250.228.238:88" }
 };
 
-static void resolve_direct_camera(const char* key, uint32_t* ip_out, uint16_t* port_out,
+static void resolve_direct_camera(const char* key, int slot_idx, uint32_t* ip_out, uint16_t* port_out,
                                   char* path_out, size_t path_sz, char* host_out, size_t host_sz) {
+    size_t num_seeds = sizeof(s_direct_seeds) / sizeof(s_direct_seeds[0]);
+
     if (!key || !key[0]) {
-        *ip_out = SELD_MAKE_IP(109, 170, 96, 131);
-        *port_out = 2003;
-        strncpy(path_out, "/cgi-bin/snapshot.cgi", path_sz - 1);
-        strncpy(host_out, "109.170.96.131:2003", host_sz - 1);
+        int idx = (slot_idx >= 0) ? (slot_idx % (int)num_seeds) : 0;
+        *ip_out = SELD_MAKE_IP(s_direct_seeds[idx].ip[0], s_direct_seeds[idx].ip[1],
+                               s_direct_seeds[idx].ip[2], s_direct_seeds[idx].ip[3]);
+        *port_out = s_direct_seeds[idx].port;
+        strncpy(path_out, s_direct_seeds[idx].path, path_sz - 1);
+        strncpy(host_out, s_direct_seeds[idx].host, host_sz - 1);
         return;
     }
 
-    size_t num_seeds = sizeof(s_direct_seeds) / sizeof(s_direct_seeds[0]);
+    // 1. Exact match against known direct seeds
     for (size_t i = 0; i < num_seeds; i++) {
-        if (strstr(key, s_direct_seeds[i].prefix) != NULL ||
-            strncmp(key, s_direct_seeds[i].prefix, strlen(s_direct_seeds[i].prefix)) == 0) {
+        if (strcmp(key, s_direct_seeds[i].prefix) == 0) {
             *ip_out = SELD_MAKE_IP(s_direct_seeds[i].ip[0], s_direct_seeds[i].ip[1],
                                    s_direct_seeds[i].ip[2], s_direct_seeds[i].ip[3]);
             *port_out = s_direct_seeds[i].port;
@@ -692,7 +690,7 @@ static void resolve_direct_camera(const char* key, uint32_t* ip_out, uint16_t* p
         }
     }
 
-    // Check if key is raw IP: raw-A-B-C-D
+    // 2. Check if key is raw IP: raw-A-B-C-D
     if (strncmp(key, "raw-", 4) == 0) {
         int o1 = 0, o2 = 0, o3 = 0, o4 = 0;
         const char* p = key + 4;
@@ -712,11 +710,15 @@ static void resolve_direct_camera(const char* key, uint32_t* ip_out, uint16_t* p
         }
     }
 
-    // Default Fallback: Volga Dzerzhinsk Lenin Square
-    *ip_out = SELD_MAKE_IP(109, 170, 96, 131);
-    *port_out = 2003;
-    strncpy(path_out, "/cgi-bin/snapshot.cgi", path_sz - 1);
-    strncpy(host_out, "109.170.96.131:2003", host_sz - 1);
+    // 3. Slot-based autonomous direct fallback
+    // When offline matrix provides names (dz-*, nn-*, etc.), ensure every slot 1..8
+    // connects to a DISTINCT, verified live camera feed!
+    int idx = (slot_idx >= 0) ? (slot_idx % (int)num_seeds) : 0;
+    *ip_out = SELD_MAKE_IP(s_direct_seeds[idx].ip[0], s_direct_seeds[idx].ip[1],
+                           s_direct_seeds[idx].ip[2], s_direct_seeds[idx].ip[3]);
+    *port_out = s_direct_seeds[idx].port;
+    strncpy(path_out, s_direct_seeds[idx].path, path_sz - 1);
+    strncpy(host_out, s_direct_seeds[idx].host, host_sz - 1);
 }
 
 static void init_fallback_presets(void) {
@@ -733,11 +735,11 @@ static void init_fallback_presets(void) {
         { "dz-lenin-square",    "DZ LENIN SQUARE", "Volga Sector (56.24N, 43.46E)", 12, 1 },
         { "raw-85-172-105-181", "MOSCOW CENTRAL",  "Central Hub (55.76N, 37.62E)",  380, 1 },
         { "raw-5-149-155-88",   "MOSCOW WEST",     "Kuntsevo Hub (55.76N, 37.60E)", 385, 1 },
-        { "raw-108-52-105-4",   "NYC TIMES SQ",    "Broadway / 42nd (40.76N)",      6800, 1 },
-        { "raw-31-17-87-107",   "BERLIN MITTE",    "Alexanderplatz (52.52N)",       1650, 1 },
+        { "raw-31-17-87-107",   "BERLIN CENTER",   "Alexanderplatz (52.52N, 13.40E)", 1650, 1 },
         { "raw-80-13-184-18",   "PARIS CENTER",    "Chatelet (48.86N, 2.35E)",      2480, 1 },
-        { "raw-93-66-40-62",    "ROME CENTRAL",    "Termini Hub (41.90N, 12.50E)",  2300, 1 },
-        { "raw-153-198-1-158",  "TOKYO METRO",     "Shinjuku (35.69N, 139.69E)",    7200, 1 }
+        { "raw-95-223-165-58",  "BERLIN RING W",   "Charlottenburg (52.51N, 13.37E)", 1652, 1 },
+        { "raw-208-65-183-226", "NYC MANHATTAN",   "Broadway / 42nd (40.71N)",      6800, 1 },
+        { "raw-81-250-228-238", "PARIS NORTH",     "Montmartre (48.86N, 2.34E)",    2485, 1 }
     };
 
     for (int i = 0; i < 8; i++) {
@@ -959,16 +961,19 @@ static int fetch_live_frame(void) {
         uint16_t cam_port = 80;
         char cam_path[256];
         char cam_host[128];
-        resolve_direct_camera(s_presets[s_cam_idx].key, &cam_ip, &cam_port,
+        resolve_direct_camera(s_presets[s_cam_idx].key, s_cam_idx, &cam_ip, &cam_port,
                               cam_path, sizeof(cam_path), cam_host, sizeof(cam_host));
 
         sock = seld_tcp_connect(cam_ip, cam_port);
         if (sock < 0) {
-            // Secondary direct fallback: Volga Dzerzhinsk Lenin Square
-            cam_ip = SELD_MAKE_IP(109, 170, 96, 131);
-            cam_port = 2003;
-            strncpy(cam_path, "/cgi-bin/snapshot.cgi", sizeof(cam_path) - 1);
-            strncpy(cam_host, "109.170.96.131:2003", sizeof(cam_host) - 1);
+            // Secondary direct fallback: try next slot seed
+            size_t num_seeds = sizeof(s_direct_seeds) / sizeof(s_direct_seeds[0]);
+            int alt_idx = (s_cam_idx + 1) % (int)num_seeds;
+            cam_ip = SELD_MAKE_IP(s_direct_seeds[alt_idx].ip[0], s_direct_seeds[alt_idx].ip[1],
+                                  s_direct_seeds[alt_idx].ip[2], s_direct_seeds[alt_idx].ip[3]);
+            cam_port = s_direct_seeds[alt_idx].port;
+            strncpy(cam_path, s_direct_seeds[alt_idx].path, sizeof(cam_path) - 1);
+            strncpy(cam_host, s_direct_seeds[alt_idx].host, sizeof(cam_host) - 1);
             sock = seld_tcp_connect(cam_ip, cam_port);
         }
 
@@ -1458,9 +1463,13 @@ int main(int argc, char* argv[]) {
                     if (s_input_len > 0) {
                         strncpy(s_current_index, s_input_buf, sizeof(s_current_index) - 1);
                         s_current_index[sizeof(s_current_index) - 1] = '\0';
+                        s_gateway_failed = 0;
                         fetch_catalog(s_current_index);
                         s_cam_idx = 0;
                         s_need_fetch = 1;
+                        s_last_fetch_frame = 0;
+                        if (s_nj) { njDone(s_nj); s_nj = NULL; }
+                        s_raw_rgb = NULL;
                         if (s_audio_enabled) seld_beep(1760, 35);
                     }
                 } else if (sc == 0x0E) { // Backspace
@@ -1495,23 +1504,32 @@ int main(int argc, char* argv[]) {
             } else if (sc == 0x31 || sc == 0x50) { // 'N', Down Arrow -> Next Camera
                 if (s_num_presets > 0) {
                     s_cam_idx = (s_cam_idx + 1) % s_num_presets;
+                    s_gateway_failed = 0;
                     s_need_fetch = 1;
                     s_last_fetch_frame = 0;
+                    if (s_nj) { njDone(s_nj); s_nj = NULL; }
+                    s_raw_rgb = NULL;
                     if (s_audio_enabled) seld_beep(1500, 25);
                 }
             } else if (sc == 0x19 || sc == 0x48) { // 'P', Up Arrow -> Previous Camera
                 if (s_num_presets > 0) {
                     s_cam_idx = (s_cam_idx - 1 + s_num_presets) % s_num_presets;
+                    s_gateway_failed = 0;
                     s_need_fetch = 1;
                     s_last_fetch_frame = 0;
+                    if (s_nj) { njDone(s_nj); s_nj = NULL; }
+                    s_raw_rgb = NULL;
                     if (s_audio_enabled) seld_beep(1400, 25);
                 }
             } else if (sc >= 0x02 && sc <= 0x09) { // Top row '1' .. '8'
                 int idx = sc - 0x02;
                 if (idx < s_num_presets) {
                     s_cam_idx = idx;
+                    s_gateway_failed = 0;
                     s_need_fetch = 1;
                     s_last_fetch_frame = 0;
+                    if (s_nj) { njDone(s_nj); s_nj = NULL; }
+                    s_raw_rgb = NULL;
                     if (s_audio_enabled) seld_beep(1600, 30);
                 }
             } else if (sc == 0x1F || sc == 0x35) { // 'S' or '/' -> Enter Search Prompt
@@ -1524,17 +1542,23 @@ int main(int argc, char* argv[]) {
                 if (s_audio_enabled) seld_beep(1760, 30);
             } else if (sc == 0x4B || sc == 0x1A || sc == 0x33) { // Left Arrow, '[', ',' -> Previous Filter Mode
                 s_filter_mode = (s_filter_mode - 1 + 4) % 4;
+                s_gateway_failed = 0;
                 search_matrix_offline(s_current_index);
                 s_cam_idx = 0;
                 s_need_fetch = 1;
                 s_last_fetch_frame = 0;
+                if (s_nj) { njDone(s_nj); s_nj = NULL; }
+                s_raw_rgb = NULL;
                 if (s_audio_enabled) seld_beep(1350, 25);
             } else if (sc == 0x4D || sc == 0x1B || sc == 0x34) { // Right Arrow, ']', '.' -> Next Filter Mode
                 s_filter_mode = (s_filter_mode + 1) % 4;
+                s_gateway_failed = 0;
                 search_matrix_offline(s_current_index);
                 s_cam_idx = 0;
                 s_need_fetch = 1;
                 s_last_fetch_frame = 0;
+                if (s_nj) { njDone(s_nj); s_nj = NULL; }
+                s_raw_rgb = NULL;
                 if (s_audio_enabled) seld_beep(1450, 25);
             }
         }

@@ -271,17 +271,6 @@ def main():
         target_name = f"/bin/{util}"
         files_to_write.append((target_name, data))
 
-    # Provision pre-built packages if available (cctv, tor, cctv.bin)
-    for opt in ["cctv", "tor"]:
-        opt_path = os.path.join(bin_dir, opt)
-        if os.path.exists(opt_path):
-            with open(opt_path, "rb") as f:
-                files_to_write.append((f"/bin/{opt}", f.read()))
-
-    if os.path.exists("cctv.bin"):
-        with open("cctv.bin", "rb") as f:
-            files_to_write.append(("/etc/cctv.bin", f.read()))
-
     sample_readme = (
         "Welcome to SeldOS (Humboldt Kernel Project)!\n"
         "SNL (Seld Not Linux) Sovereign Userland Ecosystem v0.1.\n"
