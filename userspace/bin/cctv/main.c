@@ -257,6 +257,12 @@ static void format_camera_title(const char* cid, char* out_name, size_t out_sz) 
         out_name[j] = '\0';
         return;
     }
+    // If the input already contains spaces, it is a pre-formatted human-readable title
+    if (strchr(p, ' ') != NULL) {
+        strncpy(out_name, p, out_sz - 1);
+        out_name[out_sz - 1] = '\0';
+        return;
+    }
     if (strncmp(p, "openwebcamdb-", 13) == 0) {
         p += 13;
     } else if (strncmp(p, "inetcom-", 8) == 0) {
@@ -321,35 +327,60 @@ static int search_matrix_offline(const char* query) {
     float target_lat = 0.0f;
     float target_lon = 0.0f;
     int matched = 0;
+    const struct sctv_city* matched_city = NULL;
 
+    // Pass 1: exact match
     for (uint32_t i = 0; i < s_matrix_hdr->num_cities; i++) {
         const struct sctv_city* c = &s_matrix_cities[i];
-        if (strcmp(q_clean, c->name) == 0 || strstr(c->name, q_clean) != NULL) {
-            target_lat = c->lat;
-            target_lon = c->lon;
+        if (strcmp(q_clean, c->name) == 0) {
+            matched_city = c;
             matched = 1;
-            char upper_name[24];
-            size_t k = 0;
-            while (c->name[k] && k < sizeof(upper_name) - 1) {
-                char ch = c->name[k];
-                if (ch >= 'a' && ch <= 'z') ch = ch - 'a' + 'A';
-                upper_name[k++] = ch;
-            }
-            upper_name[k] = '\0';
-            snprintf(s_centroid_title, sizeof(s_centroid_title), "%s (%.2f%c, %.2f%c) [%.2s]",
-                     upper_name,
-                     target_lat >= 0 ? target_lat : -target_lat, target_lat >= 0 ? 'N' : 'S',
-                     target_lon >= 0 ? target_lon : -target_lon, target_lon >= 0 ? 'E' : 'W',
-                     c->country);
             break;
         }
     }
-
+    // Pass 2: prefix match
     if (!matched) {
-        target_lat = 56.2457f;
-        target_lon = 43.4883f;
-        snprintf(s_centroid_title, sizeof(s_centroid_title), "SURVEILLANCE GRID (%s)", q_clean);
+        size_t ql = strlen(q_clean);
+        for (uint32_t i = 0; i < s_matrix_hdr->num_cities; i++) {
+            const struct sctv_city* c = &s_matrix_cities[i];
+            if (strncmp(q_clean, c->name, ql) == 0) {
+                matched_city = c;
+                matched = 1;
+                break;
+            }
+        }
     }
+    // Pass 3: substring match (minimum 3 chars to prevent "nn" matching "chennai")
+    if (!matched && strlen(q_clean) >= 3) {
+        for (uint32_t i = 0; i < s_matrix_hdr->num_cities; i++) {
+            const struct sctv_city* c = &s_matrix_cities[i];
+            if (strstr(c->name, q_clean) != NULL) {
+                matched_city = c;
+                matched = 1;
+                break;
+            }
+        }
+    }
+
+    if (!matched || !matched_city) {
+        return -1; // Never fake coordinates when offline search cannot resolve query!
+    }
+
+    target_lat = matched_city->lat;
+    target_lon = matched_city->lon;
+    char upper_name[24];
+    size_t k = 0;
+    while (matched_city->name[k] && k < sizeof(upper_name) - 1) {
+        char ch = matched_city->name[k];
+        if (ch >= 'a' && ch <= 'z') ch = ch - 'a' + 'A';
+        upper_name[k++] = ch;
+    }
+    upper_name[k] = '\0';
+    snprintf(s_centroid_title, sizeof(s_centroid_title), "%s (%.2f%c, %.2f%c) [%.2s]",
+             upper_name,
+             target_lat >= 0 ? target_lat : -target_lat, target_lat >= 0 ? 'N' : 'S',
+             target_lon >= 0 ? target_lon : -target_lon, target_lon >= 0 ? 'E' : 'W',
+             matched_city->country);
 
     float cos_lat = approx_cos(target_lat);
 
@@ -648,6 +679,7 @@ struct direct_seed {
 static const struct direct_seed s_direct_seeds[] = {
     // Slot 0: Volga Sector (Lenin Square)
     { "dz-lenin-square",    {109, 170, 96, 131}, 2003,  "/cgi-bin/snapshot.cgi", "109.170.96.131:2003" },
+    { "raw-109-170-96-131", {109, 170, 96, 131}, 2003,  "/cgi-bin/snapshot.cgi", "109.170.96.131:2003" },
     // Slot 1: Moscow Central Hub
     { "raw-85-172-105-181", {85, 172, 105, 181}, 1027,  "/cgi-bin/snapshot.cgi", "85.172.105.181:1027" },
     // Slot 2: Moscow West Kuntsevo
@@ -664,19 +696,11 @@ static const struct direct_seed s_direct_seeds[] = {
     { "raw-81-250-228-238", {81, 250, 228, 238}, 88,    "/SnapshotJPEG?Resolution=640x480&Quality=Clarity", "81.250.228.238:88" }
 };
 
-static void resolve_direct_camera(const char* key, int slot_idx, uint32_t* ip_out, uint16_t* port_out,
-                                  char* path_out, size_t path_sz, char* host_out, size_t host_sz) {
+static int resolve_direct_camera(const char* key, int slot_idx, uint32_t* ip_out, uint16_t* port_out,
+                                 char* path_out, size_t path_sz, char* host_out, size_t host_sz) {
+    (void)slot_idx;
+    if (!key || !key[0]) return 0;
     size_t num_seeds = sizeof(s_direct_seeds) / sizeof(s_direct_seeds[0]);
-
-    if (!key || !key[0]) {
-        int idx = (slot_idx >= 0) ? (slot_idx % (int)num_seeds) : 0;
-        *ip_out = SELD_MAKE_IP(s_direct_seeds[idx].ip[0], s_direct_seeds[idx].ip[1],
-                               s_direct_seeds[idx].ip[2], s_direct_seeds[idx].ip[3]);
-        *port_out = s_direct_seeds[idx].port;
-        strncpy(path_out, s_direct_seeds[idx].path, path_sz - 1);
-        strncpy(host_out, s_direct_seeds[idx].host, host_sz - 1);
-        return;
-    }
 
     // 1. Exact match against known direct seeds
     for (size_t i = 0; i < num_seeds; i++) {
@@ -685,8 +709,10 @@ static void resolve_direct_camera(const char* key, int slot_idx, uint32_t* ip_ou
                                    s_direct_seeds[i].ip[2], s_direct_seeds[i].ip[3]);
             *port_out = s_direct_seeds[i].port;
             strncpy(path_out, s_direct_seeds[i].path, path_sz - 1);
+            path_out[path_sz - 1] = '\0';
             strncpy(host_out, s_direct_seeds[i].host, host_sz - 1);
-            return;
+            host_out[host_sz - 1] = '\0';
+            return 1;
         }
     }
 
@@ -705,25 +731,19 @@ static void resolve_direct_camera(const char* key, int slot_idx, uint32_t* ip_ou
             *ip_out = SELD_MAKE_IP(o1, o2, o3, o4);
             *port_out = 80;
             strncpy(path_out, "/cgi-bin/snapshot.cgi", path_sz - 1);
+            path_out[path_sz - 1] = '\0';
             snprintf(host_out, host_sz, "%d.%d.%d.%d", o1, o2, o3, o4);
-            return;
+            return 1;
         }
     }
 
-    // 3. Slot-based autonomous direct fallback
-    // When offline matrix provides names (dz-*, nn-*, etc.), ensure every slot 1..8
-    // connects to a DISTINCT, verified live camera feed!
-    int idx = (slot_idx >= 0) ? (slot_idx % (int)num_seeds) : 0;
-    *ip_out = SELD_MAKE_IP(s_direct_seeds[idx].ip[0], s_direct_seeds[idx].ip[1],
-                           s_direct_seeds[idx].ip[2], s_direct_seeds[idx].ip[3]);
-    *port_out = s_direct_seeds[idx].port;
-    strncpy(path_out, s_direct_seeds[idx].path, path_sz - 1);
-    strncpy(host_out, s_direct_seeds[idx].host, host_sz - 1);
+    // Never substitute an unrelated camera feed! If a feed requires gateway or TLS, return 0.
+    return 0;
 }
 
 static void init_fallback_presets(void) {
     s_num_presets = 0;
-    snprintf(s_centroid_title, sizeof(s_centroid_title), "DIRECT DOWNLINK (%s)", s_current_index);
+    snprintf(s_centroid_title, sizeof(s_centroid_title), "GLOBAL DIRECT FEEDS (OFFLINE)");
 
     struct {
         const char* key;
@@ -767,15 +787,7 @@ static int fetch_catalog(const char* index_or_city) {
         s_current_index[sizeof(s_current_index) - 1] = '\0';
     }
 
-    // 1. Instant offline resolution from worldwide camera matrix (zero network leaks)
-    if (s_matrix_hdr != NULL) {
-        int n = search_matrix_offline(s_current_index);
-        if (n > 0) {
-            return n;
-        }
-    }
-
-    // 2. Query OpSec Gateway on port 8080 if available
+    // 1. Dynamic proximity catalog query via OpSec Gateway (if online)
     if (!s_gateway_failed) {
         seld_net_lease_acquire();
         uint32_t ip = SELD_MAKE_IP(10, 0, 2, 2);
@@ -891,7 +903,8 @@ static int fetch_catalog(const char* index_or_city) {
                             c->dist_km = dist;
                             c->def_w = w;
                             c->def_h = h;
-                            c->feed_type = (strstr(c->key, "inetcom") != NULL) ? 3 : 0;
+                            c->feed_type = (strstr(c->key, "raw-") != NULL) ? 1 :
+                                           ((strstr(c->key, "inetcom") != NULL || strstr(c->key, "tik-") != NULL || strstr(c->key, "ny511") != NULL) ? 3 : 0);
                             s_num_presets++;
                         }
                         line = next;
@@ -908,7 +921,15 @@ static int fetch_catalog(const char* index_or_city) {
         }
     }
 
-    // 3. Autonomous direct fallback presets
+    // 2. Offline resolution from worldwide camera matrix (cctv.bin)
+    if (s_matrix_hdr != NULL) {
+        int n = search_matrix_offline(s_current_index);
+        if (n > 0) {
+            return n;
+        }
+    }
+
+    // 3. Autonomous direct fallback presets (verified global seeds)
     init_fallback_presets();
     return s_num_presets;
 }
@@ -961,22 +982,15 @@ static int fetch_live_frame(void) {
         uint16_t cam_port = 80;
         char cam_path[256];
         char cam_host[128];
-        resolve_direct_camera(s_presets[s_cam_idx].key, s_cam_idx, &cam_ip, &cam_port,
-                              cam_path, sizeof(cam_path), cam_host, sizeof(cam_host));
-
-        sock = seld_tcp_connect(cam_ip, cam_port);
-        if (sock < 0) {
-            // Secondary direct fallback: try next slot seed
-            size_t num_seeds = sizeof(s_direct_seeds) / sizeof(s_direct_seeds[0]);
-            int alt_idx = (s_cam_idx + 1) % (int)num_seeds;
-            cam_ip = SELD_MAKE_IP(s_direct_seeds[alt_idx].ip[0], s_direct_seeds[alt_idx].ip[1],
-                                  s_direct_seeds[alt_idx].ip[2], s_direct_seeds[alt_idx].ip[3]);
-            cam_port = s_direct_seeds[alt_idx].port;
-            strncpy(cam_path, s_direct_seeds[alt_idx].path, sizeof(cam_path) - 1);
-            strncpy(cam_host, s_direct_seeds[alt_idx].host, sizeof(cam_host) - 1);
-            sock = seld_tcp_connect(cam_ip, cam_port);
+        int can_direct = resolve_direct_camera(s_presets[s_cam_idx].key, s_cam_idx, &cam_ip, &cam_port,
+                                               cam_path, sizeof(cam_path), cam_host, sizeof(cam_host));
+        if (!can_direct) {
+            seld_net_lease_release();
+            s_net_status = -10; // Stream requires OpSec Gateway (HLS / Transcoded)
+            return -10;
         }
 
+        sock = seld_tcp_connect(cam_ip, cam_port);
         if (sock < 0) {
             seld_net_lease_release();
             s_net_status = -1;
@@ -1182,7 +1196,13 @@ static void render_cctv_hud(void) {
         blit_image(vx + 1, vy + 1, vw - 2, vh - 2);
     } else {
         fill_rect(vx + 1, vy + 1, vw - 2, vh - 2, COL_VIDEO_BG);
-        draw_text_5x7(vx + (vw / 2) - 80, vy + (vh / 2) - 4, "[ ACQUIRING OPTICAL FEED ... ]", COL_TEXT_CYAN);
+        if (s_net_status == -10) {
+            draw_text_5x7(vx + (vw / 2) - 105, vy + (vh / 2) - 4, "[ GATEWAY REQUIRED FOR HLS STREAM ]", COL_TEXT_AMBER);
+        } else if (s_net_status == -1) {
+            draw_text_5x7(vx + (vw / 2) - 95, vy + (vh / 2) - 4, "[ NO CARRIER / FEED UNREACHABLE ]", COL_TEXT_CRIMSON);
+        } else {
+            draw_text_5x7(vx + (vw / 2) - 80, vy + (vh / 2) - 4, "[ ACQUIRING OPTICAL FEED ... ]", COL_TEXT_CYAN);
+        }
     }
 
     // Technical framing & L-corner brackets
@@ -1323,6 +1343,8 @@ static void render_cctv_hud(void) {
         }
     } else if (s_net_status == -1) {
         draw_text_5x7(px + 60, 264, "DOWN (CARRIER LOST)", COL_TEXT_CRIMSON);
+    } else if (s_net_status == -10) {
+        draw_text_5x7(px + 60, 264, "GATEWAY REQ (HLS)", COL_TEXT_AMBER);
     } else {
         draw_text_5x7(px + 60, 264, "ACQUIRING DOWNLINK...", COL_TEXT_AMBER);
     }
@@ -1543,7 +1565,9 @@ int main(int argc, char* argv[]) {
             } else if (sc == 0x4B || sc == 0x1A || sc == 0x33) { // Left Arrow, '[', ',' -> Previous Filter Mode
                 s_filter_mode = (s_filter_mode - 1 + 4) % 4;
                 s_gateway_failed = 0;
-                search_matrix_offline(s_current_index);
+                int fn = -1;
+                if (s_matrix_hdr) fn = search_matrix_offline(s_current_index);
+                if (fn <= 0) init_fallback_presets();
                 s_cam_idx = 0;
                 s_need_fetch = 1;
                 s_last_fetch_frame = 0;
@@ -1553,7 +1577,9 @@ int main(int argc, char* argv[]) {
             } else if (sc == 0x4D || sc == 0x1B || sc == 0x34) { // Right Arrow, ']', '.' -> Next Filter Mode
                 s_filter_mode = (s_filter_mode + 1) % 4;
                 s_gateway_failed = 0;
-                search_matrix_offline(s_current_index);
+                int fn = -1;
+                if (s_matrix_hdr) fn = search_matrix_offline(s_current_index);
+                if (fn <= 0) init_fallback_presets();
                 s_cam_idx = 0;
                 s_need_fetch = 1;
                 s_last_fetch_frame = 0;
