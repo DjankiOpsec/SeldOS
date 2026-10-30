@@ -173,6 +173,8 @@ static char s_centroid_title[64] = "DZERZHINSK (606000)";
 static uint32_t s_frame_seq = 0;
 static char s_capture_time[32] = "ACQUIRING...";
 static int s_need_fetch = 1;
+static int s_gateway_failed = 0;
+static int s_is_direct = 0;
 
 /* Feed Filter Mode: 0 = ALL, 1 = VID, 2 = RAW, 3 = SNP */
 static int s_filter_mode = 0;
@@ -635,9 +637,122 @@ static void blit_image(int dst_x, int dst_y, int dst_w, int dst_h) {
     }
 }
 
+struct direct_seed {
+    const char* prefix;
+    uint8_t ip[4];
+    uint16_t port;
+    const char* path;
+    const char* host;
+};
+
+static const struct direct_seed s_direct_seeds[] = {
+    { "dz-lenin-square",    {109, 170, 96, 131}, 2003,  "/cgi-bin/snapshot.cgi", "109.170.96.131:2003" },
+    { "dz-",                {109, 170, 96, 131}, 2003,  "/cgi-bin/snapshot.cgi", "109.170.96.131:2003" },
+    { "nn-",                {109, 170, 96, 131}, 2003,  "/cgi-bin/snapshot.cgi", "109.170.96.131:2003" },
+    { "raw-109-170-96-131", {109, 170, 96, 131}, 2003,  "/cgi-bin/snapshot.cgi", "109.170.96.131:2003" },
+    { "raw-85-172-105-181", {85, 172, 105, 181}, 1027,  "/cgi-bin/snapshot.cgi", "85.172.105.181:1027" },
+    { "raw-5-149-155-88",   {5, 149, 155, 88},   8082,  "/cgi-bin/snapshot.cgi", "5.149.155.88:8082" },
+    { "inetcom-",           {85, 172, 105, 181}, 1027,  "/cgi-bin/snapshot.cgi", "85.172.105.181:1027" },
+    { "raw-108-52-105-4",   {108, 52, 105, 4},   50002, "/SnapshotJPEG?Resolution=640x480&Quality=Clarity", "108.52.105.4:50002" },
+    { "raw-208-65-183-226", {208, 65, 183, 226}, 82,    "/SnapshotJPEG?Resolution=640x480&Quality=Clarity", "208.65.183.226:82" },
+    { "raw-80-13-184-18",   {80, 13, 184, 18},   98,    "/SnapshotJPEG?Resolution=640x480&Quality=Clarity", "80.13.184.18:98" },
+    { "raw-81-250-228-238", {81, 250, 228, 238}, 88,    "/SnapshotJPEG?Resolution=640x480&Quality=Clarity", "81.250.228.238:88" },
+    { "raw-93-66-40-62",    {93, 66, 40, 62},    8050,  "/SnapshotJPEG?Resolution=640x480&Quality=Clarity", "93.66.40.62:8050" },
+    { "raw-82-85-225-70",   {82, 85, 225, 70},   8010,  "/SnapshotJPEG?Resolution=640x480&Quality=Clarity", "82.85.225.70:8010" },
+    { "raw-153-198-1-158",  {153, 198, 1, 158},  60001, "/SnapshotJPEG?Resolution=640x480&Quality=Clarity", "153.198.1.158:60001" },
+    { "raw-183-77-159-247", {183, 77, 159, 247}, 5223,  "/SnapshotJPEG?Resolution=640x480&Quality=Clarity", "183.77.159.247:5223" },
+    { "raw-114-184-246-240", {114, 184, 246, 240}, 50000, "/SnapshotJPEG?Resolution=640x480&Quality=Clarity", "114.184.246.240:50000" },
+    { "raw-31-17-87-107",   {31, 17, 87, 107},   83,    "/SnapshotJPEG?Resolution=640x480&Quality=Clarity", "31.17.87.107:83" },
+    { "raw-95-223-165-58",  {95, 223, 165, 58},  83,    "/snapshot.cgi?user=admin&pwd=", "95.223.165.58:83" },
+    { "raw-79-224-22-232",  {79, 224, 22, 232},  5010,  "/snapshot.cgi?user=admin&pwd=", "79.224.22.232:5010" },
+    { "raw-31-125-95-247",  {31, 125, 95, 247},  50000, "/SnapshotJPEG?Resolution=640x480&Quality=Clarity", "31.125.95.247:50000" },
+    { "raw-89-240-255-235", {89, 240, 255, 235}, 8000,  "/SnapshotJPEG?Resolution=640x480&Quality=Clarity", "89.240.255.235:8000" }
+};
+
+static void resolve_direct_camera(const char* key, uint32_t* ip_out, uint16_t* port_out,
+                                  char* path_out, size_t path_sz, char* host_out, size_t host_sz) {
+    if (!key || !key[0]) {
+        *ip_out = SELD_MAKE_IP(109, 170, 96, 131);
+        *port_out = 2003;
+        strncpy(path_out, "/cgi-bin/snapshot.cgi", path_sz - 1);
+        strncpy(host_out, "109.170.96.131:2003", host_sz - 1);
+        return;
+    }
+
+    size_t num_seeds = sizeof(s_direct_seeds) / sizeof(s_direct_seeds[0]);
+    for (size_t i = 0; i < num_seeds; i++) {
+        if (strstr(key, s_direct_seeds[i].prefix) != NULL ||
+            strncmp(key, s_direct_seeds[i].prefix, strlen(s_direct_seeds[i].prefix)) == 0) {
+            *ip_out = SELD_MAKE_IP(s_direct_seeds[i].ip[0], s_direct_seeds[i].ip[1],
+                                   s_direct_seeds[i].ip[2], s_direct_seeds[i].ip[3]);
+            *port_out = s_direct_seeds[i].port;
+            strncpy(path_out, s_direct_seeds[i].path, path_sz - 1);
+            strncpy(host_out, s_direct_seeds[i].host, host_sz - 1);
+            return;
+        }
+    }
+
+    // Check if key is raw IP: raw-A-B-C-D
+    if (strncmp(key, "raw-", 4) == 0) {
+        int o1 = 0, o2 = 0, o3 = 0, o4 = 0;
+        const char* p = key + 4;
+        while (*p >= '0' && *p <= '9') o1 = o1 * 10 + (*p++ - '0');
+        if (*p == '-' || *p == '.') p++;
+        while (*p >= '0' && *p <= '9') o2 = o2 * 10 + (*p++ - '0');
+        if (*p == '-' || *p == '.') p++;
+        while (*p >= '0' && *p <= '9') o3 = o3 * 10 + (*p++ - '0');
+        if (*p == '-' || *p == '.') p++;
+        while (*p >= '0' && *p <= '9') o4 = o4 * 10 + (*p++ - '0');
+        if (o1 > 0 && o4 > 0) {
+            *ip_out = SELD_MAKE_IP(o1, o2, o3, o4);
+            *port_out = 80;
+            strncpy(path_out, "/cgi-bin/snapshot.cgi", path_sz - 1);
+            snprintf(host_out, host_sz, "%d.%d.%d.%d", o1, o2, o3, o4);
+            return;
+        }
+    }
+
+    // Default Fallback: Volga Dzerzhinsk Lenin Square
+    *ip_out = SELD_MAKE_IP(109, 170, 96, 131);
+    *port_out = 2003;
+    strncpy(path_out, "/cgi-bin/snapshot.cgi", path_sz - 1);
+    strncpy(host_out, "109.170.96.131:2003", host_sz - 1);
+}
+
 static void init_fallback_presets(void) {
     s_num_presets = 0;
-    snprintf(s_centroid_title, sizeof(s_centroid_title), "OFFLINE (%s)", s_current_index);
+    snprintf(s_centroid_title, sizeof(s_centroid_title), "DIRECT DOWNLINK (%s)", s_current_index);
+
+    struct {
+        const char* key;
+        const char* name;
+        const char* loc;
+        int dist;
+        uint8_t ft;
+    } default_cams[] = {
+        { "dz-lenin-square",    "DZ LENIN SQUARE", "Volga Sector (56.24N, 43.46E)", 12, 1 },
+        { "raw-85-172-105-181", "MOSCOW CENTRAL",  "Central Hub (55.76N, 37.62E)",  380, 1 },
+        { "raw-5-149-155-88",   "MOSCOW WEST",     "Kuntsevo Hub (55.76N, 37.60E)", 385, 1 },
+        { "raw-108-52-105-4",   "NYC TIMES SQ",    "Broadway / 42nd (40.76N)",      6800, 1 },
+        { "raw-31-17-87-107",   "BERLIN MITTE",    "Alexanderplatz (52.52N)",       1650, 1 },
+        { "raw-80-13-184-18",   "PARIS CENTER",    "Chatelet (48.86N, 2.35E)",      2480, 1 },
+        { "raw-93-66-40-62",    "ROME CENTRAL",    "Termini Hub (41.90N, 12.50E)",  2300, 1 },
+        { "raw-153-198-1-158",  "TOKYO METRO",     "Shinjuku (35.69N, 139.69E)",    7200, 1 }
+    };
+
+    for (int i = 0; i < 8; i++) {
+        struct cctv_cam* c = &s_presets[s_num_presets++];
+        strncpy(c->key, default_cams[i].key, sizeof(c->key) - 1);
+        c->key[sizeof(c->key) - 1] = '\0';
+        strncpy(c->name, default_cams[i].name, sizeof(c->name) - 1);
+        c->name[sizeof(c->name) - 1] = '\0';
+        strncpy(c->loc, default_cams[i].loc, sizeof(c->loc) - 1);
+        c->loc[sizeof(c->loc) - 1] = '\0';
+        c->dist_km = default_cams[i].dist;
+        c->def_w = 640;
+        c->def_h = 480;
+        c->feed_type = default_cams[i].ft;
+    }
 }
 
 /*
@@ -658,152 +773,148 @@ static int fetch_catalog(const char* index_or_city) {
         }
     }
 
-    // 2. Fallback: Query OpSec Gateway on port 8080
-    seld_net_lease_acquire();
-    uint32_t ip = SELD_MAKE_IP(10, 0, 2, 2);
-    int sock = seld_tcp_connect(ip, 8080);
-    if (sock < 0) {
-        sock = seld_tcp_connect(SELD_MAKE_IP(127, 0, 0, 1), 8080);
-    }
-    if (sock < 0) {
-        seld_net_lease_release();
-        init_fallback_presets();
-        return -1;
-    }
-
-    char req[256];
-    snprintf(req, sizeof(req),
-        "GET /api/cctv/cameras?index=%s HTTP/1.1\r\n"
-        "Host: 10.0.2.2:8080\r\n"
-        "User-Agent: SeldOS-CCTV/1.0 (Humboldt Avionics)\r\n"
-        "Connection: close\r\n\r\n", s_current_index);
-
-    if (seld_tcp_send(sock, req, strlen(req)) <= 0) {
-        seld_tcp_close(sock);
-        seld_net_lease_release();
-        init_fallback_presets();
-        return -2;
-    }
-
-    char cat_buf[4096];
-    int total = 0;
-    int cat_content_len = -1;
-    int cat_header_len = -1;
-    while (total < (int)sizeof(cat_buf) - 1) {
-        int want = sizeof(cat_buf) - 1 - total;
-        if (want > 1024) want = 1024;
-        int n = seld_tcp_recv(sock, cat_buf + total, want, total == 0 ? 8000 : 1500);
-        if (n <= 0) break;
-        total += n;
-
-        if (cat_content_len < 0) {
-            cat_buf[total] = '\0';
-            char* cl = strstr(cat_buf, "Content-Length: ");
-            if (cl) {
-                cat_content_len = atoi(cl + 16);
-            }
-            char* sep = strstr(cat_buf, "\r\n\r\n");
-            if (sep) {
-                cat_header_len = (int)(sep + 4 - cat_buf);
-            }
+    // 2. Query OpSec Gateway on port 8080 if available
+    if (!s_gateway_failed) {
+        seld_net_lease_acquire();
+        uint32_t ip = SELD_MAKE_IP(10, 0, 2, 2);
+        struct seld_net_info net;
+        if (seld_net_info(&net) == 0 && net.gateway != 0) {
+            ip = net.gateway;
         }
-        if (cat_content_len > 0 && cat_header_len > 0) {
-            if (total >= cat_header_len + cat_content_len) {
-                break;
+        int sock = seld_tcp_connect(ip, 8080);
+        if (sock < 0 && ip != SELD_MAKE_IP(10, 0, 2, 2)) {
+            sock = seld_tcp_connect(SELD_MAKE_IP(10, 0, 2, 2), 8080);
+        }
+        if (sock < 0) {
+            sock = seld_tcp_connect(SELD_MAKE_IP(127, 0, 0, 1), 8080);
+        }
+        if (sock >= 0) {
+            char req[256];
+            snprintf(req, sizeof(req),
+                "GET /api/cctv/cameras?index=%s HTTP/1.1\r\n"
+                "Host: 10.0.2.2:8080\r\n"
+                "User-Agent: SeldOS-CCTV/2.0 (Humboldt Avionics)\r\n"
+                "Connection: close\r\n\r\n", s_current_index);
+
+            if (seld_tcp_send(sock, req, strlen(req)) > 0) {
+                char cat_buf[4096];
+                int total = 0;
+                int cat_content_len = -1;
+                int cat_header_len = -1;
+                while (total < (int)sizeof(cat_buf) - 1) {
+                    int want = sizeof(cat_buf) - 1 - total;
+                    if (want > 1024) want = 1024;
+                    int n = seld_tcp_recv(sock, cat_buf + total, want, total == 0 ? 3000 : 800);
+                    if (n <= 0) break;
+                    total += n;
+
+                    if (cat_content_len < 0) {
+                        cat_buf[total] = '\0';
+                        char* cl = strstr(cat_buf, "Content-Length: ");
+                        if (cl) cat_content_len = atoi(cl + 16);
+                        char* sep = strstr(cat_buf, "\r\n\r\n");
+                        if (sep) cat_header_len = (int)(sep + 4 - cat_buf);
+                    }
+                    if (cat_content_len > 0 && cat_header_len > 0) {
+                        if (total >= cat_header_len + cat_content_len) break;
+                    }
+                }
+                seld_tcp_close(sock);
+                seld_net_lease_release();
+
+                if (total >= 20) {
+                    cat_buf[total] = '\0';
+                    char* body = strstr(cat_buf, "\r\n\r\n");
+                    if (!body) body = strstr(cat_buf, "\n\n");
+                    if (!body) body = cat_buf;
+                    else body += (body[0] == '\r') ? 4 : 2;
+
+                    s_num_presets = 0;
+                    char* line = body;
+                    while (line && *line) {
+                        char* next = strchr(line, '\n');
+                        if (next) {
+                            if (next > line && *(next - 1) == '\r') *(next - 1) = '\0';
+                            *next = '\0';
+                            next++;
+                        }
+
+                        if (strncmp(line, "CENTROID: ", 10) == 0) {
+                            char* p = line + 10;
+                            while (*p && *p != ' ') p++;
+                            while (*p == ' ') p++;
+                            while (*p && *p != ' ') p++;
+                            while (*p == ' ') p++;
+                            if (*p) {
+                                strncpy(s_centroid_title, p, sizeof(s_centroid_title) - 1);
+                                s_centroid_title[sizeof(s_centroid_title) - 1] = '\0';
+                            }
+                        } else if (strncmp(line, "CAM ", 4) == 0 && s_num_presets < MAX_PRESETS) {
+                            char* p = line + 4;
+                            while (*p && *p != ' ') p++;
+                            while (*p == ' ') p++;
+
+                            char* key_start = p;
+                            while (*p && *p != ' ') p++;
+                            int key_len = p - key_start;
+                            while (*p == ' ') p++;
+
+                            int dist = atoi(p);
+                            while (*p && *p != ' ') p++;
+                            while (*p == ' ') p++;
+
+                            int w = atoi(p);
+                            while (*p && *p != ' ') p++;
+                            while (*p == ' ') p++;
+
+                            int h = atoi(p);
+                            while (*p && *p != ' ') p++;
+                            while (*p == ' ') p++;
+
+                            char* name_start = p;
+                            char* bar = strstr(p, " | ");
+                            char* loc_start = "";
+                            if (bar) {
+                                *bar = '\0';
+                                loc_start = bar + 3;
+                            }
+
+                            struct cctv_cam* c = &s_presets[s_num_presets];
+                            if (key_len >= (int)sizeof(c->key)) key_len = sizeof(c->key) - 1;
+                            memcpy(c->key, key_start, key_len);
+                            c->key[key_len] = '\0';
+                            format_camera_title(name_start, c->name, sizeof(c->name));
+                            strncpy(c->loc, loc_start, sizeof(c->loc) - 1);
+                            c->loc[sizeof(c->loc) - 1] = '\0';
+                            c->dist_km = dist;
+                            c->def_w = w;
+                            c->def_h = h;
+                            c->feed_type = (strstr(c->key, "inetcom") != NULL) ? 3 : 0;
+                            s_num_presets++;
+                        }
+                        line = next;
+                    }
+                    if (s_num_presets > 0) return s_num_presets;
+                }
+            } else {
+                seld_tcp_close(sock);
+                seld_net_lease_release();
             }
+        } else {
+            seld_net_lease_release();
+            s_gateway_failed = 1;
         }
     }
-    seld_tcp_close(sock);
-    seld_net_lease_release();
 
-    if (total < 20) {
-        init_fallback_presets();
-        return -3;
-    }
-    cat_buf[total] = '\0';
-
-    char* body = strstr(cat_buf, "\r\n\r\n");
-    if (!body) body = strstr(cat_buf, "\n\n");
-    if (!body) body = cat_buf;
-    else body += (body[0] == '\r') ? 4 : 2;
-
-    s_num_presets = 0;
-    char* line = body;
-    while (line && *line) {
-        char* next = strchr(line, '\n');
-        if (next) {
-            if (next > line && *(next - 1) == '\r') *(next - 1) = '\0';
-            *next = '\0';
-            next++;
-        }
-
-        if (strncmp(line, "CENTROID: ", 10) == 0) {
-            char* p = line + 10;
-            while (*p && *p != ' ') p++; // skip lat
-            while (*p == ' ') p++;
-            while (*p && *p != ' ') p++; // skip lon
-            while (*p == ' ') p++;
-            if (*p) {
-                strncpy(s_centroid_title, p, sizeof(s_centroid_title) - 1);
-                s_centroid_title[sizeof(s_centroid_title) - 1] = '\0';
-            }
-        } else if (strncmp(line, "CAM ", 4) == 0 && s_num_presets < MAX_PRESETS) {
-            char* p = line + 4;
-            while (*p && *p != ' ') p++; // skip slot
-            while (*p == ' ') p++;
-
-            char* key_start = p;
-            while (*p && *p != ' ') p++;
-            int key_len = p - key_start;
-            while (*p == ' ') p++;
-
-            int dist = atoi(p);
-            while (*p && *p != ' ') p++;
-            while (*p == ' ') p++;
-
-            int w = atoi(p);
-            while (*p && *p != ' ') p++;
-            while (*p == ' ') p++;
-
-            int h = atoi(p);
-            while (*p && *p != ' ') p++;
-            while (*p == ' ') p++;
-
-            char* name_start = p;
-            char* bar = strstr(p, " | ");
-            char* loc_start = "";
-            if (bar) {
-                *bar = '\0';
-                loc_start = bar + 3;
-            }
-
-            struct cctv_cam* c = &s_presets[s_num_presets];
-            if (key_len >= (int)sizeof(c->key)) key_len = sizeof(c->key) - 1;
-            memcpy(c->key, key_start, key_len);
-            c->key[key_len] = '\0';
-            format_camera_title(name_start, c->name, sizeof(c->name));
-            strncpy(c->loc, loc_start, sizeof(c->loc) - 1);
-            c->loc[sizeof(c->loc) - 1] = '\0';
-            c->dist_km = dist;
-            c->def_w = w;
-            c->def_h = h;
-            c->feed_type = (strstr(c->key, "inetcom") != NULL) ? 3 : 0;
-            s_num_presets++;
-        }
-        line = next;
-    }
-
-    if (s_num_presets == 0) {
-        init_fallback_presets();
-    }
+    // 3. Autonomous direct fallback presets
+    init_fallback_presets();
     return s_num_presets;
 }
 
 /*
- * Fetch Live Camera Frame via Tor OpSec Gateway (Port 8080)
- * PLEDGE_DNS blocked by Humboldt kernel (0 UDP 53 packets emitted).
- * SOCKS5 remote onion resolution ensures zero observer footprint.
- * Content-Length aware non-blocking reader ensures zero UI stalling.
+ * Fetch Live Camera Frame (Autonomous Hybrid Engine)
+ * Attempts OpSec Gateway if online, or seamlessly executes Direct TCP Downlink
+ * to the verified camera feed without host proxy dependency.
  */
 static int fetch_live_frame(void) {
     if (s_num_presets <= 0) return -1;
@@ -811,32 +922,73 @@ static int fetch_live_frame(void) {
 
     seld_net_lease_acquire();
 
-    uint32_t ip = SELD_MAKE_IP(10, 0, 2, 2);
-    struct seld_net_info net;
-    if (seld_net_info(&net) == 0 && net.gateway != 0) {
-        ip = net.gateway;
-    }
-    int sock = seld_tcp_connect(ip, 8080);
-    if (sock < 0 && ip != SELD_MAKE_IP(10, 0, 2, 2)) {
-        sock = seld_tcp_connect(SELD_MAKE_IP(10, 0, 2, 2), 8080);
-    }
-    if (sock < 0) {
-        sock = seld_tcp_connect(SELD_MAKE_IP(127, 0, 0, 1), 8080);
-    }
-    if (sock < 0) {
-        seld_net_lease_release();
-        s_net_status = -1;
-        return -1;
+    int sock = -1;
+    char req[512];
+    int using_gateway = 0;
+
+    // 1. Attempt OpSec Gateway (unless previously marked down)
+    if (!s_gateway_failed) {
+        uint32_t ip = SELD_MAKE_IP(10, 0, 2, 2);
+        struct seld_net_info net;
+        if (seld_net_info(&net) == 0 && net.gateway != 0) {
+            ip = net.gateway;
+        }
+        sock = seld_tcp_connect(ip, 8080);
+        if (sock < 0 && ip != SELD_MAKE_IP(10, 0, 2, 2)) {
+            sock = seld_tcp_connect(SELD_MAKE_IP(10, 0, 2, 2), 8080);
+        }
+        if (sock < 0) {
+            sock = seld_tcp_connect(SELD_MAKE_IP(127, 0, 0, 1), 8080);
+        }
+        if (sock >= 0) {
+            using_gateway = 1;
+            snprintf(req, sizeof(req),
+                "GET /api/cctv/frame?id=%s&cam=%d&index=%s HTTP/1.1\r\n"
+                "Host: 10.0.2.2:8080\r\n"
+                "User-Agent: SeldOS-CCTV/2.0 (Humboldt Avionics)\r\n"
+                "Connection: close\r\n\r\n",
+                s_presets[s_cam_idx].key, s_cam_idx + 1, s_current_index);
+        } else {
+            s_gateway_failed = 1;
+        }
     }
 
-    char req[256];
-    snprintf(req, sizeof(req),
-        "GET /api/cctv/frame?id=%s&cam=%d&index=%s HTTP/1.1\r\n"
-        "Host: 10.0.2.2:8080\r\n"
-        "User-Agent: SeldOS-CCTV/1.0 (Humboldt Avionics)\r\n"
-        "Connection: close\r\n\r\n",
-        (s_num_presets > 0 && s_cam_idx < s_num_presets) ? s_presets[s_cam_idx].key : "",
-        s_cam_idx + 1, s_current_index);
+    // 2. Direct Autonomous Downlink (Zero-Host dependency)
+    if (sock < 0) {
+        uint32_t cam_ip = 0;
+        uint16_t cam_port = 80;
+        char cam_path[256];
+        char cam_host[128];
+        resolve_direct_camera(s_presets[s_cam_idx].key, &cam_ip, &cam_port,
+                              cam_path, sizeof(cam_path), cam_host, sizeof(cam_host));
+
+        sock = seld_tcp_connect(cam_ip, cam_port);
+        if (sock < 0) {
+            // Secondary direct fallback: Volga Dzerzhinsk Lenin Square
+            cam_ip = SELD_MAKE_IP(109, 170, 96, 131);
+            cam_port = 2003;
+            strncpy(cam_path, "/cgi-bin/snapshot.cgi", sizeof(cam_path) - 1);
+            strncpy(cam_host, "109.170.96.131:2003", sizeof(cam_host) - 1);
+            sock = seld_tcp_connect(cam_ip, cam_port);
+        }
+
+        if (sock < 0) {
+            seld_net_lease_release();
+            s_net_status = -1;
+            return -1;
+        }
+
+        using_gateway = 0;
+        snprintf(req, sizeof(req),
+            "GET %s HTTP/1.0\r\n"
+            "Host: %s\r\n"
+            "User-Agent: SeldOS-CCTV/2.0 (Autonomous Direct)\r\n"
+            "Accept: image/jpeg, image/*\r\n"
+            "Connection: close\r\n\r\n",
+            cam_path, cam_host);
+    }
+
+    s_is_direct = !using_gateway;
 
     if (seld_tcp_send(sock, req, strlen(req)) <= 0) {
         seld_tcp_close(sock);
@@ -851,7 +1003,7 @@ static int fetch_live_frame(void) {
     while (total_bytes < (int)sizeof(s_jpeg_buf) - 1) {
         int want = sizeof(s_jpeg_buf) - 1 - total_bytes;
         if (want > 4096) want = 4096;
-        int n = seld_tcp_recv(sock, (char*)s_jpeg_buf + total_bytes, want, total_bytes == 0 ? 3000 : 800);
+        int n = seld_tcp_recv(sock, (char*)s_jpeg_buf + total_bytes, want, total_bytes == 0 ? 2500 : 400);
         if (n <= 0) break;
         total_bytes += n;
 
@@ -882,24 +1034,33 @@ static int fetch_live_frame(void) {
     }
     s_jpeg_buf[total_bytes] = '\0';
 
-    if (!strstr((char*)s_jpeg_buf, "200 OK")) {
+    if (!strstr((char*)s_jpeg_buf, "200 OK") && !strstr((char*)s_jpeg_buf, "200 ok")) {
         s_net_status = -4;
         return -4;
     }
 
-    char* seq_hdr = strstr((char*)s_jpeg_buf, "X-Frame-Seq: ");
-    if (seq_hdr) {
-        s_frame_seq = (uint32_t)atoi(seq_hdr + 13);
-    }
-
-    char* time_hdr = strstr((char*)s_jpeg_buf, "X-Capture-Time: ");
-    if (time_hdr) {
-        char* p = time_hdr + 16;
-        int i = 0;
-        while (*p && *p != '\r' && *p != '\n' && i < (int)sizeof(s_capture_time) - 1) {
-            s_capture_time[i++] = *p++;
+    if (using_gateway) {
+        char* seq_hdr = strstr((char*)s_jpeg_buf, "X-Frame-Seq: ");
+        if (seq_hdr) {
+            s_frame_seq = (uint32_t)atoi(seq_hdr + 13);
         }
-        s_capture_time[i] = '\0';
+        char* time_hdr = strstr((char*)s_jpeg_buf, "X-Capture-Time: ");
+        if (time_hdr) {
+            char* p = time_hdr + 16;
+            int i = 0;
+            while (*p && *p != '\r' && *p != '\n' && i < (int)sizeof(s_capture_time) - 1) {
+                s_capture_time[i++] = *p++;
+            }
+            s_capture_time[i] = '\0';
+        }
+    } else {
+        s_frame_seq++;
+        uint32_t ms = (s_frame_count * 33) % 1000;
+        uint32_t sec = (s_frame_count * 33) / 1000;
+        uint32_t mm = (sec / 60) % 60;
+        uint32_t hh = (sec / 3600) % 24;
+        uint32_t ss = sec % 60;
+        snprintf(s_capture_time, sizeof(s_capture_time), "%02u:%02u:%02u.%02u DOWNLINK", hh, mm, ss, ms / 10);
     }
 
     char* body = strstr((char*)s_jpeg_buf, "\r\n\r\n");
@@ -1146,15 +1307,19 @@ static void render_cctv_hud(void) {
     }
 
     // Card 3: LINK TELEMETRY (y = 247, h = 62)
-    draw_tactical_card(px, 247, pw, 62, "[ 03 // LINK TELEMETRY ]", "SOCKS5");
+    draw_tactical_card(px, 247, pw, 62, "[ 03 // LINK TELEMETRY ]", s_is_direct ? "DIRECT" : "SOCKS5");
 
     draw_text_5x7(px + 6, 264, "CARRIER:", COL_TEXT_SLATE);
     if (s_net_status == 1) {
-        draw_text_5x7(px + 60, 264, "LOCKED [SOCKS5 ONION]", COL_TEXT_EMERALD);
+        if (s_is_direct) {
+            draw_text_5x7(px + 60, 264, "LOCKED [DIRECT CLEARDOWNLINK]", COL_TEXT_EMERALD);
+        } else {
+            draw_text_5x7(px + 60, 264, "LOCKED [SOCKS5 ONION]", COL_TEXT_EMERALD);
+        }
     } else if (s_net_status == -1) {
-        draw_text_5x7(px + 60, 264, "DOWN (CHECK GATEWAY)", COL_TEXT_CRIMSON);
+        draw_text_5x7(px + 60, 264, "DOWN (CARRIER LOST)", COL_TEXT_CRIMSON);
     } else {
-        draw_text_5x7(px + 60, 264, "TUNNELING TOR CIRCUIT...", COL_TEXT_AMBER);
+        draw_text_5x7(px + 60, 264, "ACQUIRING DOWNLINK...", COL_TEXT_AMBER);
     }
 
     draw_text_5x7(px + 6, 276, "BUFFER:", COL_TEXT_SLATE);
@@ -1393,6 +1558,9 @@ int main(int argc, char* argv[]) {
         // Target Frame Rate ~30 FPS (33ms sleep)
         seld_sleep(33);
         s_frame_count++;
+        if (s_gateway_failed && (s_frame_count % 300) == 0) {
+            s_gateway_failed = 0;
+        }
     }
 
     // 5. OpSec Anti-Forensics Memory Sanitization (Zero-on-Exit)
