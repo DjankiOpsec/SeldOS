@@ -279,7 +279,7 @@ void seldfs_init(void) {
                 else if (strncmp(b, "/etc/", 5) == 0) b += 5;
                 else if (b[0] == '/') b += 1;
                 if (strcmp(b, "doom") == 0 || strcmp(b, "tor") == 0 || strcmp(b, "cctv") == 0 ||
-                    strcmp(b, "doom1.wad") == 0 || strcmp(b, "cctv.bin") == 0) {
+                    strcmp(b, "doom1.wad") == 0 || strcmp(b, "cctv.bin") == 0 || strcmp(b, "pcmode") == 0) {
                     continue;
                 }
                 strncpy(s_sealed_table[s_sealed_count].filename, sb.inodes[i].filename, SELDFS_MAX_FILENAME - 1);
@@ -659,7 +659,7 @@ int seldfs_is_sealed_file(const char* filename) {
 
     // Mutable userland packages are explicitly allowed to be written/downloaded
     if (strcmp(base, "doom") == 0 || strcmp(base, "tor") == 0 || strcmp(base, "cctv") == 0 ||
-        strcmp(base, "doom1.wad") == 0 || strcmp(base, "cctv.bin") == 0) {
+        strcmp(base, "doom1.wad") == 0 || strcmp(base, "cctv.bin") == 0 || strcmp(base, "pcmode") == 0) {
         return 0;
     }
 

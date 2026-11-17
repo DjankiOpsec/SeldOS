@@ -259,6 +259,9 @@ int      seld_tcp_connect(uint32_t ip, uint16_t port);
 int      seld_tcp_send(int sock, const void* data, size_t len);
 int      seld_tcp_recv(int sock, void* buf, size_t max_len, uint32_t timeout_ms);
 int      seld_tcp_close(int sock);
+int      seld_socks5_connect(uint32_t proxy_ip, uint16_t proxy_port, const char* target_host, uint16_t target_port);
+int      seld_socks5_connect_isolated(uint32_t proxy_ip, uint16_t proxy_port, const char* target_host, uint16_t target_port, const char* isolation_token);
+void     seld_socks5_set_session_salt(uint32_t salt);
 /* Control D Sovereign OpSec DNS Profile (Ads & Trackers - p2) */
 #define SELD_MAKE_IP(a, b, c, d) \
     ((uint32_t)(a) | ((uint32_t)(b) << 8) | ((uint32_t)(c) << 16) | ((uint32_t)(d) << 24))

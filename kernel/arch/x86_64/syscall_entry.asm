@@ -121,7 +121,10 @@ jump_to_userspace_asm:
     ; Save supervisor callee-saved registers into slot for current user_depth
     mov rax, [rel user_depth]
     cmp rax, MAX_USER_DEPTH
-    jae .depth_cap
+    jb .depth_ok
+    mov rax, -1
+    ret
+.depth_ok:
     mov [rel kernel_saved_rsp + rax*8], rsp
     mov [rel kernel_saved_rbp + rax*8], rbp
     mov [rel kernel_saved_rbx + rax*8], rbx
@@ -136,7 +139,6 @@ jump_to_userspace_asm:
     mov [rel user_stack_offset], r10
 
     inc qword [rel user_depth]
-.depth_cap:
 
     ; Switch to user address space (CR3) if provided
     test rdx, rdx

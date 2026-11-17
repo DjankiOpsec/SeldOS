@@ -6,13 +6,16 @@ Range: strictly 215 to 350 Hz. Completely uniform, solemn floating tempo.
 Canonical SeldOS implementation in userspace/bin/oracle/main.c.
 """
 
+import argparse
 import math
 import os
+import shutil
 import struct
 import subprocess
 import sys
 import time
 import threading
+import wave
 from pathlib import Path
 
 MIN_FREQ = 290.0
@@ -44,7 +47,71 @@ TRANSITIONS = [
 
 PACE_SEC = 0.16  # Rapid, seamless continuous chant (~6.25 words/sec)
 
-def play_oracle(words: list, seed: int = 12345):
+def export_audio(pcm_data: bytes, out_path: str, sample_rate: int = SAMPLE_RATE, bitrate: str = "320k"):
+    out = Path(out_path).resolve()
+    suffix = out.suffix.lower()
+
+    if suffix == ".wav":
+        try:
+            with wave.open(str(out), "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(sample_rate)
+                wf.writeframes(pcm_data)
+            print(f"\n[+] Audio exported (WAV lossless 16-bit {sample_rate}Hz): {out}")
+            return str(out)
+        except Exception as e:
+            print(f"\n[-] Failed to export WAV: {e}", file=sys.stderr)
+            return None
+
+    ffmpeg_bin = shutil.which("ffmpeg")
+    if ffmpeg_bin:
+        cmd = [
+            ffmpeg_bin, "-y",
+            "-f", "s16le",
+            "-ar", str(sample_rate),
+            "-ac", "1",
+            "-i", "-",
+        ]
+        if suffix == ".mp3":
+            cmd.extend(["-b:a", bitrate, "-c:a", "libmp3lame"])
+        cmd.append(str(out))
+        try:
+            res = subprocess.run(cmd, input=pcm_data, capture_output=True)
+            if res.returncode == 0:
+                print(f"\n[+] Audio exported ({suffix.upper().lstrip('.')} {bitrate}): {out}")
+                return str(out)
+        except Exception as e:
+            pass
+
+    lame_bin = shutil.which("lame")
+    if suffix == ".mp3" and lame_bin:
+        try:
+            res = subprocess.run(
+                [lame_bin, "-r", "-s", str(sample_rate / 1000.0), "-m", "m", "--bitrate", bitrate.replace("k", ""), "-", str(out)],
+                input=pcm_data,
+                capture_output=True
+            )
+            if res.returncode == 0:
+                print(f"\n[+] Audio exported (MP3 {bitrate} via LAME): {out}")
+                return str(out)
+        except Exception:
+            pass
+
+    wav_path = out.with_suffix(".wav")
+    try:
+        with wave.open(str(wav_path), "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(sample_rate)
+            wf.writeframes(pcm_data)
+        print(f"\n[+] Fallback: exported to WAV lossless: {wav_path}")
+        return str(wav_path)
+    except Exception as e:
+        print(f"\n[-] Failed fallback export: {e}", file=sys.stderr)
+        return None
+
+def play_oracle(words: list, seed: int = 12345, save_path: str = None, bitrate: str = "320k", no_play: bool = False):
     events = []
     rng = seed
     history = [-1, -1, -1, -1]
@@ -59,17 +126,14 @@ def play_oracle(words: list, seed: int = 12345):
         prev = history[0] if history[0] >= 0 else 3
 
         if any(c in w for c in '.!?'):
-            # Musical cadence resolving to upper tonic (6), sacred fifth (3), or ground (0)
             cands = [6, 3, 5, 0] if prev >= 4 else [3, 6, 2, 0]
             deg = cands[(rng >> 16) % len(cands)]
         elif any(c in w for c in ',;:'):
-            # Melancholic suspension on poignant minor intervals
             cands = [4, 5, 2, 7]
             deg = cands[(rng >> 16) % len(cands)]
         else:
             deg = TRANSITIONS[prev][choice]
 
-        # Invariants: strictly no consecutive duplicates, no 2-note alternating trills (A-B-A-B)
         attempts = 0
         while (deg == history[0] or deg == history[1] or (deg == history[2] and ((rng >> 8) & 1))) and attempts < 8:
             deg = (deg + 1) % len(SCALE)
@@ -112,17 +176,25 @@ def play_oracle(words: list, seed: int = 12345):
             full_pcm.extend(struct.pack('<h', val))
             phase += freq / SAMPLE_RATE
 
-    proc = subprocess.Popen(
-        ['aplay', '-q', '-t', 'raw', '-f', 'S16_LE', '-r', str(SAMPLE_RATE), '-c', '1'],
-        stdin=subprocess.PIPE
-    )
-
-    def audio_feeder():
-        proc.stdin.write(full_pcm)
-        proc.stdin.close()
-
-    t = threading.Thread(target=audio_feeder, daemon=True)
-    t.start()
+    proc = None
+    if not no_play:
+        aplay_bin = shutil.which("aplay")
+        if aplay_bin:
+            try:
+                proc = subprocess.Popen(
+                    [aplay_bin, '-q', '-t', 'raw', '-f', 'S16_LE', '-r', str(SAMPLE_RATE), '-c', '1'],
+                    stdin=subprocess.PIPE
+                )
+                def audio_feeder():
+                    try:
+                        proc.stdin.write(full_pcm)
+                        proc.stdin.close()
+                    except Exception:
+                        pass
+                t = threading.Thread(target=audio_feeder, daemon=True)
+                t.start()
+            except Exception as e:
+                print(f"[!] Warning: could not start aplay: {e}", file=sys.stderr)
 
     print("\n--- TEMPLE OF OPSEC ORACLE ---")
     line_col = 0
@@ -134,10 +206,21 @@ def play_oracle(words: list, seed: int = 12345):
                 line_col = 0
             print(w, end=' ', flush=True)
             line_col += len(w) + 1
-            time.sleep(ev['dur'])
+            if not no_play:
+                time.sleep(ev['dur'])
+        print()
+    except KeyboardInterrupt:
+        print("\n\n[!] Interrupted by user.")
     finally:
-        proc.wait()
-        print("\n--- [AMEN] ---\n")
+        if proc:
+            try:
+                proc.terminate()
+                proc.wait(timeout=1.0)
+            except Exception:
+                pass
+        print("--- [AMEN] ---")
+        if save_path:
+            export_audio(full_pcm, save_path, sample_rate=SAMPLE_RATE, bitrate=bitrate)
 
 def load_words(count: int, seed_val: int = 12345):
     corpus_file = Path(__file__).resolve().parent / "data" / "corpus.txt"
@@ -157,19 +240,48 @@ def load_words(count: int, seed_val: int = 12345):
     return all_words[start:start + count]
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="TempleOS-style Opsec Oracle with high-bitrate audio export"
+    )
+    parser.add_argument("args", nargs="*", help="Optional: [count] [seed]")
+    parser.add_argument("-o", "--out", "--save", dest="output", default="oracle_latest.mp3",
+                        help="Output audio file path (default: oracle_latest.mp3, supports .mp3, .wav, .flac)")
+    parser.add_argument("-b", "--bitrate", default="320k",
+                        help="Audio bitrate for MP3 export (default: 320k)")
+    parser.add_argument("-n", "--no-play", action="store_true",
+                        help="Fast export without real-time playback")
+    parser.add_argument("--wav", action="store_true",
+                        help="Force output as uncompressed WAV (16-bit 44.1 kHz PCM)")
+    parser.add_argument("--no-save", action="store_true",
+                        help="Disable saving audio to file")
+
+    parsed = parser.parse_args()
+
     target_count = 160
     seed_arg = None
 
-    for arg in sys.argv[1:]:
-        if arg.isdigit():
-            target_count = int(arg)
+    for a in parsed.args:
+        if a.isdigit():
+            target_count = int(a)
         else:
-            seed_arg = arg
+            seed_arg = a
 
     if seed_arg is None:
         seed_val = int(time.time_ns()) & 0xFFFFFFFFFFFFFFFF
     else:
         seed_val = sum(ord(c) for c in seed_arg)
 
+    save_path = None
+    if not parsed.no_save:
+        save_path = parsed.output
+        if parsed.wav and not save_path.endswith(".wav"):
+            save_path = str(Path(save_path).with_suffix(".wav"))
+
     words = load_words(target_count, seed_val)
-    play_oracle(words, seed_val)
+    play_oracle(
+        words,
+        seed=seed_val,
+        save_path=save_path,
+        bitrate=parsed.bitrate,
+        no_play=parsed.no_play
+    )

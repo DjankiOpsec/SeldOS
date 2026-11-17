@@ -28,7 +28,9 @@ static inline uint64_t rdtsc_entropy(void) {
 }
 
 static void seld_get_random_bytes(uint8_t* out, size_t len) {
-    if (seld_getrandom(out, len) == (int)len || seld_getrandom(out, len) == 0) {
+    if (len == 0) return;
+    int ret = seld_getrandom(out, len);
+    if (ret == (int)len) {
         return;
     }
     // Fallback: SHA-256 sponge over rdtsc + pid entropy

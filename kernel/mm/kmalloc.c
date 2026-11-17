@@ -173,7 +173,7 @@ void* kmalloc(size_t size) {
         }
         return NULL;
     }
-    if (size == 0) return NULL;
+    if (size == 0 || size > (size_t)-16 || size > 0x40000000ULL) return NULL;
 
     // Align size to 16 bytes
     size = (size + 15) & ~15ULL;

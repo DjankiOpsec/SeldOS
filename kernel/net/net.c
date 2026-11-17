@@ -1141,6 +1141,12 @@ static void net_handle_ipv4(const uint8_t* frame, size_t len) {
         return;
     }
 
+    // Drop IPv4 fragments (Teardrop / Fraggle defense: IP reassembly not supported)
+    if ((ntohs(ip->flags_frag) & 0x3FFF) != 0) {
+        s_stats.rx_dropped++;
+        return;
+    }
+
     // Check Destination IP: must be our IP, subnet broadcast, or global broadcast
     uint32_t bcast = (s_config.ip & s_config.netmask) | ~s_config.netmask;
     if (ip->dest_ip != s_config.ip && ip->dest_ip != 0xFFFFFFFF && ip->dest_ip != bcast) {

@@ -40,6 +40,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    const char* fetch_url = target;
     if (!dest) {
         if (strcmp(target, "tor") == 0 || strcmp(target, "torbrowser") == 0) {
             dest = "/bin/tor";
@@ -48,9 +49,11 @@ int main(int argc, char* argv[]) {
         } else if (strcmp(target, "wad") == 0 || strcmp(target, "doom1.wad") == 0) {
             dest = "/doom1.wad";
         } else if (strcmp(target, "cctv") == 0 || strcmp(target, "cameras") == 0) {
-            dest = "/bin/cctv";
+            dest = "/etc/cctv.bin";
+            fetch_url = "cctv.bin";
         } else if (strcmp(target, "cctv.bin") == 0 || strcmp(target, "matrix") == 0) {
             dest = "/etc/cctv.bin";
+            fetch_url = "cctv.bin";
         } else {
             const char* slash = strrchr(target, '/');
             if (slash && *(slash + 1)) {
@@ -102,7 +105,7 @@ int main(int argc, char* argv[]) {
     printf("[*] SeldFS Target  : %s\n", dest);
     printf("[*] Connecting via Gigabit Ethernet controller...\n");
 
-    int res = seld_download_url(target, dest);
+    int res = seld_download_url(fetch_url, dest);
     if (res != 0) {
         printf("[-] Download failed with error code: %d\n", res);
         if (res == -2) printf("[-] Reason: DNS resolution failed or connection timeout.\n");

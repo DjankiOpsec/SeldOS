@@ -115,10 +115,14 @@ def dynamic_geocode(query: str):
     if not query:
         return (56.2457, 43.4883, "DZERZHINSK (606000)", "RU")
     q = query.strip()
+    if q.lower() in ("606000", "dzerzhinsk", "дзержинск"):
+        return (56.2457, 43.4883, "DZERZHINSK (606000)", "RU")
     if not _geo_cache:
         _load_geo_cache()
     if q.lower() in _geo_cache:
-        return tuple(_geo_cache[q.lower()])
+        cached = tuple(_geo_cache[q.lower()])
+        if len(cached) >= 4 and cached[3] != "XX":
+            return cached
 
     ensure_tor_running()
     proxies = {
@@ -141,10 +145,7 @@ def dynamic_geocode(query: str):
     for test_q in queries:
         try:
             req_url = f"https://photon.komoot.io/api/?q={quote_plus(test_q)}&limit=1"
-            try:
-                r = requests.get(req_url, proxies=proxies, headers=headers, timeout=3.0)
-            except Exception:
-                r = requests.get(req_url, proxies={"http": None, "https": None}, headers=headers, timeout=2.0)
+            r = requests.get(req_url, proxies=proxies, headers=headers, timeout=4.0)
             if r.status_code == 200:
                 data = r.json()
                 features = data.get("features", [])
@@ -164,12 +165,9 @@ def dynamic_geocode(query: str):
         except Exception as e:
             log(f"Dynamic geocode upstream error for '{test_q}': {e}")
 
-    # Deterministic fallback without hardcoded city names
+    # Deterministic fallback without hardcoded city names (do not save XX fallback into persistent cache)
     digits = re.sub(r'[^0-9]', '', q)
-    res = (56.2457, 43.4883, f"POSTAL-{digits or q.upper()}", "XX")
-    _geo_cache[q.lower()] = res
-    _save_geo_cache()
-    return res
+    return (56.2457, 43.4883, f"POSTAL-{digits or q.upper()}", "XX")
 
 def haversine_km(lat1, lon1, lat2, lon2):
     R = 6371.0
@@ -226,20 +224,13 @@ class DynamicCameraEngine:
         if self.feed_key:
             return self.feed_key
         headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://opencctv.org/"}
+        proxies = {"http": f"socks5h://{TOR_SOCKS5_HOST}:{TOR_SOCKS5_PORT}", "https": f"socks5h://{TOR_SOCKS5_HOST}:{TOR_SOCKS5_PORT}"}
         try:
-            r = requests.get("https://opencctv.org/api/config", proxies={"http": None, "https": None}, headers=headers, timeout=2.5)
+            r = requests.get("https://opencctv.org/api/config", proxies=proxies, headers=headers, timeout=6)
             if r.status_code == 200:
                 self.feed_key = r.json().get("fk", "")
         except Exception:
             pass
-        if not self.feed_key:
-            proxies = {"http": f"socks5h://{TOR_SOCKS5_HOST}:{TOR_SOCKS5_PORT}", "https": f"socks5h://{TOR_SOCKS5_HOST}:{TOR_SOCKS5_PORT}"}
-            try:
-                r = requests.get("https://opencctv.org/api/config", proxies=proxies, headers=headers, timeout=6)
-                if r.status_code == 200:
-                    self.feed_key = r.json().get("fk", "")
-            except Exception:
-                pass
         return self.feed_key
 
     def ensure_loaded(self):
@@ -288,13 +279,14 @@ class DynamicCameraEngine:
             self._loaded = True
 
     def _load_inetcom(self):
+        proxies = {"http": f"socks5h://{TOR_SOCKS5_HOST}:{TOR_SOCKS5_PORT}", "https": f"socks5h://{TOR_SOCKS5_HOST}:{TOR_SOCKS5_PORT}"}
         try:
             r = requests.post(
                 "https://cameras.inetcom.ru/ajax/region",
                 data={},
                 headers={"User-Agent": "Mozilla/5.0", "X-Requested-With": "XMLHttpRequest"},
-                proxies={"http": None, "https": None},
-                timeout=5
+                proxies=proxies,
+                timeout=8
             )
             if r.status_code == 200:
                 markers = r.json().get("markers", [])
@@ -422,35 +414,16 @@ class DynamicCameraEngine:
             "Referer": "https://opencctv.org/",
             "X-Feed-Key": fk
         }
-        fetched_any = False
-        # Attempt 1: Fast Clearnet directly (timeout 1.5s)
-        try:
-            r = requests.post("https://opencctv.org/api/cameras/batch", json={"ids": needed}, proxies={"http": None, "https": None}, headers=headers, timeout=1.5)
-            if r.status_code == 200 and isinstance(r.json(), list):
-                for c in r.json():
-                    cid = c.get("id")
-                    if cid:
-                        self.cache_details[cid] = c
-                        self.cache_details[cid.lower()] = c
-                        fetched_any = True
-                if fetched_any:
-                    for cid in needed:
-                        if cid not in self.cache_details:
-                            self.failed_ids.add(cid)
-                    return
-        except Exception:
-            pass
-        # Attempt 2: Tor SOCKS5 fallback (timeout 2.0s)
         proxies = {"http": f"socks5h://{TOR_SOCKS5_HOST}:{TOR_SOCKS5_PORT}", "https": f"socks5h://{TOR_SOCKS5_HOST}:{TOR_SOCKS5_PORT}"}
         try:
-            r = requests.post("https://opencctv.org/api/cameras/batch", json={"ids": needed}, proxies=proxies, headers=headers, timeout=2.0)
+            r = requests.post("https://opencctv.org/api/cameras/batch", json={"ids": needed}, proxies=proxies, headers=headers, timeout=6.0)
             if r.status_code == 200 and isinstance(r.json(), list):
                 for c in r.json():
                     cid = c.get("id")
                     if cid:
                         self.cache_details[cid] = c
                         self.cache_details[cid.lower()] = c
-        except Exception as e:
+        except Exception:
             pass
         for cid in needed:
             if cid not in self.cache_details:
@@ -804,23 +777,13 @@ class AutonomousLiveStreamer:
             "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
         }
         # 1. Fast Ambient HTTP Proxy attempt (fastest for foreign webcams / YouTube CDN)
-        is_ru = ("inetcom" in target_url.lower() or ".ru/" in target_url.lower() or target_url.lower().endswith(".ru"))
-        if AMBIENT_HTTP_PROXY and not is_ru:
-            proxies_amb = {"http": AMBIENT_HTTP_PROXY, "https": AMBIENT_HTTP_PROXY}
-            try:
-                r = requests.get(target_url, headers=headers, proxies=proxies_amb, timeout=timeout)
-                if r.status_code == 200 and len(r.content) > 1000:
-                    raw_im = Image.open(io.BytesIO(r.content)).convert("RGB")
-                    raw_im.thumbnail((640, 480))
-                    bg = Image.new("RGB", (640, 480), (8, 12, 16))
-                    bg.paste(raw_im, ((640 - raw_im.width) // 2, (480 - raw_im.height) // 2))
-                    return bg
-            except Exception:
-                pass
-
-        # 2. Fast clearnet direct attempt
+        # Zero-Leak: Route strictly through Tor SOCKS5
+        proxies_tor = {
+            "http": f"socks5h://{TOR_SOCKS5_HOST}:{TOR_SOCKS5_PORT}",
+            "https": f"socks5h://{TOR_SOCKS5_HOST}:{TOR_SOCKS5_PORT}"
+        }
         try:
-            r = requests.get(target_url, headers=headers, proxies={"http": None, "https": None}, timeout=timeout)
+            r = requests.get(target_url, headers=headers, proxies=proxies_tor, timeout=timeout)
             if r.status_code == 200 and len(r.content) > 1000:
                 raw_im = Image.open(io.BytesIO(r.content)).convert("RGB")
                 raw_im.thumbnail((640, 480))
@@ -829,23 +792,6 @@ class AutonomousLiveStreamer:
                 return bg
         except Exception:
             pass
-
-        # 3. Tor SOCKS5 fallback (background only)
-        if allow_tor:
-            proxies_tor = {
-                "http": f"socks5h://{TOR_SOCKS5_HOST}:{TOR_SOCKS5_PORT}",
-                "https": f"socks5h://{TOR_SOCKS5_HOST}:{TOR_SOCKS5_PORT}"
-            }
-            try:
-                r = requests.get(target_url, headers=headers, proxies=proxies_tor, timeout=3.0)
-                if r.status_code == 200 and len(r.content) > 1000:
-                    raw_im = Image.open(io.BytesIO(r.content)).convert("RGB")
-                    raw_im.thumbnail((640, 480))
-                    bg = Image.new("RGB", (640, 480), (8, 12, 16))
-                    bg.paste(raw_im, ((640 - raw_im.width) // 2, (480 - raw_im.height) // 2))
-                    return bg
-            except Exception:
-                pass
         return None
 
     def _image_poll_worker(self):
@@ -975,27 +921,11 @@ class AutonomousLiveStreamer:
                 os.makedirs(self.frame_dir, exist_ok=True)
 
                 run_env = os.environ.copy()
-                is_ru = ("inetcom" in url.lower() or ".ru/" in url.lower() or url.lower().endswith(".ru"))
-                if is_ru:
-                    # Russian CDNs block foreign proxies (502 Bad Gateway). Connect direct!
-                    for k in ("http_proxy", "https_proxy", "all_proxy", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
-                        run_env.pop(k, None)
-                    run_env["no_proxy"] = "*"
-                    run_env["NO_PROXY"] = "*"
-                else:
-                    if AMBIENT_HTTP_PROXY:
-                        run_env["http_proxy"] = AMBIENT_HTTP_PROXY
-                        run_env["HTTP_PROXY"] = AMBIENT_HTTP_PROXY
-                    if AMBIENT_HTTPS_PROXY:
-                        run_env["https_proxy"] = AMBIENT_HTTPS_PROXY
-                        run_env["HTTPS_PROXY"] = AMBIENT_HTTPS_PROXY
-                    if AMBIENT_ALL_PROXY:
-                        run_env["all_proxy"] = AMBIENT_ALL_PROXY
-                        run_env["ALL_PROXY"] = AMBIENT_ALL_PROXY
-                    if not any(run_env.get(k) for k in ("http_proxy", "https_proxy", "all_proxy", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY")):
-                        run_env["http_proxy"] = f"socks5h://{TOR_SOCKS5_HOST}:{TOR_SOCKS5_PORT}"
-                        run_env["https_proxy"] = f"socks5h://{TOR_SOCKS5_HOST}:{TOR_SOCKS5_PORT}"
-                        run_env["all_proxy"] = f"socks5h://{TOR_SOCKS5_HOST}:{TOR_SOCKS5_PORT}"
+                run_env["http_proxy"] = f"socks5h://{TOR_SOCKS5_HOST}:{TOR_SOCKS5_PORT}"
+                run_env["https_proxy"] = f"socks5h://{TOR_SOCKS5_HOST}:{TOR_SOCKS5_PORT}"
+                run_env["all_proxy"] = f"socks5h://{TOR_SOCKS5_HOST}:{TOR_SOCKS5_PORT}"
+                run_env.pop("no_proxy", None)
+                run_env.pop("NO_PROXY", None)
 
                 referer = "https://cameras.inetcom.ru/" if "inetcom" in url.lower() else "https://opencctv.org/"
 
@@ -1984,7 +1914,7 @@ class OpSecGatewayHandler(BaseHTTPRequestHandler):
                     resp = session.get(url, headers=headers, timeout=16, verify=verify_ssl,
                                        proxies=onion_proxies, allow_redirects=True)
                 except (requests.exceptions.ProxyError, requests.exceptions.ConnectionError):
-                    if not is_onion:
+                    if not is_onion and not any(k in url.lower() for k in ("cctv", "camera", "snapshot", "stream", "video")):
                         resp = session.get(url, headers=headers, timeout=12, verify=True, allow_redirects=True)
                     else:
                         raise

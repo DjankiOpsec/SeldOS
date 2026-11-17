@@ -14,9 +14,10 @@ LIBC_SRCS = userspace/libc/src/syscall.c \
             userspace/libc/src/seld_aes128_gcm.c \
             userspace/libc/src/seld_hkdf.c \
             userspace/libc/src/seld_tls.c \
-            userspace/libc/src/seld_vless.c
+            userspace/libc/src/seld_vless.c \
+            userspace/libc/src/seld_socks5.c
 
-UTILS = init sh ls cat echo rm sha256sum uname ps fm download oracle fetch reboot poweroff purge stealth diode pinpad otp hi grep head tail less kill clip drop jammer phantom radar wiretap
+UTILS = init sh ls cat echo rm sha256sum uname ps fm download oracle fetch reboot poweroff purge stealth diode pinpad otp hi grep head tail less kill clip drop jammer phantom radar wiretap cctv
 
 # ---------------------------------------------------------------------------
 # x86_64 Architecture Definitions
@@ -41,7 +42,8 @@ X86_LIBC_OBJS = build/libc_syscall.o \
                 build/libc_seld_aes128_gcm.o \
                 build/libc_seld_hkdf.o \
                 build/libc_seld_tls.o \
-                build/libc_seld_vless.o
+                build/libc_seld_vless.o \
+                build/libc_seld_socks5.o
 
 X86_LIBSNL = build/libsnl.a
 X86_ALL_BINS = $(addprefix build/bin/, $(UTILS))
@@ -122,9 +124,9 @@ build/obj_tor_%.o: userspace/bin/tor/%.c userspace/bin/tor/*.h userspace/libc/in
 	@mkdir -p build
 	$(CC) $(X86_USER_CFLAGS) -Iuserspace/bin/tor -c $< -o $@
 
-build/bin/tor: $(X86_USER_CRT0) $(addprefix build/obj_tor_, main.o socks5.o http.o html.o) $(X86_LIBSNL) userspace/linker.ld
+build/bin/tor: $(X86_USER_CRT0) $(addprefix build/obj_tor_, main.o http.o html.o) $(X86_LIBSNL) userspace/linker.ld
 	@mkdir -p build/bin
-	ld -s -T userspace/linker.ld -nostdlib -o $@ $(X86_USER_CRT0) $(addprefix build/obj_tor_, main.o socks5.o http.o html.o) --whole-archive $(X86_LIBSNL) --no-whole-archive
+	ld -s -T userspace/linker.ld -nostdlib -o $@ $(X86_USER_CRT0) $(addprefix build/obj_tor_, main.o http.o html.o) --whole-archive $(X86_LIBSNL) --no-whole-archive
 	strip --strip-all $@
 
 build/obj_diode_%.o: userspace/bin/diode/%.c userspace/bin/diode/*.h userspace/libc/include/*.h
@@ -243,9 +245,9 @@ $(RV_DIR)/obj_tor_%.o: userspace/bin/tor/%.c userspace/bin/tor/*.h userspace/lib
 	@mkdir -p $(RV_DIR)
 	$(CC_RV) $(RV_USER_CFLAGS) -Iuserspace/bin/tor -c $< -o $@
 
-$(RV_BIN)/tor: $(RV_CRT0) $(addprefix $(RV_DIR)/obj_tor_, main.o socks5.o http.o html.o) $(RV_LIBSNL) userspace/linker_riscv64.ld
+$(RV_BIN)/tor: $(RV_CRT0) $(addprefix $(RV_DIR)/obj_tor_, main.o http.o html.o) $(RV_LIBSNL) userspace/linker_riscv64.ld
 	@mkdir -p $(RV_BIN)
-	$(LD_RV) -s -T userspace/linker_riscv64.ld -nostdlib -o $@ $(RV_CRT0) $(addprefix $(RV_DIR)/obj_tor_, main.o socks5.o http.o html.o) --whole-archive $(RV_LIBSNL) --no-whole-archive
+	$(LD_RV) -s -T userspace/linker_riscv64.ld -nostdlib -o $@ $(RV_CRT0) $(addprefix $(RV_DIR)/obj_tor_, main.o http.o html.o) --whole-archive $(RV_LIBSNL) --no-whole-archive
 	$(OBJCOPY_RV) --strip-all $@
 
 $(RV_DIR)/obj_diode_%.o: userspace/bin/diode/%.c userspace/bin/diode/*.h userspace/libc/include/*.h
@@ -255,6 +257,15 @@ $(RV_DIR)/obj_diode_%.o: userspace/bin/diode/%.c userspace/bin/diode/*.h userspa
 $(RV_BIN)/diode: $(RV_CRT0) $(addprefix $(RV_DIR)/obj_diode_, main.o diode_crypto.o fsk.o qrcodegen.o) $(RV_LIBSNL) userspace/linker_riscv64.ld
 	@mkdir -p $(RV_BIN)
 	$(LD_RV) -s -T userspace/linker_riscv64.ld -nostdlib -o $@ $(RV_CRT0) $(addprefix $(RV_DIR)/obj_diode_, main.o diode_crypto.o fsk.o qrcodegen.o) --whole-archive $(RV_LIBSNL) --no-whole-archive
+	$(OBJCOPY_RV) --strip-all $@
+
+$(RV_DIR)/obj_cctv_%.o: userspace/bin/cctv/%.c userspace/bin/cctv/*.h userspace/libc/include/*.h
+	@mkdir -p $(RV_DIR)
+	$(CC_RV) $(RV_USER_CFLAGS) -Iuserspace/bin/cctv -c $< -o $@
+
+$(RV_BIN)/cctv: $(RV_CRT0) $(addprefix $(RV_DIR)/obj_cctv_, main.o nanojpeg.o) $(RV_LIBSNL) userspace/linker_riscv64.ld
+	@mkdir -p $(RV_BIN)
+	$(LD_RV) -s -T userspace/linker_riscv64.ld -nostdlib -o $@ $(RV_CRT0) $(addprefix $(RV_DIR)/obj_cctv_, main.o nanojpeg.o) --whole-archive $(RV_LIBSNL) --no-whole-archive
 	$(OBJCOPY_RV) --strip-all $@
 
 

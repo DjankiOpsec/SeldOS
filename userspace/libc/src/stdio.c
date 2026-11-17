@@ -440,7 +440,7 @@ static void format_number(char** out_ptr, size_t* remain, size_t* total,
 
     if (is_signed && (int64_t)num < 0) {
         negative = 1;
-        num = (uint64_t)(-(int64_t)num);
+        num = 0ULL - num;
     }
 
     if (num == 0) {

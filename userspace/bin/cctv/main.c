@@ -15,6 +15,7 @@
 #include "string.h"
 #include "unistd.h"
 #include "seld.h"
+#include "seld_socks5.h"
 #include "nanojpeg.h"
 
 #define SCR_W 680
@@ -174,7 +175,6 @@ static uint32_t s_frame_seq = 0;
 static char s_capture_time[32] = "ACQUIRING...";
 static int s_need_fetch = 1;
 static int s_gateway_failed = 0;
-static int s_is_direct = 0;
 
 /* Feed Filter Mode: 0 = ALL, 1 = VID, 2 = RAW, 3 = SNP */
 static int s_filter_mode = 0;
@@ -668,50 +668,52 @@ static void blit_image(int dst_x, int dst_y, int dst_w, int dst_h) {
     }
 }
 
-struct direct_seed {
+struct cctv_seed {
     const char* prefix;
-    uint8_t ip[4];
     uint16_t port;
     const char* path;
-    const char* host;
+    const char* target_host;
+    const char* http_host;
 };
 
-static const struct direct_seed s_direct_seeds[] = {
+static const struct cctv_seed s_cctv_seeds[] = {
     // Slot 0: Volga Sector (Lenin Square)
-    { "dz-lenin-square",    {109, 170, 96, 131}, 2003,  "/cgi-bin/snapshot.cgi", "109.170.96.131:2003" },
-    { "raw-109-170-96-131", {109, 170, 96, 131}, 2003,  "/cgi-bin/snapshot.cgi", "109.170.96.131:2003" },
+    { "dz-lenin-square",    2003, "/cgi-bin/snapshot.cgi", "109.170.96.131", "109.170.96.131:2003" },
+    { "raw-109-170-96-131", 2003, "/cgi-bin/snapshot.cgi", "109.170.96.131", "109.170.96.131:2003" },
     // Slot 1: Moscow Central Hub
-    { "raw-85-172-105-181", {85, 172, 105, 181}, 1027,  "/cgi-bin/snapshot.cgi", "85.172.105.181:1027" },
+    { "raw-85-172-105-181", 1027, "/cgi-bin/snapshot.cgi", "85.172.105.181", "85.172.105.181:1027" },
     // Slot 2: Moscow West Kuntsevo
-    { "raw-5-149-155-88",   {5, 149, 155, 88},   8082,  "/cgi-bin/snapshot.cgi", "5.149.155.88:8082" },
+    { "raw-5-149-155-88",   8082, "/cgi-bin/snapshot.cgi", "5.149.155.88",   "5.149.155.88:8082" },
     // Slot 3: Berlin Center Alexanderplatz
-    { "raw-31-17-87-107",   {31, 17, 87, 107},   83,    "/SnapshotJPEG?Resolution=640x480&Quality=Clarity", "31.17.87.107:83" },
+    { "raw-31-17-87-107",   83,   "/SnapshotJPEG?Resolution=640x480&Quality=Clarity", "31.17.87.107", "31.17.87.107:83" },
     // Slot 4: Paris Center Chatelet
-    { "raw-80-13-184-18",   {80, 13, 184, 18},   98,    "/SnapshotJPEG?Resolution=640x480&Quality=Clarity", "80.13.184.18:98" },
+    { "raw-80-13-184-18",   98,   "/SnapshotJPEG?Resolution=640x480&Quality=Clarity", "80.13.184.18", "80.13.184.18:98" },
     // Slot 5: Berlin Ring West Charlottenburg
-    { "raw-95-223-165-58",  {95, 223, 165, 58},  83,    "/snapshot.cgi?user=admin&pwd=", "95.223.165.58:83" },
+    { "raw-95-223-165-58",  83,   "/snapshot.cgi?user=admin&pwd=", "95.223.165.58", "95.223.165.58:83" },
     // Slot 6: NYC Manhattan Broadway
-    { "raw-208-65-183-226", {208, 65, 183, 226}, 82,    "/SnapshotJPEG?Resolution=640x480&Quality=Clarity", "208.65.183.226:82" },
+    { "raw-208-65-183-226", 82,   "/SnapshotJPEG?Resolution=640x480&Quality=Clarity", "208.65.183.226", "208.65.183.226:82" },
     // Slot 7: Paris North Montmartre
-    { "raw-81-250-228-238", {81, 250, 228, 238}, 88,    "/SnapshotJPEG?Resolution=640x480&Quality=Clarity", "81.250.228.238:88" }
+    { "raw-81-250-228-238", 88,   "/SnapshotJPEG?Resolution=640x480&Quality=Clarity", "81.250.228.238", "81.250.228.238:88" }
 };
 
-static int resolve_direct_camera(const char* key, int slot_idx, uint32_t* ip_out, uint16_t* port_out,
-                                 char* path_out, size_t path_sz, char* host_out, size_t host_sz) {
+static int resolve_camera_target(const char* key, int slot_idx, uint16_t* port_out,
+                                 char* path_out, size_t path_sz,
+                                 char* host_out, size_t host_sz,
+                                 char* http_host_out, size_t http_host_sz) {
     (void)slot_idx;
     if (!key || !key[0]) return 0;
-    size_t num_seeds = sizeof(s_direct_seeds) / sizeof(s_direct_seeds[0]);
+    size_t num_seeds = sizeof(s_cctv_seeds) / sizeof(s_cctv_seeds[0]);
 
-    // 1. Exact match against known direct seeds
+    // 1. Exact match against known seeds
     for (size_t i = 0; i < num_seeds; i++) {
-        if (strcmp(key, s_direct_seeds[i].prefix) == 0) {
-            *ip_out = SELD_MAKE_IP(s_direct_seeds[i].ip[0], s_direct_seeds[i].ip[1],
-                                   s_direct_seeds[i].ip[2], s_direct_seeds[i].ip[3]);
-            *port_out = s_direct_seeds[i].port;
-            strncpy(path_out, s_direct_seeds[i].path, path_sz - 1);
+        if (strcmp(key, s_cctv_seeds[i].prefix) == 0) {
+            *port_out = s_cctv_seeds[i].port;
+            strncpy(path_out, s_cctv_seeds[i].path, path_sz - 1);
             path_out[path_sz - 1] = '\0';
-            strncpy(host_out, s_direct_seeds[i].host, host_sz - 1);
+            strncpy(host_out, s_cctv_seeds[i].target_host, host_sz - 1);
             host_out[host_sz - 1] = '\0';
+            strncpy(http_host_out, s_cctv_seeds[i].http_host, http_host_sz - 1);
+            http_host_out[http_host_sz - 1] = '\0';
             return 1;
         }
     }
@@ -728,11 +730,11 @@ static int resolve_direct_camera(const char* key, int slot_idx, uint32_t* ip_out
         if (*p == '-' || *p == '.') p++;
         while (*p >= '0' && *p <= '9') o4 = o4 * 10 + (*p++ - '0');
         if (o1 > 0 && o4 > 0) {
-            *ip_out = SELD_MAKE_IP(o1, o2, o3, o4);
             *port_out = 80;
             strncpy(path_out, "/cgi-bin/snapshot.cgi", path_sz - 1);
             path_out[path_sz - 1] = '\0';
             snprintf(host_out, host_sz, "%d.%d.%d.%d", o1, o2, o3, o4);
+            snprintf(http_host_out, http_host_sz, "%d.%d.%d.%d", o1, o2, o3, o4);
             return 1;
         }
     }
@@ -743,7 +745,7 @@ static int resolve_direct_camera(const char* key, int slot_idx, uint32_t* ip_out
 
 static void init_fallback_presets(void) {
     s_num_presets = 0;
-    snprintf(s_centroid_title, sizeof(s_centroid_title), "GLOBAL DIRECT FEEDS (OFFLINE)");
+    snprintf(s_centroid_title, sizeof(s_centroid_title), "GLOBAL TOR SOCKS5 FEEDS");
 
     struct {
         const char* key;
@@ -935,9 +937,9 @@ static int fetch_catalog(const char* index_or_city) {
 }
 
 /*
- * Fetch Live Camera Frame (Autonomous Hybrid Engine)
- * Attempts OpSec Gateway if online, or seamlessly executes Direct TCP Downlink
- * to the verified camera feed without host proxy dependency.
+ * Fetch Live Camera Frame (Zero-Leak Tor Stream Engine)
+ * Tunnels strictly through OpSec Gateway (port 8080) or Tor SOCKS5 daemon (port 9050).
+ * Clearnet direct connections are forbidden to protect the user's real IP.
  */
 static int fetch_live_frame(void) {
     if (s_num_presets <= 0) return -1;
@@ -976,38 +978,49 @@ static int fetch_live_frame(void) {
         }
     }
 
-    // 2. Direct Autonomous Downlink (Zero-Host dependency)
+    // 2. Tor SOCKS5 Tunneling (Port 9050 with Stream Isolation & Remote DNS)
     if (sock < 0) {
-        uint32_t cam_ip = 0;
         uint16_t cam_port = 80;
         char cam_path[256];
         char cam_host[128];
-        int can_direct = resolve_direct_camera(s_presets[s_cam_idx].key, s_cam_idx, &cam_ip, &cam_port,
-                                               cam_path, sizeof(cam_path), cam_host, sizeof(cam_host));
-        if (!can_direct) {
-            seld_net_lease_release();
-            s_net_status = -10; // Stream requires OpSec Gateway (HLS / Transcoded)
-            return -10;
-        }
+        char http_host[128];
+        int can_resolve = resolve_camera_target(s_presets[s_cam_idx].key, s_cam_idx, &cam_port,
+                                                cam_path, sizeof(cam_path),
+                                                cam_host, sizeof(cam_host),
+                                                http_host, sizeof(http_host));
+        if (can_resolve) {
+            uint32_t proxy_ip = SELD_MAKE_IP(10, 0, 2, 2);
+            struct seld_net_info net;
+            if (seld_net_info(&net) == 0 && net.gateway != 0) {
+                proxy_ip = net.gateway;
+            }
 
-        sock = seld_tcp_connect(cam_ip, cam_port);
-        if (sock < 0) {
-            seld_net_lease_release();
-            s_net_status = -1;
-            return -1;
-        }
+            sock = seld_socks5_connect(proxy_ip, 9050, cam_host, cam_port);
+            if (sock < 0 && proxy_ip != SELD_MAKE_IP(10, 0, 2, 2)) {
+                sock = seld_socks5_connect(SELD_MAKE_IP(10, 0, 2, 2), 9050, cam_host, cam_port);
+            }
+            if (sock < 0) {
+                sock = seld_socks5_connect(SELD_MAKE_IP(127, 0, 0, 1), 9050, cam_host, cam_port);
+            }
 
-        using_gateway = 0;
-        snprintf(req, sizeof(req),
-            "GET %s HTTP/1.0\r\n"
-            "Host: %s\r\n"
-            "User-Agent: SeldOS-CCTV/2.0 (Autonomous Direct)\r\n"
-            "Accept: image/jpeg, image/*\r\n"
-            "Connection: close\r\n\r\n",
-            cam_path, cam_host);
+            if (sock >= 0) {
+                snprintf(req, sizeof(req),
+                    "GET %s HTTP/1.0\r\n"
+                    "Host: %s\r\n"
+                    "User-Agent: SeldOS-CCTV/2.0 (Tor Onion Remote)\r\n"
+                    "Accept: image/jpeg, image/*\r\n"
+                    "Connection: close\r\n\r\n",
+                    cam_path, http_host);
+            }
+        }
     }
 
-    s_is_direct = !using_gateway;
+    // 3. Fail-Closed: If both OpSec Gateway and Tor SOCKS5 daemon are offline, refuse direct clearnet leak!
+    if (sock < 0) {
+        seld_net_lease_release();
+        s_net_status = -10; // Tor offline
+        return -10;
+    }
 
     if (seld_tcp_send(sock, req, strlen(req)) <= 0) {
         seld_tcp_close(sock);
@@ -1332,21 +1345,17 @@ static void render_cctv_hud(void) {
     }
 
     // Card 3: LINK TELEMETRY (y = 247, h = 62)
-    draw_tactical_card(px, 247, pw, 62, "[ 03 // LINK TELEMETRY ]", s_is_direct ? "DIRECT" : "SOCKS5");
+    draw_tactical_card(px, 247, pw, 62, "[ 03 // LINK TELEMETRY ]", (s_net_status == 1) ? "SOCKS5" : "OFFLINE");
 
     draw_text_5x7(px + 6, 264, "CARRIER:", COL_TEXT_SLATE);
     if (s_net_status == 1) {
-        if (s_is_direct) {
-            draw_text_5x7(px + 60, 264, "LOCKED [DIRECT CLEARDOWNLINK]", COL_TEXT_EMERALD);
-        } else {
-            draw_text_5x7(px + 60, 264, "LOCKED [SOCKS5 ONION]", COL_TEXT_EMERALD);
-        }
+        draw_text_5x7(px + 60, 264, "LOCKED [SOCKS5 ONION]", COL_TEXT_EMERALD);
     } else if (s_net_status == -1) {
         draw_text_5x7(px + 60, 264, "DOWN (CARRIER LOST)", COL_TEXT_CRIMSON);
     } else if (s_net_status == -10) {
-        draw_text_5x7(px + 60, 264, "GATEWAY REQ (HLS)", COL_TEXT_AMBER);
+        draw_text_5x7(px + 60, 264, "NO CARRIER [TOR OFFLINE]", COL_TEXT_ALERT);
     } else {
-        draw_text_5x7(px + 60, 264, "ACQUIRING DOWNLINK...", COL_TEXT_AMBER);
+        draw_text_5x7(px + 60, 264, "TUNNELING SOCKS5 TOR...", COL_TEXT_AMBER);
     }
 
     draw_text_5x7(px + 6, 276, "BUFFER:", COL_TEXT_SLATE);
@@ -1398,27 +1407,32 @@ int main(int argc, char* argv[]) {
     // 2. Verify /etc/cctv.bin presence before switching console mode
     struct seld_stat st;
     const char* cctv_path = "/etc/cctv.bin";
-    if (seld_stat(cctv_path, &st) != 0) {
-        if (seld_stat("etc/cctv.bin", &st) == 0) cctv_path = "etc/cctv.bin";
-        else if (seld_stat("cctv.bin", &st) == 0) cctv_path = "cctv.bin";
-        else {
-            printf("\n");
-            printf("======================================================================\n");
-            printf(" [!] TACTICAL INTEL MATRIX MISSING (/etc/cctv.bin)\n");
-            printf("======================================================================\n");
-            printf(" SeldOS CCTV requires the worldwide optical surveillance matrix.\n");
-            printf(" To prevent bloating the base ISO image, heavy packages are on-demand.\n\n");
-            printf(" [*] Run the following command in terminal to install:\n");
-            printf("     download cctv\n\n");
-            printf(" This fetches 115,000+ public surveillance cameras and world city index\n");
-            printf(" directly from repository (https://github.com/DjankiOpsec/SeldOS).\n");
-            printf("======================================================================\n\n");
-            return 1;
-        }
+    int has_matrix = 0;
+    if (seld_stat(cctv_path, &st) == 0) {
+        has_matrix = 1;
+    } else if (seld_stat("etc/cctv.bin", &st) == 0) {
+        cctv_path = "etc/cctv.bin";
+        has_matrix = 1;
+    } else if (seld_stat("cctv.bin", &st) == 0) {
+        cctv_path = "cctv.bin";
+        has_matrix = 1;
+    } else if (argc <= 1) {
+        printf("\n");
+        printf("======================================================================\n");
+        printf(" [!] TACTICAL INTEL MATRIX MISSING (/etc/cctv.bin)\n");
+        printf("======================================================================\n");
+        printf(" SeldOS CCTV requires the worldwide optical surveillance matrix.\n");
+        printf(" To prevent bloating the base ISO image, heavy packages are on-demand.\n\n");
+        printf(" [*] Run the following command in terminal to install:\n");
+        printf("     download cctv\n\n");
+        printf(" This fetches 115,000+ public surveillance cameras and world city index\n");
+        printf(" directly from repository (https://github.com/DjankiOpsec/SeldOS).\n");
+        printf("======================================================================\n\n");
+        return 1;
     }
 
     // 3. Load CCTV Matrix into memory for instant zero-leak spatial queries
-    if (st.size >= sizeof(struct sctv_header)) {
+    if (has_matrix && st.size >= sizeof(struct sctv_header)) {
         s_cctv_matrix_size = st.size;
         s_cctv_matrix_buf = (uint8_t*)malloc(s_cctv_matrix_size);
         if (s_cctv_matrix_buf) {

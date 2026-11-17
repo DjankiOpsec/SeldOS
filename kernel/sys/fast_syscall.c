@@ -170,6 +170,7 @@ static int copy_string_from_user(const char* u_str, char* k_buf, size_t max_len)
         }
     }
     k_buf[max_len - 1] = '\0';
+    if (!validate_user_buffer(u_str + i, 1, 0)) return -1;
     return (u_str[i] == '\0') ? 0 : -1;
 }
 
@@ -431,7 +432,7 @@ int elf_load_and_run(const char* path, int argc, char* argv[]) {
     if (!path) return -1;
 
     // Guard against kernel syscall stack underflow on recursive userland nesting
-    if (user_depth >= 7) {
+    if (user_depth >= 8) {
         serial_puts("[-] OpSec / Exec: Maximum Ring 3 nesting depth exceeded (MAX_USER_DEPTH). Spawn rejected.\n");
         return -1;
     }
@@ -548,20 +549,11 @@ int elf_load_and_run(const char* path, int argc, char* argv[]) {
     uint64_t saved_brk = user_current_brk;
     user_current_brk = DEFAULT_USER_HEAP_BASE;
 
-    // Isolate file descriptor table per-process
+    // Preserve file descriptor table across process invocation (POSIX inheritance)
     struct user_fd_entry saved_user_fds[MAX_USER_FDS];
     memcpy(saved_user_fds, user_fds, sizeof(user_fds));
     int saved_stdout_redirect = s_stdout_redirect_fd;
     int saved_stdin_redirect = s_stdin_redirect_fd;
-    for (int i = 3; i < MAX_USER_FDS; i++) {
-        user_fds[i].used = 0;
-        user_fds[i].filename[0] = '\0';
-        user_fds[i].offset = 0;
-        user_fds[i].flags = 0;
-        user_fds[i].size = 0;
-    }
-    s_stdout_redirect_fd = -1;
-    s_stdin_redirect_fd = -1;
 
     const char* base_bin = resolved;
     if (strncmp(base_bin, "/bin/", 5) == 0) base_bin += 5;
@@ -852,7 +844,7 @@ static int check_pledge(uint64_t sys_num, uint64_t a1, uint64_t a2) {
 
         case SYS_REDIRECT_STDOUT:
         case SYS_REDIRECT_STDIN:
-            req = PLEDGE_PURGE; // Elevated administrative capability
+            req = PLEDGE_STDIO; // Standard I/O descriptor redirection
             break;
 
         case SYS_NET_INFO:
@@ -952,6 +944,11 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
                 }
                 return count;
             } else if (target_fd >= 3 && target_fd < MAX_USER_FDS && user_fds[target_fd].used) {
+                // Reject writes on file descriptors opened read-only (flags without O_WRONLY or O_RDWR)
+                if (!(user_fds[target_fd].flags & (0x0001 | 0x0002))) {
+                    return (uint64_t)-1;
+                }
+
                 // Universal write to SeldFS file
                 size_t max_file_sz = SELDFS_DATA_BLOCKS_PER_FILE * SELDFS_BLOCK_SIZE;
                 if (user_fds[target_fd].offset + count > max_file_sz) {
@@ -1030,6 +1027,11 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
                 }
                 return read_bytes;
             } else if (target_fd >= 3 && target_fd < MAX_USER_FDS && user_fds[target_fd].used) {
+                // Reject reads on write-only file descriptors
+                if ((user_fds[target_fd].flags & 0x0001) && !(user_fds[target_fd].flags & 0x0002)) {
+                    return (uint64_t)-1;
+                }
+
                 // Read directly from SeldFS file at current offset
                 size_t bytes_read = 0;
                 int res = seldfs_read_file_offset(user_fds[target_fd].filename, user_fds[target_fd].offset, buf, count, &bytes_read);

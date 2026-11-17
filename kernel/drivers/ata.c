@@ -12,6 +12,7 @@
 #include "io.h"
 #include "string.h"
 #include "serial.h"
+#include "spinlock.h"
 
 // Primary ATA Bus Ports
 #define ATA_DATA         0x1F0
@@ -61,6 +62,7 @@
 
 static struct ata_device_info primary_master;
 static struct ata_controller_info controller_info;
+static spinlock_t ata_lock = SPINLOCK_INIT;
 
 static void ata_400ns_delay(void) {
     inb(ATA_ALT_STATUS);
@@ -351,8 +353,10 @@ int ata_read_sectors(uint32_t lba, uint8_t count, void* buffer) {
         return -1;
     }
 
+    uint64_t rflags = spin_lock_irqsave(&ata_lock);
     for (int retry = 0; retry < ATA_MAX_RETRIES; retry++) {
         if (ata_read_sectors_once(lba, count, buffer) == 0) {
+            spin_unlock_irqrestore(&ata_lock, rflags);
             return 0;
         }
         serial_puts("[!] ATA: Read error at LBA ");
@@ -360,6 +364,7 @@ int ata_read_sectors(uint32_t lba, uint8_t count, void* buffer) {
         serial_puts(", performing soft reset and retrying...\n");
         ata_soft_reset();
     }
+    spin_unlock_irqrestore(&ata_lock, rflags);
     return -1;
 }
 
@@ -404,8 +409,10 @@ int ata_write_sectors(uint32_t lba, uint8_t count, const void* buffer) {
         return -1;
     }
 
+    uint64_t rflags = spin_lock_irqsave(&ata_lock);
     for (int retry = 0; retry < ATA_MAX_RETRIES; retry++) {
         if (ata_write_sectors_once(lba, count, buffer) == 0) {
+            spin_unlock_irqrestore(&ata_lock, rflags);
             return 0;
         }
         serial_puts("[!] ATA: Write error at LBA ");
@@ -413,5 +420,6 @@ int ata_write_sectors(uint32_t lba, uint8_t count, const void* buffer) {
         serial_puts(", performing soft reset and retrying...\n");
         ata_soft_reset();
     }
+    spin_unlock_irqrestore(&ata_lock, rflags);
     return -1;
 }

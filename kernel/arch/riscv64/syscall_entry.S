@@ -37,8 +37,11 @@ jump_to_userspace_asm:
     la t0, user_depth
     ld t1, 0(t0)
     li t2, 16
-    bgeu t1, t2, .Ldepth_cap
+    bltu t1, t2, .Ldepth_ok
+    li a0, -1
+    ret
 
+.Ldepth_ok:
     li t2, 112
     mul t3, t1, t2
     la t4, kernel_saved_contexts
@@ -64,8 +67,6 @@ jump_to_userspace_asm:
     slli t2, t1, 13
     la t3, user_stack_offset
     sd t2, 0(t3)
-
-.Ldepth_cap:
     # 2. Switch page table (satp) if user_cr3 != 0
     beqz a2, .Lskip_cr3
     srli a2, a2, 12

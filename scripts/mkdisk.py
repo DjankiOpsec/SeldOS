@@ -57,7 +57,9 @@ SB_FMT = "<IIIII"
 def crypt_sector(key, lba, sector_bytes):
     if not HAS_CRYPTO or not key:
         return bytes(sector_bytes)
-    iv = b'SELD' + struct.pack('>I', lba) + b'\x00' * 8
+    key_salt = struct.unpack("<I", key[:4])[0]
+    salt_magic = (0x53454C44 ^ key_salt) & 0xFFFFFFFF
+    iv = struct.pack(">I", salt_magic) + struct.pack('>I', lba) + b'\x00' * 8
     cipher = Cipher(algorithms.AES(key), modes.CTR(iv))
     enc = cipher.encryptor()
     return enc.update(bytes(sector_bytes)) + enc.finalize()
@@ -253,7 +255,8 @@ def main():
         "jammer",
         "phantom",
         "radar",
-        "wiretap"
+        "wiretap",
+        "cctv"
     ]
 
     files_to_write = []
@@ -306,9 +309,6 @@ def main():
         with open(corpus_path, "rb") as cf:
             # Provision compact high-entropy 128 KiB sacred corpus (~20,900 words)
             files_to_write.append(("oracle.txt", cf.read(131072)))
-
-    # Permanently provision PC mode (clean 85x20 desktop terminal, NO mobile buttons)
-    files_to_write.append(("pcmode", b"1\n"))
 
     create_seldfs_image(output_disk, files_to_write, compact=compact, encrypt_key=encrypt_key, headerless=headerless)
 

@@ -72,6 +72,10 @@ trap_entry_asm:
     csrr t3, stval
     sd t3,  272(sp)
 
+    # Enable SUM (bit 18) for S-mode so kernel can read/write user buffers during syscalls
+    li t0, (1 << 18)
+    csrs sstatus, t0
+
     # Invoke C-level trap handler with trap_frame pointer
     mv a0, sp
     call riscv_trap_handler
@@ -83,8 +87,13 @@ trap_entry_asm:
     csrw sepc, t1
 
     # Check if returning to U-mode or S-mode (SPP is bit 8 of sstatus)
-    andi t0, t0, (1 << 8)
-    bnez t0, .Lreturn_smode
+    andi t1, t0, (1 << 8)
+    bnez t1, .Lreturn_smode
+
+    # Returning to U-mode: ensure SUM (bit 18) and SPP (bit 8) are cleared
+    li t1, ~((1 << 8) | (1 << 18))
+    and t0, t0, t1
+    csrw sstatus, t0
 
     # Returning to U-mode:
     # 1. Load user sp into sscratch

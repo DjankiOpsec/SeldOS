@@ -27,18 +27,16 @@ static spinlock_t sched_lock = SPINLOCK_INIT;
 static int s_cpu_drv_enabled = 1;
 
 static inline void sched_update_tss(const struct task* t) {
+#if !defined(__riscv)
     if (t->stack_base) {
         uint64_t rsp0 = ((uint64_t)t->stack_base + TASK_STACK_SIZE) & ~0xFULL;
-#if defined(__riscv)
-        kernel_syscall_stack_top = rsp0;
-#else
         tss_set_rsp0(rsp0);
-#endif
     } else {
-#if !defined(__riscv)
         tss_set_rsp0(kernel_syscall_stack_top);
-#endif
     }
+#else
+    (void)t;
+#endif
 }
 
 #if !defined(__riscv)
