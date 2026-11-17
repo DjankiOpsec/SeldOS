@@ -248,6 +248,20 @@ int http_fetch(const char* url, uint32_t proxy_ip, uint16_t proxy_port, struct h
         resp->used_tor = used_tor;
 
         // Step 2: Build standardized privacy HTTP/1.1 request
+        for (const char* p = host; *p; p++) {
+            if (*p == '\r' || *p == '\n') {
+                if (is_https && tls) { seld_tls_close(tls); free(tls); }
+                else if (sock >= 0) seld_tcp_close(sock);
+                return -1;
+            }
+        }
+        for (const char* p = path; *p; p++) {
+            if (*p == '\r' || *p == '\n') {
+                if (is_https && tls) { seld_tls_close(tls); free(tls); }
+                else if (sock >= 0) seld_tcp_close(sock);
+                return -1;
+            }
+        }
         char req[1024];
         snprintf(req, sizeof(req),
                  "GET %s HTTP/1.1\r\n"
@@ -295,8 +309,6 @@ int http_fetch(const char* url, uint32_t proxy_ip, uint16_t proxy_port, struct h
                 if (n > 0) {
                     raw_len += (size_t)n;
                     to_ms = 4000;
-                } else if (n == 0) {
-                    break; // EOF or TLS close_notify
                 } else {
                     break;
                 }
@@ -312,8 +324,8 @@ int http_fetch(const char* url, uint32_t proxy_ip, uint16_t proxy_port, struct h
                 int n = seld_tcp_recv(sock, raw_buf + raw_len, buf_cap - raw_len - 1, to_ms);
                 if (n > 0) {
                     raw_len += (size_t)n;
-                } else if (n == 0 || n == -2) {
-                    break; // EOF or timeout
+                } else {
+                    break; // EOF, timeout, or error
                 }
             }
             seld_tcp_close(sock);

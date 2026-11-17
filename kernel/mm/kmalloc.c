@@ -13,6 +13,7 @@
 #include "string.h"
 #include "serial.h"
 #include "panic.h"
+#include "spinlock.h"
 
 #define HEAP_INITIAL_PAGES 64   // 256 KiB initial heap (reduced from 1024 KiB)
 
@@ -20,6 +21,7 @@ static struct block_header* heap_head = NULL;
 static uint64_t heap_base = 0;
 static uint64_t heap_total_size = 0;
 static size_t active_allocs = 0;
+static spinlock_t s_heap_lock = SPINLOCK_INIT;
 
 void kmalloc_init(void) {
     size_t initial_pages = HEAP_INITIAL_PAGES;
@@ -178,13 +180,17 @@ void* kmalloc(size_t size) {
     // Align size to 16 bytes
     size = (size + 15) & ~15ULL;
 
+    uint64_t flags = spin_lock_irqsave(&s_heap_lock);
+
     struct block_header* curr = heap_head;
     while (curr) {
         if (curr->is_free && curr->size >= size) {
             split_block(curr, size);
             curr->is_free = 0;
             active_allocs++;
-            return (void*)((uint8_t*)curr + BLOCK_HEADER_SIZE);
+            void* ret = (void*)((uint8_t*)curr + BLOCK_HEADER_SIZE);
+            spin_unlock_irqrestore(&s_heap_lock, flags);
+            return ret;
         }
         curr = curr->next;
     }
@@ -192,13 +198,16 @@ void* kmalloc(size_t size) {
     // Dynamic heap expansion via heap_grow
     struct block_header* new_block = heap_grow(size);
     if (!new_block) {
+        spin_unlock_irqrestore(&s_heap_lock, flags);
         return NULL;
     }
 
     split_block(new_block, size);
     new_block->is_free = 0;
     active_allocs++;
-    return (void*)((uint8_t*)new_block + BLOCK_HEADER_SIZE);
+    void* ret = (void*)((uint8_t*)new_block + BLOCK_HEADER_SIZE);
+    spin_unlock_irqrestore(&s_heap_lock, flags);
+    return ret;
 }
 
 void* kzalloc(size_t size) {
@@ -211,9 +220,19 @@ void* kzalloc(size_t size) {
 
 void kfree(void* ptr) {
     if (!ptr) return;
+    uint64_t min_virt = (uint64_t)phys_to_virt(0x1000ULL) + BLOCK_HEADER_SIZE;
+    if (((uint64_t)ptr & 0xFULL) != 0 || (uint64_t)ptr < min_virt) {
+        serial_puts("[-] ERROR: kfree invalid pointer at ");
+        serial_print_hex((uint64_t)ptr);
+        serial_puts("\n");
+        return;
+    }
+
+    uint64_t flags = spin_lock_irqsave(&s_heap_lock);
 
     struct block_header* block = (struct block_header*)((uint8_t*)ptr - BLOCK_HEADER_SIZE);
     if (block->magic != KMALLOC_MAGIC) {
+        spin_unlock_irqrestore(&s_heap_lock, flags);
         serial_puts("[-] ERROR: kfree corrupted block or invalid pointer at ");
         serial_print_hex((uint64_t)ptr);
         serial_puts("\n");
@@ -221,22 +240,28 @@ void kfree(void* ptr) {
     }
 
     if (block->is_free) {
+        spin_unlock_irqrestore(&s_heap_lock, flags);
         serial_puts("[-] ERROR: kfree double free detected at ");
         serial_print_hex((uint64_t)ptr);
         serial_puts("\n");
         return;
     }
 
-    // OpSec Zero-on-Free: erase payload to destroy residual keys and secrets
-    memset(ptr, 0, block->size);
+    // OpSec Zero-on-Free: volatile erase payload to destroy residual keys and secrets
+    volatile uint8_t* vp = (volatile uint8_t*)ptr;
+    for (size_t zi = 0; zi < block->size; zi++) {
+        vp[zi] = 0;
+    }
 
     block->is_free = 1;
     if (active_allocs > 0) active_allocs--;
     merge_blocks(block);
+    spin_unlock_irqrestore(&s_heap_lock, flags);
 }
 
 struct heap_stats kmalloc_get_stats(void) {
     struct heap_stats stats;
+    uint64_t flags = spin_lock_irqsave(&s_heap_lock);
     stats.heap_start = heap_base;
     stats.heap_size = heap_total_size;
     stats.used_bytes = 0;
@@ -252,5 +277,6 @@ struct heap_stats kmalloc_get_stats(void) {
         }
         curr = curr->next;
     }
+    spin_unlock_irqrestore(&s_heap_lock, flags);
     return stats;
 }

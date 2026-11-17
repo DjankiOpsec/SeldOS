@@ -162,16 +162,21 @@ void free(void* ptr) {
         return; /* Double-free guard: block is already freed */
     }
 
-    // OpSec Zero-on-Free: erase payload to destroy residual cryptographic material & buffers
-    memset(ptr, 0, block->size);
+    // OpSec Zero-on-Free: volatile erase payload to destroy residual cryptographic material & buffers
+    volatile uint8_t* vp = (volatile uint8_t*)ptr;
+    for (size_t zi = 0; zi < block->size; zi++) {
+        vp[zi] = 0;
+    }
 
     block->is_free = 1;
 
     /* Coalesce with forward adjacent block if free */
     if (block->next != NULL && block->next->magic == BLOCK_MAGIC && block->next->is_free) {
         if ((uint8_t*)block + BLOCK_HEADER_SIZE + block->size == (uint8_t*)block->next) {
-            block->size += BLOCK_HEADER_SIZE + block->next->size;
-            block->next = block->next->next;
+            struct block_header* absorbed = block->next;
+            block->size += BLOCK_HEADER_SIZE + absorbed->size;
+            block->next = absorbed->next;
+            absorbed->magic = 0;
             if (block->next != NULL && block->next->magic == BLOCK_MAGIC) {
                 block->next->prev = block;
             }
@@ -181,10 +186,12 @@ void free(void* ptr) {
     /* Coalesce with backward adjacent block if free */
     if (block->prev != NULL && block->prev->magic == BLOCK_MAGIC && block->prev->is_free) {
         if ((uint8_t*)block->prev + BLOCK_HEADER_SIZE + block->prev->size == (uint8_t*)block) {
-            block->prev->size += BLOCK_HEADER_SIZE + block->size;
-            block->prev->next = block->next;
-            if (block->next != NULL && block->next->magic == BLOCK_MAGIC) {
-                block->next->prev = block->prev;
+            struct block_header* absorbed = block;
+            block->prev->size += BLOCK_HEADER_SIZE + absorbed->size;
+            block->prev->next = absorbed->next;
+            absorbed->magic = 0;
+            if (absorbed->next != NULL && absorbed->next->magic == BLOCK_MAGIC) {
+                absorbed->next->prev = block->prev;
             }
         }
     }
@@ -208,12 +215,14 @@ void* realloc(void* ptr, size_t size) {
     }
 
     /* Case B: Next adjacent block is free and combined size satisfies request */
-    if (block->next != NULL && block->next->is_free) {
+    if (block->next != NULL && block->next->magic == BLOCK_MAGIC && block->next->is_free) {
         if ((uint8_t*)block + BLOCK_HEADER_SIZE + block->size == (uint8_t*)block->next) {
             size_t combined = block->size + BLOCK_HEADER_SIZE + block->next->size;
             if (combined >= size) {
-                block->next = block->next->next;
-                if (block->next != NULL) {
+                struct block_header* absorbed = block->next;
+                block->next = absorbed->next;
+                absorbed->magic = 0;
+                if (block->next != NULL && block->next->magic == BLOCK_MAGIC) {
                     block->next->prev = block;
                 }
                 block->size = combined;

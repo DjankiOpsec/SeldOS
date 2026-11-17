@@ -267,8 +267,28 @@ int seld_net_arp(struct seld_arp_entry* entries, size_t max_entries) {
 #include <stdio.h>
 #include <stdlib.h>
 
+static int http_has_crlf(const char* s) {
+    if (!s) return 0;
+    for (; *s; s++) {
+        if (*s == '\r' || *s == '\n') return 1;
+    }
+    return 0;
+}
+
+static size_t parse_decimal_size(const char* s, size_t max_len) {
+    size_t val = 0;
+    size_t i = 0;
+    while (i < max_len && s[i] >= '0' && s[i] <= '9') {
+        size_t d = (size_t)(s[i] - '0');
+        if (val > ((~(size_t)0) - d) / 10) return (~(size_t)0);
+        val = val * 10 + d;
+        i++;
+    }
+    return val;
+}
+
 int seld_http_download(uint32_t ip, uint16_t port, const char* host, const char* path, const char* local_path) {
-    if (!path || !local_path) return -1;
+    if (!path || !local_path || http_has_crlf(path) || http_has_crlf(host)) return -1;
     if (ip == 0) {
         struct seld_net_info net;
         if (seld_net_info(&net) == 0 && net.gateway != 0) {
@@ -300,6 +320,7 @@ int seld_http_download(uint32_t ip, uint16_t port, const char* host, const char*
     }
 
     size_t cap = 64 * 1024;
+    const size_t max_cap = 8 * 1024 * 1024;
     uint8_t* resp_buf = (uint8_t*)malloc(cap);
     if (!resp_buf) {
         seld_tcp_close(sock);
@@ -307,16 +328,18 @@ int seld_http_download(uint32_t ip, uint16_t port, const char* host, const char*
     }
 
     size_t total_read = 0;
-    while (1) {
-        if (total_read + 16384 > cap) {
+    while (total_read < max_cap) {
+        if (total_read + 16384 > cap && cap < max_cap) {
             size_t new_cap = cap * 2;
-            if (new_cap > 8 * 1024 * 1024) break;
+            if (new_cap > max_cap) new_cap = max_cap;
             uint8_t* new_buf = (uint8_t*)realloc(resp_buf, new_cap);
             if (!new_buf) break;
             resp_buf = new_buf;
             cap = new_cap;
         }
-        int n = seld_tcp_recv(sock, resp_buf + total_read, cap - total_read, 10000);
+        size_t avail = cap - total_read;
+        if (avail == 0) break;
+        int n = seld_tcp_recv(sock, resp_buf + total_read, avail, 10000);
         if (n > 0) {
             total_read += (size_t)n;
         } else {
@@ -360,7 +383,8 @@ int seld_http_download(uint32_t ip, uint16_t port, const char* host, const char*
     if (cl_ptr && (size_t)(cl_ptr - (char*)resp_buf) < hdr_len) {
         cl_ptr += 15;
         while (*cl_ptr == ' ' || *cl_ptr == '\t') cl_ptr++;
-        size_t expected_len = (size_t)atoi(cl_ptr);
+        size_t rem_hdr = hdr_len - (size_t)(cl_ptr - (char*)resp_buf);
+        size_t expected_len = parse_decimal_size(cl_ptr, rem_hdr);
         if (expected_len > 0 && body_len < expected_len) {
             free(resp_buf);
             return -8;
@@ -382,7 +406,7 @@ int seld_net_download(uint32_t ip, uint16_t port, const char* url_path, const ch
 }
 
 int seld_https_download(const char* host, const char* path, const char* local_path) {
-    if (!host || !path || !local_path) return -1;
+    if (!host || !path || !local_path || http_has_crlf(host) || http_has_crlf(path)) return -1;
 
     uint32_t ip = 0;
     if (seld_dns_resolve(host, &ip) != 0 || ip == 0) {
@@ -437,6 +461,7 @@ int seld_https_download(const char* host, const char* path, const char* local_pa
 
     // Read response body into memory buffer (starts at 64 KiB, grows dynamically up to 8 MiB)
     size_t cap = 64 * 1024;
+    const size_t max_cap = 8 * 1024 * 1024;
     uint8_t* resp_buf = (uint8_t*)malloc(cap);
     if (!resp_buf) {
         seld_tls_close(tls);
@@ -445,16 +470,18 @@ int seld_https_download(const char* host, const char* path, const char* local_pa
     }
 
     size_t total_read = 0;
-    while (1) {
-        if (total_read + 16384 > cap) {
+    while (total_read < max_cap) {
+        if (total_read + 16384 > cap && cap < max_cap) {
             size_t new_cap = cap * 2;
-            if (new_cap > 8 * 1024 * 1024) break;
+            if (new_cap > max_cap) new_cap = max_cap;
             uint8_t* new_buf = (uint8_t*)realloc(resp_buf, new_cap);
             if (!new_buf) break;
             resp_buf = new_buf;
             cap = new_cap;
         }
-        int n = seld_tls_read(tls, resp_buf + total_read, cap - total_read, 8000);
+        size_t avail = cap - total_read;
+        if (avail == 0) break;
+        int n = seld_tls_read(tls, resp_buf + total_read, avail, 8000);
         if (n > 0) {
             total_read += (size_t)n;
         } else if (n == 0) {
@@ -504,7 +531,8 @@ int seld_https_download(const char* host, const char* path, const char* local_pa
     if (cl_ptr && (size_t)(cl_ptr - (char*)resp_buf) < hdr_len) {
         cl_ptr += 15;
         while (*cl_ptr == ' ' || *cl_ptr == '\t') cl_ptr++;
-        size_t expected_len = (size_t)atoi(cl_ptr);
+        size_t rem_hdr = hdr_len - (size_t)(cl_ptr - (char*)resp_buf);
+        size_t expected_len = parse_decimal_size(cl_ptr, rem_hdr);
         if (expected_len > 0 && body_len < expected_len) {
             free(resp_buf);
             return -8; // Truncated transfer
@@ -639,10 +667,14 @@ int seld_tcp_close(int sock) {
 }
 
 static const uint8_t* dns_dot_skip_name(const uint8_t* p, const uint8_t* end) {
-    while (p < end) {
+    size_t steps = 0;
+    while (p < end && steps++ < 128) {
         uint8_t len = *p;
         if (len == 0) return p + 1;
-        if ((len & 0xC0) == 0xC0) return p + 2; // Compression pointer
+        if ((len & 0xC0) == 0xC0) {
+            return (p + 2 <= end) ? (p + 2) : end;
+        }
+        if (len > 63 || (size_t)(end - p - 1) < len) return end;
         p += 1 + len;
     }
     return end;
@@ -695,8 +727,8 @@ int seld_dns_resolve_dot(const char* hostname, uint32_t* ip_out) {
     }
 
     if (seld_tls_handshake(tls, sock, SELD_CONTROLD_DOT_HOST) != 0) {
+        seld_tls_close(tls);
         free(tls);
-        seld_tcp_close(sock);
         return -4;
     }
 
@@ -706,9 +738,13 @@ int seld_dns_resolve_dot(const char* hostname, uint32_t* ip_out) {
 
     // DNS Header: RFC 5452 Random 16-bit ID, Flags=0x0100 (Standard Query, RD=1), QDCOUNT=1
     uint16_t dot_qid = 0;
-    if (seld_getrandom(&dot_qid, sizeof(dot_qid)) != (int)sizeof(dot_qid) || dot_qid == 0) {
-        dot_qid = 0x5E1D;
+    if (seld_getrandom(&dot_qid, sizeof(dot_qid)) != (int)sizeof(dot_qid)) {
+        seld_tls_close(tls);
+        free(tls);
+        seld_tcp_close(sock);
+        return -4;
     }
+    if (dot_qid == 0) dot_qid = 1;
     dst[0] = (uint8_t)(dot_qid >> 8);
     dst[1] = (uint8_t)(dot_qid & 0xFF);
     dst[2] = 0x01; dst[3] = 0x00; // Flags: RD
@@ -750,10 +786,15 @@ int seld_dns_resolve_dot(const char* hostname, uint32_t* ip_out) {
         return -6;
     }
 
-    // Read 2-byte response length
+    // Read 2-byte response length completely
     uint8_t len_bytes[2];
-    int r = seld_tls_read(tls, len_bytes, 2, 3000);
-    if (r != 2) {
+    size_t len_got = 0;
+    while (len_got < 2) {
+        int r = seld_tls_read(tls, len_bytes + len_got, 2 - len_got, 3000);
+        if (r <= 0) break;
+        len_got += (size_t)r;
+    }
+    if (len_got != 2) {
         seld_tls_close(tls);
         free(tls);
         seld_tcp_close(sock);
@@ -782,9 +823,10 @@ int seld_dns_resolve_dot(const char* hostname, uint32_t* ip_out) {
     if (total_read < resp_len) return -9;
 
     // Parse DNS response
+    uint16_t rx_id = ((uint16_t)resp_buf[0] << 8) | resp_buf[1];
     uint16_t flags = ((uint16_t)resp_buf[2] << 8) | resp_buf[3];
     uint8_t rcode = (uint8_t)(flags & 0x0F);
-    if (rcode != 0) return -10; // NXDOMAIN or error
+    if (rx_id != dot_qid || !(flags & 0x8000) || rcode != 0) return -10; // Invalid/NXDOMAIN or error
 
     uint16_t qdcount = ((uint16_t)resp_buf[4] << 8) | resp_buf[5];
     uint16_t ancount = ((uint16_t)resp_buf[6] << 8) | resp_buf[7];

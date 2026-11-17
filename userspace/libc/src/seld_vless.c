@@ -21,9 +21,10 @@ int seld_vless_parse_uuid(const char* uuid_str, uint8_t uuid_out[16]) {
     size_t byte_idx = 0;
     int high = -1;
 
-    for (size_t i = 0; uuid_str[i] != '\0' && byte_idx < 16; i++) {
+    for (size_t i = 0; uuid_str[i] != '\0'; i++) {
         char c = uuid_str[i];
         if (c == '-') continue;
+        if (byte_idx >= 16) return -1;
         int val = hex_char_val(c);
         if (val < 0) return -1;
 
@@ -35,7 +36,7 @@ int seld_vless_parse_uuid(const char* uuid_str, uint8_t uuid_out[16]) {
         }
     }
 
-    return (byte_idx == 16) ? 0 : -1;
+    return (byte_idx == 16 && high < 0) ? 0 : -1;
 }
 
 int seld_vless_connect(struct seld_vless_conn* conn,
@@ -106,9 +107,13 @@ int seld_vless_connect(struct seld_vless_conn* conn,
         memcpy(hdr + hp, &tip, 4);
         hp += 4;
     } else {
-        hdr[hp++] = VLESS_ADDR_DOMAIN;
         size_t dlen = strlen(target_host);
-        if (dlen > 200) dlen = 200;
+        if (dlen == 0 || dlen > 200) {
+            if (use_tls) seld_tls_close(&conn->tls);
+            seld_tcp_close(sock);
+            return -3;
+        }
+        hdr[hp++] = VLESS_ADDR_DOMAIN;
         hdr[hp++] = (uint8_t)dlen;
         memcpy(hdr + hp, target_host, dlen);
         hp += dlen;
@@ -128,16 +133,17 @@ int seld_vless_connect(struct seld_vless_conn* conn,
         }
     }
 
-    // 5. Receive VLESS Server Response Header (Version 0x00, Addons Len 0x00)
+    // 5. Receive VLESS Server Response Header (Version 0x00, Addons Len)
     uint8_t resp[2];
-    int rlen = 0;
-    if (use_tls) {
-        rlen = seld_tls_read(&conn->tls, resp, 2, 5000);
-    } else {
-        rlen = seld_tcp_recv(sock, resp, 2, 5000);
+    size_t got = 0;
+    while (got < 2) {
+        int nr = use_tls ? seld_tls_read(&conn->tls, resp + got, 2 - got, 5000)
+                         : seld_tcp_recv(sock, resp + got, 2 - got, 5000);
+        if (nr <= 0) break;
+        got += (size_t)nr;
     }
 
-    if (rlen < 2 || resp[0] != 0x00) {
+    if (got < 2 || resp[0] != 0x00) {
         if (use_tls) seld_tls_close(&conn->tls);
         seld_tcp_close(sock);
         return -5;
@@ -146,10 +152,17 @@ int seld_vless_connect(struct seld_vless_conn* conn,
     uint8_t addon_len = resp[1];
     if (addon_len > 0) {
         uint8_t skip[256];
-        if (use_tls) {
-            seld_tls_read(&conn->tls, skip, addon_len, 2000);
-        } else {
-            seld_tcp_recv(sock, skip, addon_len, 2000);
+        size_t sgot = 0;
+        while (sgot < addon_len) {
+            int nr = use_tls ? seld_tls_read(&conn->tls, skip + sgot, addon_len - sgot, 2000)
+                             : seld_tcp_recv(sock, skip + sgot, addon_len - sgot, 2000);
+            if (nr <= 0) break;
+            sgot += (size_t)nr;
+        }
+        if (sgot < addon_len) {
+            if (use_tls) seld_tls_close(&conn->tls);
+            seld_tcp_close(sock);
+            return -5;
         }
     }
 

@@ -119,7 +119,7 @@ int seld_socks5_connect_isolated(uint32_t proxy_ip, uint16_t proxy_port, const c
     }
 
     // Drain bound address and port based on ATYP so stream is completely clean
-    uint8_t drain_buf[256];
+    uint8_t drain_buf[260];
     size_t to_drain = 0;
     if (resp_hdr[3] == 0x01) {
         to_drain = 4 + 2; // IPv4 (4) + Port (2)
@@ -127,13 +127,24 @@ int seld_socks5_connect_isolated(uint32_t proxy_ip, uint16_t proxy_port, const c
         to_drain = 16 + 2; // IPv6 (16) + Port (2)
     } else if (resp_hdr[3] == 0x03) {
         uint8_t dlen = 0;
-        if (seld_tcp_recv(sock, &dlen, 1, 2000) == 1) {
-            to_drain = (size_t)dlen + 2;
+        if (seld_tcp_recv(sock, &dlen, 1, 2000) != 1) {
+            seld_tcp_close(sock);
+            return -12;
         }
+        to_drain = (size_t)dlen + 2;
+    } else {
+        seld_tcp_close(sock);
+        return -12;
     }
 
-    if (to_drain > 0 && to_drain <= sizeof(drain_buf)) {
-        seld_tcp_recv(sock, drain_buf, to_drain, 3000);
+    size_t drained = 0;
+    while (drained < to_drain) {
+        int r = seld_tcp_recv(sock, drain_buf + drained, to_drain - drained, 3000);
+        if (r <= 0) {
+            seld_tcp_close(sock);
+            return -12;
+        }
+        drained += (size_t)r;
     }
 
     // Handshake successful! Stream is cleanly isolated and tunneled through Tor circuit.

@@ -10,9 +10,11 @@ LIBC_SRCS = userspace/libc/src/syscall.c \
             userspace/libc/src/unistd.c \
             userspace/libc/src/stdlib.c \
             userspace/libc/src/sha256.c \
+            userspace/libc/src/seld_sha512.c \
             userspace/libc/src/seld_x25519.c \
             userspace/libc/src/seld_aes128_gcm.c \
             userspace/libc/src/seld_hkdf.c \
+            userspace/libc/src/seld_crypto_verify.c \
             userspace/libc/src/seld_tls.c \
             userspace/libc/src/seld_vless.c \
             userspace/libc/src/seld_socks5.c
@@ -38,9 +40,11 @@ X86_LIBC_OBJS = build/libc_syscall.o \
                 build/libc_unistd.o \
                 build/libc_stdlib.o \
                 build/libc_sha256.o \
+                build/libc_seld_sha512.o \
                 build/libc_seld_x25519.o \
                 build/libc_seld_aes128_gcm.o \
                 build/libc_seld_hkdf.o \
+                build/libc_seld_crypto_verify.o \
                 build/libc_seld_tls.o \
                 build/libc_seld_vless.o \
                 build/libc_seld_socks5.o

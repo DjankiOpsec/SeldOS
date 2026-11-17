@@ -42,10 +42,11 @@ section .text
 syscall_entry_asm:
     ; CPU saves RIP -> RCX, RFLAGS -> R11
     ; CPU sets CS = STAR[47:32] (0x08), SS = STAR[47:32] + 8 (0x10)
-    ; Interrupts are disabled by FMASK (bit 9 cleared)
+    ; Interrupts & DF/TF/AC are cleared by FMASK
 
-    ; Swap GS to kernel GS base
+    ; Swap GS to kernel GS base and guarantee DF=0
     swapgs
+    cld
 
     ; Save user RSP
     mov [rel user_rsp_storage], rsp
@@ -103,6 +104,16 @@ syscall_entry_asm:
     pop rbp
     pop rcx ; Restore user RIP
     pop r11 ; Restore user RFLAGS
+
+    ; Validate RCX is a canonical lower-half Ring 3 address (< 0x0000800000000000) before SYSRET
+    mov r10, rcx
+    shr r10, 47
+    jnz .sysret_bad_rcx
+
+    ; Sanitize user RFLAGS (clear TF=0x100, IOPL=0x3000, NT=0x4000, RF=0x10000, VM=0x20000; ensure IF=0x200 + bit1=0x2)
+    and r11, ~0x37100
+    or r11, 0x202
+
     pop rsp ; Restore user RSP
 
     ; Swap GS back to user GS base
@@ -110,6 +121,11 @@ syscall_entry_asm:
 
     ; Return to Ring 3 (SYSRETQ sets CS = STAR[63:48]+16 = 0x23, SS = STAR[63:48]+8 = 0x1B)
     o64 sysret
+
+.sysret_bad_rcx:
+    add rsp, 8 ; Discard user RSP from syscall stack
+    mov rdi, 139
+    jmp user_exit_to_kernel
 
 ; int jump_to_userspace_asm(void (*user_func)(void), void* user_stack_top, uint64_t user_cr3, uint64_t argc, void* argv);
 ; rdi = user_func
@@ -191,6 +207,7 @@ jump_to_userspace_asm:
 ; void user_exit_to_kernel(uint64_t exit_code);
 ; rdi = exit_code
 user_exit_to_kernel:
+    cli
     ; Switch back to kernel PML4
     mov rax, [rel kernel_pml4_phys]
     test rax, rax
@@ -235,4 +252,5 @@ user_exit_to_kernel:
 
     ; Return exit_code in RAX to caller of jump_to_userspace_asm
     mov rax, rdi
+    sti
     ret

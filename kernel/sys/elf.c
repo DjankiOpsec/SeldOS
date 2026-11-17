@@ -55,12 +55,16 @@ int elf_validate_header(const Elf64_Ehdr* ehdr, size_t data_len) {
         return -6;
     }
 
-    /* 6. Program header bounds validation */
+    /* 6. Program header bounds validation (overflow-safe) */
     if (ehdr->e_phentsize < sizeof(Elf64_Phdr)) {
         return -7;
     }
 
-    if (ehdr->e_phoff + (uint64_t)ehdr->e_phnum * ehdr->e_phentsize > data_len) {
+    if (ehdr->e_phnum == 0 || ehdr->e_phoff > data_len) {
+        return -8;
+    }
+
+    if ((uint64_t)ehdr->e_phnum > (data_len - ehdr->e_phoff) / ehdr->e_phentsize) {
         return -8;
     }
 
@@ -81,6 +85,12 @@ int elf_load_binary(const void* elf_data, size_t data_len, uint64_t** out_pml4_v
         return err;
     }
 
+    /* Validate entry point is canonical lower-half user address above NULL page */
+    if (ehdr->e_entry < PAGE_SIZE || ehdr->e_entry >= USER_SPACE_LIMIT) {
+        serial_puts("[-] ELF: Entry point out of userspace bounds.\n");
+        return -13;
+    }
+
     /* 1. Allocate a new user PML4 using vmm_create_address_space() */
     uint64_t* user_pml4_virt = vmm_create_address_space();
     if (!user_pml4_virt) {
@@ -89,12 +99,7 @@ int elf_load_binary(const void* elf_data, size_t data_len, uint64_t** out_pml4_v
     }
     uint64_t user_pml4_phys = virt_to_phys(user_pml4_virt);
 
-    /* 2. Allocate and map initial user stack (reduced to 4 pages / 16 KiB default).
-     * Allocated top-down from USER_STACK_TOP to ensure the initial argument page is present.
-     * In constrained memory environments (e.g. 8 MB RAM), if physical memory is critically low,
-     * we guarantee at least 2 pages (8 KiB) so that Ring 3 /bin/init and /bin/sh can launch.
-     * Additional stack pages down to USER_STACK_BOTTOM are allocated on demand via page fault.
-     */
+    /* 2. Allocate and map initial user stack (4 pages / 16 KiB default) */
     uint64_t initial_stack_bottom = USER_STACK_PAGE - (4 * PAGE_SIZE);
     int stack_pages_mapped = 0;
     for (uint64_t va = USER_STACK_PAGE - PAGE_SIZE; ; va -= PAGE_SIZE) {
@@ -124,12 +129,13 @@ int elf_load_binary(const void* elf_data, size_t data_len, uint64_t** out_pml4_v
         }
     }
 
-    /* 3. Parse PT_LOAD segments, allocate physical frames, copy data, zero BSS, and map with strict permissions */
+    /* 3. Parse PT_LOAD segments, allocate physical frames, copy data, zero BSS, and map with strict W^X */
     const uint8_t* elf_bytes = (const uint8_t*)elf_data;
     int load_segments = 0;
+    int entry_in_exec_seg = 0;
 
     for (uint16_t i = 0; i < ehdr->e_phnum; i++) {
-        const Elf64_Phdr* ph = (const Elf64_Phdr*)(elf_bytes + ehdr->e_phoff + (i * ehdr->e_phentsize));
+        const Elf64_Phdr* ph = (const Elf64_Phdr*)(elf_bytes + ehdr->e_phoff + ((size_t)i * (size_t)ehdr->e_phentsize));
 
         if (ph->p_type != PT_LOAD) {
             continue;
@@ -139,7 +145,8 @@ int elf_load_binary(const void* elf_data, size_t data_len, uint64_t** out_pml4_v
             continue;
         }
 
-        if (ph->p_offset + ph->p_filesz < ph->p_offset || ph->p_offset + ph->p_filesz > data_len) {
+        /* Overflow-safe file bounds check */
+        if (ph->p_offset > data_len || ph->p_filesz > data_len - ph->p_offset) {
             serial_puts("[-] ELF: Segment offset + filesz exceeds binary length.\n");
             vmm_destroy_address_space(user_pml4_virt);
             return -11;
@@ -151,10 +158,17 @@ int elf_load_binary(const void* elf_data, size_t data_len, uint64_t** out_pml4_v
             return -12;
         }
 
-        /* Verify canonical lower half userspace bounds (< 0x0000800000000000) with overflow prevention */
-        if (ph->p_vaddr >= 0x0000800000000000ULL ||
-            ph->p_vaddr + ph->p_memsz < ph->p_vaddr ||
-            ph->p_vaddr + ph->p_memsz > 0x0000800000000000ULL) {
+        /* Enforce strict W^X: reject segments requesting both Write and Execute */
+        if ((ph->p_flags & (PF_W | PF_X)) == (PF_W | PF_X)) {
+            serial_puts("[-] ELF: Segment violates W^X (both PF_W and PF_X set).\n");
+            vmm_destroy_address_space(user_pml4_virt);
+            return -13;
+        }
+
+        /* Verify userspace canonical bounds [PAGE_SIZE, USER_SPACE_LIMIT) without overflow */
+        if (ph->p_vaddr < PAGE_SIZE ||
+            ph->p_vaddr >= USER_SPACE_LIMIT ||
+            ph->p_memsz > USER_SPACE_LIMIT - ph->p_vaddr) {
             serial_puts("[-] ELF: Segment virtual address out of userspace bounds.\n");
             vmm_destroy_address_space(user_pml4_virt);
             return -13;
@@ -167,11 +181,12 @@ int elf_load_binary(const void* elf_data, size_t data_len, uint64_t** out_pml4_v
             return -13;
         }
 
-        /* Determine page permissions according to W^X OpSec principle:
-         * - PF_X without PF_W: Read-Only + Executable (VMM_FLAG_PRESENT | VMM_FLAG_USER)
-         * - PF_W: Read-Write + No-Execute (VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE | VMM_FLAG_USER | VMM_FLAG_NO_EXECUTE)
-         * - neither: Read-Only + No-Execute (VMM_FLAG_PRESENT | VMM_FLAG_USER | VMM_FLAG_NO_EXECUTE)
-         */
+        if ((ph->p_flags & PF_X) &&
+            ehdr->e_entry >= ph->p_vaddr &&
+            ehdr->e_entry < ph->p_vaddr + ph->p_memsz) {
+            entry_in_exec_seg = 1;
+        }
+
         uint64_t flags = VMM_FLAG_PRESENT | VMM_FLAG_USER;
         if (ph->p_flags & PF_W) {
             flags |= VMM_FLAG_WRITABLE | VMM_FLAG_NO_EXECUTE;
@@ -180,14 +195,23 @@ int elf_load_binary(const void* elf_data, size_t data_len, uint64_t** out_pml4_v
         }
 
         uint64_t page_start = ph->p_vaddr & ~0xFFFULL;
-        uint64_t page_end   = (ph->p_vaddr + ph->p_memsz + PAGE_SIZE - 1) & ~0xFFFULL;
+        uint64_t seg_end    = ph->p_vaddr + ph->p_memsz;
+        uint64_t page_end   = (seg_end + PAGE_SIZE - 1) & ~0xFFFULL;
 
         for (uint64_t va = page_start; va < page_end; va += PAGE_SIZE) {
-            uint64_t existing_pa = vmm_get_mapping(user_pml4_virt, va);
+            uint64_t existing_pte = vmm_get_page_entry(user_pml4_virt, va);
+            uint64_t existing_pa  = vmm_get_mapping(user_pml4_virt, va);
             void* frame = NULL;
             void* frame_virt = NULL;
 
-            if (existing_pa) {
+            if (existing_pte) {
+                /* Reject W^X violation when overlapping segments share a page */
+                if (((existing_pte & VMM_FLAG_WRITABLE) && !(flags & VMM_FLAG_NO_EXECUTE)) ||
+                    (!(existing_pte & VMM_FLAG_NO_EXECUTE) && (flags & VMM_FLAG_WRITABLE))) {
+                    serial_puts("[-] ELF: Overlapping segments violate W^X on shared page.\n");
+                    vmm_destroy_address_space(user_pml4_virt);
+                    return -13;
+                }
                 frame = (void*)existing_pa;
                 frame_virt = phys_to_virt(existing_pa);
             } else {
@@ -215,15 +239,21 @@ int elf_load_binary(const void* elf_data, size_t data_len, uint64_t** out_pml4_v
                 memcpy((uint8_t*)frame_virt + page_offset, elf_bytes + file_offset, copy_len);
             }
 
-            /* Note: BSS is automatically zeroed because the newly allocated frame was zeroed with memset. */
-            vmm_map_page(user_pml4_virt, va, (uint64_t)frame, flags);
+            if (vmm_map_page(user_pml4_virt, va, (uint64_t)frame, flags) != 0) {
+                if (!existing_pte) {
+                    pmm_free_frame(frame);
+                }
+                serial_puts("[-] ELF: vmm_map_page failed during segment load.\n");
+                vmm_destroy_address_space(user_pml4_virt);
+                return -14;
+            }
         }
 
         load_segments++;
     }
 
-    if (load_segments == 0) {
-        serial_puts("[-] ELF: No loadable PT_LOAD segments found.\n");
+    if (load_segments == 0 || !entry_in_exec_seg) {
+        serial_puts("[-] ELF: Missing loadable segments or entry point outside executable PT_LOAD.\n");
         vmm_destroy_address_space(user_pml4_virt);
         return -15;
     }

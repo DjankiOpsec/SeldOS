@@ -104,13 +104,17 @@ int vmm_unmap_page(uint64_t* pml4_virt, uint64_t virt) {
 uint64_t vmm_get_page_entry(uint64_t* pml4_virt, uint64_t virt) {
     if (!pml4_virt) return 0;
     size_t l2_i = RISCV_L2_INDEX(virt);
-    if (!(pml4_virt[l2_i] & RISCV_PTE_V)) return 0;
+    uint64_t l2_pte = pml4_virt[l2_i];
+    if (!(l2_pte & RISCV_PTE_V)) return 0;
+    if (l2_pte & (RISCV_PTE_R | RISCV_PTE_W | RISCV_PTE_X)) return l2_pte;
 
-    uint64_t* l1_virt = (uint64_t*)phys_to_virt(RISCV_PTE_PA(pml4_virt[l2_i]));
+    uint64_t* l1_virt = (uint64_t*)phys_to_virt(RISCV_PTE_PA(l2_pte));
     size_t l1_i = RISCV_L1_INDEX(virt);
-    if (!(l1_virt[l1_i] & RISCV_PTE_V)) return 0;
+    uint64_t l1_pte = l1_virt[l1_i];
+    if (!(l1_pte & RISCV_PTE_V)) return 0;
+    if (l1_pte & (RISCV_PTE_R | RISCV_PTE_W | RISCV_PTE_X)) return l1_pte;
 
-    uint64_t* l0_virt = (uint64_t*)phys_to_virt(RISCV_PTE_PA(l1_virt[l1_i]));
+    uint64_t* l0_virt = (uint64_t*)phys_to_virt(RISCV_PTE_PA(l1_pte));
     size_t l0_i = RISCV_L0_INDEX(virt);
     if (!(l0_virt[l0_i] & RISCV_PTE_V)) return 0;
 
@@ -120,6 +124,8 @@ uint64_t vmm_get_page_entry(uint64_t* pml4_virt, uint64_t virt) {
 int vmm_check_access(uint64_t* pml4_virt, uint64_t virt, int write) {
     uint64_t pte = vmm_get_page_entry(pml4_virt, virt);
     if (!pte || !(pte & RISCV_PTE_V)) return 0;
+    if (!(pte & RISCV_PTE_U)) return 0;
+    if (!(pte & RISCV_PTE_R)) return 0;
     if (write && !(pte & RISCV_PTE_W)) return 0;
     return 1;
 }
@@ -271,18 +277,19 @@ int vmm_map_page(uint64_t* pml4_virt, uint64_t virt, uint64_t phys, uint64_t fla
 }
 
 int vmm_unmap_page(uint64_t* pml4_virt, uint64_t virt) {
+    if (!pml4_virt) return -1;
     size_t pml4_i = PML4_INDEX(virt);
     if (!(pml4_virt[pml4_i] & VMM_FLAG_PRESENT)) return -1;
 
-    uint64_t* pdpt_virt = (uint64_t*)phys_to_virt(pml4_virt[pml4_i] & ~0xFFFULL);
+    uint64_t* pdpt_virt = (uint64_t*)phys_to_virt(pml4_virt[pml4_i] & ~0xFFFULL & ~VMM_FLAG_NO_EXECUTE);
     size_t pdpt_i = PDPT_INDEX(virt);
-    if (!(pdpt_virt[pdpt_i] & VMM_FLAG_PRESENT)) return -1;
+    if (!(pdpt_virt[pdpt_i] & VMM_FLAG_PRESENT) || (pdpt_virt[pdpt_i] & (1ULL << 7))) return -1;
 
-    uint64_t* pd_virt = (uint64_t*)phys_to_virt(pdpt_virt[pdpt_i] & ~0xFFFULL);
+    uint64_t* pd_virt = (uint64_t*)phys_to_virt(pdpt_virt[pdpt_i] & ~0xFFFULL & ~VMM_FLAG_NO_EXECUTE);
     size_t pd_i = PD_INDEX(virt);
-    if (!(pd_virt[pd_i] & VMM_FLAG_PRESENT)) return -1;
+    if (!(pd_virt[pd_i] & VMM_FLAG_PRESENT) || (pd_virt[pd_i] & (1ULL << 7))) return -1;
 
-    uint64_t* pt_virt = (uint64_t*)phys_to_virt(pd_virt[pd_i] & ~0xFFFULL);
+    uint64_t* pt_virt = (uint64_t*)phys_to_virt(pd_virt[pd_i] & ~0xFFFULL & ~VMM_FLAG_NO_EXECUTE);
     size_t pt_i = PT_INDEX(virt);
 
     pt_virt[pt_i] = 0;
@@ -298,10 +305,12 @@ uint64_t vmm_get_page_entry(uint64_t* pml4_virt, uint64_t virt) {
     uint64_t* pdpt_virt = (uint64_t*)phys_to_virt(pml4_virt[pml4_i] & ~0xFFFULL & ~VMM_FLAG_NO_EXECUTE);
     size_t pdpt_i = PDPT_INDEX(virt);
     if (!(pdpt_virt[pdpt_i] & VMM_FLAG_PRESENT)) return 0;
+    if (pdpt_virt[pdpt_i] & (1ULL << 7)) return pdpt_virt[pdpt_i]; /* 1GiB huge page */
 
     uint64_t* pd_virt = (uint64_t*)phys_to_virt(pdpt_virt[pdpt_i] & ~0xFFFULL & ~VMM_FLAG_NO_EXECUTE);
     size_t pd_i = PD_INDEX(virt);
     if (!(pd_virt[pd_i] & VMM_FLAG_PRESENT)) return 0;
+    if (pd_virt[pd_i] & (1ULL << 7)) return pd_virt[pd_i]; /* 2MiB huge page */
 
     uint64_t* pt_virt = (uint64_t*)phys_to_virt(pd_virt[pd_i] & ~0xFFFULL & ~VMM_FLAG_NO_EXECUTE);
     size_t pt_i = PT_INDEX(virt);
@@ -311,9 +320,33 @@ uint64_t vmm_get_page_entry(uint64_t* pml4_virt, uint64_t virt) {
 }
 
 int vmm_check_access(uint64_t* pml4_virt, uint64_t virt, int write) {
-    uint64_t pte = vmm_get_page_entry(pml4_virt, virt);
-    if (!pte || !(pte & VMM_FLAG_PRESENT)) return 0;
+    if (!pml4_virt) return 0;
+
+    size_t pml4_i = PML4_INDEX(virt);
+    uint64_t pml4e = pml4_virt[pml4_i];
+    if (!(pml4e & VMM_FLAG_PRESENT) || !(pml4e & VMM_FLAG_USER)) return 0;
+    if (write && !(pml4e & VMM_FLAG_WRITABLE)) return 0;
+
+    uint64_t* pdpt_virt = (uint64_t*)phys_to_virt(pml4e & ~0xFFFULL & ~VMM_FLAG_NO_EXECUTE);
+    size_t pdpt_i = PDPT_INDEX(virt);
+    uint64_t pdpte = pdpt_virt[pdpt_i];
+    if (!(pdpte & VMM_FLAG_PRESENT) || !(pdpte & VMM_FLAG_USER)) return 0;
+    if (write && !(pdpte & VMM_FLAG_WRITABLE)) return 0;
+    if (pdpte & (1ULL << 7)) return 0; /* Userspace never maps 1GiB huge pages */
+
+    uint64_t* pd_virt = (uint64_t*)phys_to_virt(pdpte & ~0xFFFULL & ~VMM_FLAG_NO_EXECUTE);
+    size_t pd_i = PD_INDEX(virt);
+    uint64_t pde = pd_virt[pd_i];
+    if (!(pde & VMM_FLAG_PRESENT) || !(pde & VMM_FLAG_USER)) return 0;
+    if (write && !(pde & VMM_FLAG_WRITABLE)) return 0;
+    if (pde & (1ULL << 7)) return 0; /* Userspace never maps 2MiB huge pages */
+
+    uint64_t* pt_virt = (uint64_t*)phys_to_virt(pde & ~0xFFFULL & ~VMM_FLAG_NO_EXECUTE);
+    size_t pt_i = PT_INDEX(virt);
+    uint64_t pte = pt_virt[pt_i];
+    if (!(pte & VMM_FLAG_PRESENT) || !(pte & VMM_FLAG_USER)) return 0;
     if (write && !(pte & VMM_FLAG_WRITABLE)) return 0;
+
     return 1;
 }
 
@@ -347,20 +380,22 @@ void vmm_destroy_address_space(uint64_t* pml4_virt) {
     // Scan userspace PML4 entries (0..255)
     for (size_t i = 0; i < 256; i++) {
         if (pml4_virt[i] & VMM_FLAG_PRESENT) {
-            uint64_t* pdpt_virt = (uint64_t*)phys_to_virt(pml4_virt[i] & ~0xFFFULL & ~VMM_FLAG_NO_EXECUTE);
+            uint64_t pdpt_phys = pml4_virt[i] & ~0xFFFULL & ~VMM_FLAG_NO_EXECUTE;
+            uint64_t* pdpt_virt = (uint64_t*)phys_to_virt(pdpt_phys);
             for (size_t j = 0; j < 512; j++) {
-                if (pdpt_virt[j] & VMM_FLAG_PRESENT) {
-                    uint64_t* pd_virt = (uint64_t*)phys_to_virt(pdpt_virt[j] & ~0xFFFULL & ~VMM_FLAG_NO_EXECUTE);
+                if ((pdpt_virt[j] & VMM_FLAG_PRESENT) && !(pdpt_virt[j] & (1ULL << 7))) {
+                    uint64_t pd_phys = pdpt_virt[j] & ~0xFFFULL & ~VMM_FLAG_NO_EXECUTE;
+                    uint64_t* pd_virt = (uint64_t*)phys_to_virt(pd_phys);
                     for (size_t k = 0; k < 512; k++) {
-                        if (pd_virt[k] & VMM_FLAG_PRESENT) {
-                            uint64_t* pt_virt = (uint64_t*)phys_to_virt(pd_virt[k] & ~0xFFFULL & ~VMM_FLAG_NO_EXECUTE);
+                        if ((pd_virt[k] & VMM_FLAG_PRESENT) && !(pd_virt[k] & (1ULL << 7))) {
+                            uint64_t pt_phys = pd_virt[k] & ~0xFFFULL & ~VMM_FLAG_NO_EXECUTE;
+                            uint64_t* pt_virt = (uint64_t*)phys_to_virt(pt_phys);
                             for (size_t m = 0; m < 512; m++) {
                                 if (pt_virt[m] & VMM_FLAG_PRESENT) {
                                     uint64_t frame_phys = pt_virt[m] & ~0xFFFULL & ~VMM_FLAG_NO_EXECUTE;
                                     if (fb_start && frame_phys >= fb_start && frame_phys < fb_end) {
                                         // Framebuffer physical memory: skip
                                     } else {
-                                        // OpSec: Wipe process page memory to prevent data remanence
                                         if (frame_phys < 0x100000000ULL) {
                                             memset(phys_to_virt(frame_phys), 0, PAGE_SIZE);
                                         }
@@ -368,17 +403,22 @@ void vmm_destroy_address_space(uint64_t* pml4_virt) {
                                     }
                                 }
                             }
-                            pmm_free_frame((void*)(pd_virt[k] & ~0xFFFULL & ~VMM_FLAG_NO_EXECUTE));
+                            memset(pt_virt, 0, PAGE_SIZE);
+                            pmm_free_frame((void*)pt_phys);
                         }
                     }
-                    pmm_free_frame((void*)(pdpt_virt[j] & ~0xFFFULL & ~VMM_FLAG_NO_EXECUTE));
+                    memset(pd_virt, 0, PAGE_SIZE);
+                    pmm_free_frame((void*)pd_phys);
                 }
             }
-            pmm_free_frame((void*)(pml4_virt[i] & ~0xFFFULL & ~VMM_FLAG_NO_EXECUTE));
+            memset(pdpt_virt, 0, PAGE_SIZE);
+            pmm_free_frame((void*)pdpt_phys);
         }
     }
 
-    pmm_free_frame((void*)virt_to_phys(pml4_virt));
+    uint64_t pml4_phys = virt_to_phys(pml4_virt);
+    memset(pml4_virt, 0, PAGE_SIZE);
+    pmm_free_frame((void*)pml4_phys);
 }
 
 extern char text_start[], text_end[];

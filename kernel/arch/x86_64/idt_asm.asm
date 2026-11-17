@@ -88,6 +88,7 @@ isr_common_stub:
     push r14
     push r15
 
+    cld
     mov rdi, rsp          ; Pass interrupt_frame pointer as first arg to isr_handler
     call isr_handler
 

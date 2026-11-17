@@ -150,7 +150,7 @@ void isr_handler(struct interrupt_frame* frame) {
         uint64_t cr3;
         __asm__ volatile ("mov %%cr3, %0" : "=r"(cr3));
         uint64_t cr3_phys = cr3 & ~0xFFFULL;
-        if (cr3_phys != vmm_get_kernel_pml4() && (frame->err_code & 1) == 0 &&
+        if (cr3_phys != vmm_get_kernel_pml4() && (frame->err_code & 0x11) == 0 &&
             fault_addr >= USER_STACK_BOTTOM && fault_addr < USER_STACK_PAGE) {
             uint64_t page_va = fault_addr & ~0xFFFULL;
             void* frame_phys = pmm_alloc_frame();

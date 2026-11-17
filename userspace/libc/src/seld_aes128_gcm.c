@@ -143,6 +143,13 @@ void seld_aes128_encrypt_block(const struct seld_aes128_ctx* ctx, const uint8_t 
     }
 }
 
+static void aes_gcm_bzero(void* ptr, size_t len) {
+    volatile uint8_t* p = (volatile uint8_t*)ptr;
+    while (len--) {
+        *p++ = 0;
+    }
+}
+
 /* GHASH field multiplication in GF(2^128) with reduction polynomial x^128 + x^7 + x^2 + x + 1 */
 static void ghash_mul(uint8_t x[16], const uint8_t y[16]) {
     uint8_t z[16] = {0};
@@ -151,20 +158,22 @@ static void ghash_mul(uint8_t x[16], const uint8_t y[16]) {
 
     for (int i = 0; i < 16; i++) {
         for (int j = 7; j >= 0; j--) {
-            if ((x[i] >> j) & 1) {
-                for (int k = 0; k < 16; k++) z[k] ^= v[k];
+            uint8_t bit = (uint8_t)((x[i] >> j) & 1U);
+            uint8_t mask = (uint8_t)(0U - bit);
+            for (int k = 0; k < 16; k++) {
+                z[k] ^= (uint8_t)(v[k] & mask);
             }
-            int lsb = v[15] & 1;
+            uint8_t lsb = (uint8_t)(v[15] & 1U);
+            uint8_t rmask = (uint8_t)(0U - lsb);
             for (int k = 15; k > 0; k--) {
-                v[k] = (v[k] >> 1) | ((v[k - 1] & 1) << 7);
+                v[k] = (uint8_t)((v[k] >> 1) | ((v[k - 1] & 1U) << 7));
             }
-            v[0] >>= 1;
-            if (lsb) {
-                v[0] ^= 0xe1;
-            }
+            v[0] = (uint8_t)((v[0] >> 1) ^ (0xe1U & rmask));
         }
     }
     memcpy(x, z, 16);
+    aes_gcm_bzero(z, sizeof(z));
+    aes_gcm_bzero(v, sizeof(v));
 }
 
 static void ghash_update(uint8_t y[16], const uint8_t h[16], const uint8_t* data, size_t len) {
@@ -184,6 +193,8 @@ void seld_aes128_gcm_encrypt(const uint8_t key[16], const uint8_t iv[12],
                              const uint8_t* aad, size_t aad_len,
                              const uint8_t* plaintext, size_t pt_len,
                              uint8_t* ciphertext, uint8_t tag[16]) {
+    if (!key || !iv || !tag || (pt_len > 0 && (!plaintext || !ciphertext))) return;
+
     struct seld_aes128_ctx ctx;
     seld_aes128_init(&ctx, key);
 
@@ -201,6 +212,7 @@ void seld_aes128_gcm_encrypt(const uint8_t key[16], const uint8_t iv[12],
 
     uint32_t counter = 1;
     size_t offset = 0;
+    uint8_t keystream[16] = {0};
     while (offset < pt_len) {
         counter++;
         ctr[12] = (uint8_t)(counter >> 24);
@@ -208,7 +220,6 @@ void seld_aes128_gcm_encrypt(const uint8_t key[16], const uint8_t iv[12],
         ctr[14] = (uint8_t)(counter >> 8);
         ctr[15] = (uint8_t)counter;
 
-        uint8_t keystream[16];
         seld_aes128_encrypt_block(&ctx, ctr, keystream);
 
         size_t chunk = (pt_len - offset < 16) ? (pt_len - offset) : 16;
@@ -243,12 +254,24 @@ void seld_aes128_gcm_encrypt(const uint8_t key[16], const uint8_t iv[12],
     for (int i = 0; i < 16; i++) {
         tag[i] = y[i] ^ ek0[i];
     }
+
+    aes_gcm_bzero(&ctx, sizeof(ctx));
+    aes_gcm_bzero(h, sizeof(h));
+    aes_gcm_bzero(j0, sizeof(j0));
+    aes_gcm_bzero(ctr, sizeof(ctr));
+    aes_gcm_bzero(keystream, sizeof(keystream));
+    aes_gcm_bzero(ek0, sizeof(ek0));
+    aes_gcm_bzero(y, sizeof(y));
 }
 
 int seld_aes128_gcm_decrypt(const uint8_t key[16], const uint8_t iv[12],
                             const uint8_t* aad, size_t aad_len,
                             const uint8_t* ciphertext, size_t ct_len,
                             const uint8_t tag[16], uint8_t* plaintext) {
+    if (!key || !iv || !tag || (aad_len > 0 && !aad) || (ct_len > 0 && (!ciphertext || !plaintext))) {
+        return -1;
+    }
+
     struct seld_aes128_ctx ctx;
     seld_aes128_init(&ctx, key);
 
@@ -290,6 +313,12 @@ int seld_aes128_gcm_decrypt(const uint8_t key[16], const uint8_t iv[12],
         diff |= (computed_tag[i] ^ tag[i]);
     }
     if (diff != 0) {
+        aes_gcm_bzero(&ctx, sizeof(ctx));
+        aes_gcm_bzero(h, sizeof(h));
+        aes_gcm_bzero(j0, sizeof(j0));
+        aes_gcm_bzero(ek0, sizeof(ek0));
+        aes_gcm_bzero(computed_tag, sizeof(computed_tag));
+        aes_gcm_bzero(y, sizeof(y));
         return -1; // Authentication failed
     }
 
@@ -299,6 +328,7 @@ int seld_aes128_gcm_decrypt(const uint8_t key[16], const uint8_t iv[12],
 
     uint32_t counter = 1;
     size_t offset = 0;
+    uint8_t keystream[16] = {0};
     while (offset < ct_len) {
         counter++;
         ctr[12] = (uint8_t)(counter >> 24);
@@ -306,7 +336,6 @@ int seld_aes128_gcm_decrypt(const uint8_t key[16], const uint8_t iv[12],
         ctr[14] = (uint8_t)(counter >> 8);
         ctr[15] = (uint8_t)counter;
 
-        uint8_t keystream[16];
         seld_aes128_encrypt_block(&ctx, ctr, keystream);
 
         size_t chunk = (ct_len - offset < 16) ? (ct_len - offset) : 16;
@@ -316,5 +345,13 @@ int seld_aes128_gcm_decrypt(const uint8_t key[16], const uint8_t iv[12],
         offset += chunk;
     }
 
+    aes_gcm_bzero(&ctx, sizeof(ctx));
+    aes_gcm_bzero(h, sizeof(h));
+    aes_gcm_bzero(j0, sizeof(j0));
+    aes_gcm_bzero(ctr, sizeof(ctr));
+    aes_gcm_bzero(keystream, sizeof(keystream));
+    aes_gcm_bzero(ek0, sizeof(ek0));
+    aes_gcm_bzero(computed_tag, sizeof(computed_tag));
+    aes_gcm_bzero(y, sizeof(y));
     return 0;
 }

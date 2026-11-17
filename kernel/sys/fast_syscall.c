@@ -38,6 +38,9 @@ extern void user_exit_to_kernel(uint64_t exit_code);
 
 static uint8_t syscall_stack[65536] __attribute__((aligned(16)));
 uint64_t kernel_syscall_stack_top = (uint64_t)&syscall_stack[sizeof(syscall_stack)];
+#if !defined(__riscv)
+extern uint64_t user_depth;
+#endif
 
 /* Process user heap break address */
 static uint64_t user_current_brk = 0;
@@ -140,8 +143,8 @@ void syscall_init_fast(void) {
     // 3. Setup LSTAR MSR (handler address)
     wrmsr(MSR_LSTAR, (uint64_t)syscall_entry_asm);
 
-    // 4. Setup FMASK MSR: mask IF (0x200) to disable interrupts upon syscall entry
-    wrmsr(MSR_FMASK, 0x200);
+    // 4. Setup FMASK MSR: mask IF (0x200), DF (0x400), TF (0x100), AC (0x40000)
+    wrmsr(MSR_FMASK, 0x200 | 0x400 | 0x100 | 0x40000);
 
     // 5. Update TSS.RSP0 and initialize IA32_KERNEL_GS_BASE
     tss_set_rsp0(kernel_syscall_stack_top);
@@ -238,8 +241,8 @@ static int resolve_seldfs_path(const char* path, char* out_resolved) {
 }
 
 /* Seld-Unveil Path Canonicalization Helper */
-static void normalize_unveil_path(const char* in, char* out, size_t max_len, int* out_is_dir) {
-    if (!in || !out || max_len == 0) return;
+static int normalize_unveil_path(const char* in, char* out, size_t max_len, int* out_is_dir) {
+    if (!in || !out || max_len < 2) return -1;
     if (out_is_dir) *out_is_dir = 0;
 
     if (in[0] == '.' && in[1] == '/') {
@@ -248,13 +251,15 @@ static void normalize_unveil_path(const char* in, char* out, size_t max_len, int
 
     size_t in_len = strlen(in);
     size_t o = 0;
+    out[o++] = '/';
 
-    if (in[0] != '/') {
-        if (o < max_len - 1) out[o++] = '/';
-    }
-
-    for (size_t i = 0; i < in_len && o < max_len - 1; i++) {
-        out[o++] = in[i];
+    for (size_t i = 0; i < in_len; i++) {
+        char c = in[i];
+        if (c == '/') {
+            if (o > 0 && out[o - 1] == '/') continue;
+        }
+        if (o >= max_len - 1) return -1;
+        out[o++] = c;
     }
     out[o] = '\0';
 
@@ -264,15 +269,25 @@ static void normalize_unveil_path(const char* in, char* out, size_t max_len, int
         if (out_is_dir) *out_is_dir = 1;
     }
 
+    /* Reject parent traversal segments ('/..') and '/.' */
+    for (size_t i = 0; i < o; i++) {
+        if (out[i] == '/' && out[i + 1] == '.') {
+            if (out[i + 2] == '\0' || out[i + 2] == '/') return -1;
+            if (out[i + 2] == '.' && (out[i + 3] == '\0' || out[i + 3] == '/')) return -1;
+        }
+    }
+
     if (strcmp(out, "/bin") == 0 || strcmp(out, "/") == 0) {
         if (out_is_dir) *out_is_dir = 1;
     }
+    return 0;
 }
 
 /* Seld-Unveil Registration Handler (SYS_UNVEIL, vector 51) */
 static int sys_unveil_handler(const char* user_path, const char* user_perms) {
     if (!user_path && !user_perms) {
         current_unveil_locked = 1;
+        current_unveil_enforced = 1;
         serial_puts("[+] OpSec: Seld-Unveil configuration LOCKED (irreversible)\n");
         return 0;
     }
@@ -286,19 +301,19 @@ static int sys_unveil_handler(const char* user_path, const char* user_perms) {
         return -1;
     }
 
-    if (!validate_user_buffer(user_path, 1, 0) || !validate_user_buffer(user_perms, 1, 0)) {
+    char k_perms[16];
+    if (copy_string_from_user(user_perms, k_perms, sizeof(k_perms)) != 0) {
         return -1;
     }
 
     uint8_t perms = 0;
-    for (size_t i = 0; i < 16; i++) {
-        if (!validate_user_buffer(user_perms + i, 1, 0)) break;
-        char c = user_perms[i];
-        if (c == '\0') break;
+    for (size_t i = 0; k_perms[i] != '\0'; i++) {
+        char c = k_perms[i];
         if (c == 'r') perms |= UNVEIL_READ;
         else if (c == 'w') perms |= UNVEIL_WRITE;
         else if (c == 'x') perms |= UNVEIL_EXEC;
         else if (c == 'c') perms |= UNVEIL_CREATE;
+        else return -1;
     }
 
     if (perms == 0) {
@@ -306,29 +321,25 @@ static int sys_unveil_handler(const char* user_path, const char* user_perms) {
     }
 
     char k_user_path[UNVEIL_PATH_MAX];
-    size_t ulen = 0;
-    while (ulen < UNVEIL_PATH_MAX - 1) {
-        if (!validate_user_buffer(user_path + ulen, 1, 0)) break;
-        char c = user_path[ulen];
-        if (c == '\0') break;
-        k_user_path[ulen++] = c;
+    if (copy_string_from_user(user_path, k_user_path, sizeof(k_user_path)) != 0 || k_user_path[0] == '\0') {
+        return -1;
     }
-    k_user_path[ulen] = '\0';
-    if (ulen == 0) return -1;
 
     char canon[UNVEIL_PATH_MAX];
     int is_dir = 0;
-    normalize_unveil_path(k_user_path, canon, sizeof(canon), &is_dir);
+    if (normalize_unveil_path(k_user_path, canon, sizeof(canon), &is_dir) != 0) {
+        return -1;
+    }
 
     for (size_t i = 0; i < current_unveil_count; i++) {
         if (strcmp(current_unveil_rules[i].path, canon) == 0) {
-            current_unveil_rules[i].perms = perms;
-            current_unveil_rules[i].is_dir = is_dir;
+            current_unveil_rules[i].perms &= perms;
+            current_unveil_rules[i].is_dir = (uint8_t)is_dir;
             current_unveil_enforced = 1;
             serial_puts("[+] OpSec: Updated unveil rule '");
             serial_puts(canon);
             serial_puts("' perms=0x");
-            serial_print_hex((uint64_t)perms);
+            serial_print_hex((uint64_t)current_unveil_rules[i].perms);
             serial_puts("\n");
             return 0;
         }
@@ -340,8 +351,9 @@ static int sys_unveil_handler(const char* user_path, const char* user_perms) {
     }
 
     strncpy(current_unveil_rules[current_unveil_count].path, canon, UNVEIL_PATH_MAX - 1);
+    current_unveil_rules[current_unveil_count].path[UNVEIL_PATH_MAX - 1] = '\0';
     current_unveil_rules[current_unveil_count].perms = perms;
-    current_unveil_rules[current_unveil_count].is_dir = is_dir;
+    current_unveil_rules[current_unveil_count].is_dir = (uint8_t)is_dir;
     current_unveil_count++;
     current_unveil_enforced = 1;
 
@@ -362,7 +374,9 @@ static int check_unveil(const char* target_path, uint8_t req_perm) {
 
     char canon_target[UNVEIL_PATH_MAX];
     int target_is_dir = 0;
-    normalize_unveil_path(target_path, canon_target, sizeof(canon_target), &target_is_dir);
+    if (normalize_unveil_path(target_path, canon_target, sizeof(canon_target), &target_is_dir) != 0) {
+        return 0;
+    }
 
     // Also prepare alternate path with /bin prefix if not already starting with /bin
     char canon_bin[UNVEIL_PATH_MAX];
@@ -522,7 +536,10 @@ int elf_load_and_run(const char* path, int argc, char* argv[]) {
 
     for (int i = 0; i < k_argc; i++) {
         size_t slen = strlen(k_args[i]) + 1;
-        if (str_offset + slen > 4080) break;
+        if (str_offset + slen > 4080) {
+            k_argc = i;
+            break;
+        }
         memcpy(k_stack_page + str_offset, k_args[i], slen);
         user_str_vas[i] = USER_STACK_TOP + str_offset;
         str_offset += slen;
@@ -604,11 +621,17 @@ int elf_load_and_run(const char* path, int argc, char* argv[]) {
         net_lease_acquire();
     }
 
+#if !defined(__riscv)
+    tss_set_rsp0(kernel_syscall_stack_top - (user_depth * 8192ULL));
+#endif
     int exit_code = jump_to_userspace_asm((void (*)(void))proc_entry,
                                           (void*)user_rsp,
                                           proc_pml4_phys,
                                           (uint64_t)k_argc,
                                           (void*)child_argv_va);
+#if !defined(__riscv)
+    tss_set_rsp0(kernel_syscall_stack_top - ((user_depth > 0 ? user_depth - 1 : 0) * 8192ULL));
+#endif
 
     if (is_net_tool) {
         net_lease_release();
@@ -951,7 +974,7 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
 
                 // Universal write to SeldFS file
                 size_t max_file_sz = SELDFS_DATA_BLOCKS_PER_FILE * SELDFS_BLOCK_SIZE;
-                if (user_fds[target_fd].offset + count > max_file_sz) {
+                if (count > max_file_sz || (size_t)user_fds[target_fd].offset > max_file_sz - count) {
                     return (uint64_t)-1;
                 }
 
@@ -1058,7 +1081,7 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
             resolve_seldfs_path(k_path, filename);
 
             uint8_t req_perm = UNVEIL_READ;
-            if (flags & (0x0001 /* O_WRONLY */ | 0x0002 /* O_RDWR */)) {
+            if (flags & (0x0001 /* O_WRONLY */ | 0x0002 /* O_RDWR */ | 0x0200 /* O_TRUNC */)) {
                 req_perm |= UNVEIL_WRITE;
             }
             if (flags & 0x0040 /* O_CREAT */) {
@@ -1088,7 +1111,7 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
             int found = (seldfs_get_file_info(filename, &inode) == 0);
 
             if (!found) {
-                if ((flags & 0x0040 /* O_CREAT */) || (flags & 0x0001 /* O_WRONLY */) || (flags & 0x0002 /* O_RDWR */)) {
+                if (flags & 0x0040 /* O_CREAT */) {
                     if (seldfs_write_file(filename, "", 0) != 0 || seldfs_get_file_info(filename, &inode) != 0) {
                         return (uint64_t)-1;
                     }
@@ -1099,7 +1122,12 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
             }
 
             if (found && (flags & 0x0200 /* O_TRUNC */)) {
-                seldfs_write_file(filename, "", 0);
+                if (!(flags & (0x0001 | 0x0002))) {
+                    return (uint64_t)-1;
+                }
+                if (seldfs_write_file(filename, "", 0) != 0) {
+                    return (uint64_t)-1;
+                }
                 inode.size = 0;
             }
 
@@ -1119,6 +1147,8 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
             int fd = (int)a1;
             if (fd >= 3 && fd < MAX_USER_FDS && user_fds[fd].used) {
                 user_fds[fd].used = 0;
+                if (s_stdout_redirect_fd == fd) s_stdout_redirect_fd = -1;
+                if (s_stdin_redirect_fd == fd) s_stdin_redirect_fd = -1;
                 return 0;
             }
             return (uint64_t)-1;
@@ -1174,7 +1204,8 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
                 return (uint64_t)seldfs_get_file_count();
             }
 
-            if (!validate_user_buffer(dirents, max_entries * sizeof(struct seld_dirent), 1)) {
+            if (max_entries > (~(size_t)0) / sizeof(struct seld_dirent) ||
+                !validate_user_buffer(dirents, max_entries * sizeof(struct seld_dirent), 1)) {
                 return (uint64_t)-1;
             }
 
@@ -1204,7 +1235,9 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
                 return user_current_brk;
             }
 
-            if (a1 < DEFAULT_USER_HEAP_BASE || a1 >= USER_HEAP_MAX) {
+            if (a1 < DEFAULT_USER_HEAP_BASE || a1 >= USER_HEAP_MAX ||
+                (a1 > 0x00000000A0000000ULL && user_current_brk < 0x00000000A4000000ULL) ||
+                (a1 >= 0x00000000A0000000ULL && a1 < 0x00000000A4000000ULL)) {
                 return (uint64_t)-1;
             }
 
@@ -1223,11 +1256,30 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
                     if (!existing) {
                         void* frame = pmm_alloc_frame();
                         if (!frame) {
+                            for (uint64_t rva = start_va; rva < va; rva += PAGE_SIZE) {
+                                uint64_t rpa = vmm_get_mapping(user_pml4, rva);
+                                if (rpa) {
+                                    vmm_unmap_page(user_pml4, rva);
+                                    memset(phys_to_virt(rpa), 0, PAGE_SIZE);
+                                    pmm_free_frame((void*)rpa);
+                                }
+                            }
                             return (uint64_t)-1; // Out of memory
                         }
                         memset(phys_to_virt((uint64_t)frame), 0, PAGE_SIZE);
-                        vmm_map_page(user_pml4, va, (uint64_t)frame,
-                                     VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE | VMM_FLAG_USER | VMM_FLAG_NO_EXECUTE);
+                        if (vmm_map_page(user_pml4, va, (uint64_t)frame,
+                                         VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE | VMM_FLAG_USER | VMM_FLAG_NO_EXECUTE) != 0) {
+                            pmm_free_frame(frame);
+                            for (uint64_t rva = start_va; rva < va; rva += PAGE_SIZE) {
+                                uint64_t rpa = vmm_get_mapping(user_pml4, rva);
+                                if (rpa) {
+                                    vmm_unmap_page(user_pml4, rva);
+                                    memset(phys_to_virt(rpa), 0, PAGE_SIZE);
+                                    pmm_free_frame((void*)rpa);
+                                }
+                            }
+                            return (uint64_t)-1;
+                        }
                     }
                 }
             } else if (a1 < user_current_brk) {
@@ -1353,7 +1405,8 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
         case SYS_GETTASKS: {
             struct snl_task_info* user_tasks = (struct snl_task_info*)a1;
             size_t max_t = (size_t)a2;
-            if (max_t == 0 || !validate_user_buffer(user_tasks, max_t * sizeof(struct snl_task_info), 1)) {
+            if (max_t == 0 || max_t > (~(size_t)0) / sizeof(struct snl_task_info) ||
+                !validate_user_buffer(user_tasks, max_t * sizeof(struct snl_task_info), 1)) {
                 return (uint64_t)-1;
             }
 
@@ -1459,7 +1512,6 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
         case SYS_LSEEK: {
             // a1 = fd, a2 = offset, a3 = whence (0=SEEK_SET, 1=SEEK_CUR, 2=SEEK_END)
             int fd = (int)a1;
-            long offset = (long)a2;
             int whence = (int)a3;
 
             if (fd >= 3 && fd < MAX_USER_FDS && user_fds[fd].used) {
@@ -1468,19 +1520,25 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
                     return (uint64_t)-1;
                 }
                 uint32_t fsize = inode.size;
-                long new_offset = 0;
+                int64_t new_offset = 0;
+                int64_t off64 = (int64_t)a2;
+                uint32_t max_file_sz = SELDFS_DATA_BLOCKS_PER_FILE * SELDFS_BLOCK_SIZE;
 
                 if (whence == 0 /* SEEK_SET */) {
-                    new_offset = offset;
+                    new_offset = off64;
                 } else if (whence == 1 /* SEEK_CUR */) {
-                    new_offset = (long)user_fds[fd].offset + offset;
+                    int64_t base = (int64_t)user_fds[fd].offset;
+                    if (off64 > 0 && base > (int64_t)max_file_sz - off64) return (uint64_t)-1;
+                    new_offset = base + off64;
                 } else if (whence == 2 /* SEEK_END */) {
-                    new_offset = (long)fsize + offset;
+                    int64_t base = (int64_t)fsize;
+                    if (off64 > 0 && base > (int64_t)max_file_sz - off64) return (uint64_t)-1;
+                    new_offset = base + off64;
                 } else {
                     return (uint64_t)-1;
                 }
 
-                if (new_offset < 0) {
+                if (new_offset < 0 || new_offset > (int64_t)max_file_sz) {
                     return (uint64_t)-1;
                 }
 
@@ -1518,6 +1576,7 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
             uint64_t fb_size = (uint64_t)kfb->pitch * kfb->height;
             if (fb_size == 0) fb_size = (uint64_t)kfb->width * kfb->height * (kfb->bpp / 8);
             if (fb_size < 680 * 334 * 4) fb_size = 680 * 334 * 4;
+            if (fb_size > 0x04000000ULL) return (uint64_t)-1; // Cap at 64 MiB window
 
             uint64_t cr3 = vmm_get_active_root();
             uint64_t* user_pml4 = (uint64_t*)phys_to_virt(cr3);
@@ -1525,8 +1584,10 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
             for (uint64_t off = 0; off < fb_size; off += PAGE_SIZE) {
                 uint64_t va = user_fb_va + off;
                 uint64_t pa = kfb->phys_addr + off;
-                vmm_map_page(user_pml4, va, pa,
-                             VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE | VMM_FLAG_USER | VMM_FLAG_NO_EXECUTE);
+                if (vmm_map_page(user_pml4, va, pa,
+                                 VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE | VMM_FLAG_USER | VMM_FLAG_NO_EXECUTE) != 0) {
+                    return (uint64_t)-1;
+                }
             }
 
             ufb->framebuffer = (void*)user_fb_va;
@@ -1664,6 +1725,7 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
             size_t max_e = (size_t)a2;
 
             if (!uentries || max_e == 0 ||
+                max_e > (~(size_t)0) / sizeof(struct seld_arp_entry) ||
                 !validate_user_buffer(uentries, max_e * sizeof(struct seld_arp_entry), 1)) {
                 return (uint64_t)-1;
             }
@@ -1946,10 +2008,20 @@ uint64_t fast_syscall_dispatcher(uint64_t num, uint64_t a1, uint64_t a2, uint64_
             void* buf = (void*)a1;
             size_t len = (size_t)a2;
             if (len == 0) return 0;
-            if (!validate_user_buffer(buf, len, 1)) {
+            if (len > (1024 * 1024) || !validate_user_buffer(buf, len, 1)) {
                 return (uint64_t)-1;
             }
-            rng_get_bytes(buf, len);
+            uint8_t kbuf[256];
+            uint8_t* dst = (uint8_t*)buf;
+            size_t done = 0;
+            while (done < len) {
+                size_t chunk = (len - done > sizeof(kbuf)) ? sizeof(kbuf) : (len - done);
+                rng_get_bytes(kbuf, chunk);
+                memcpy(dst + done, kbuf, chunk);
+                done += chunk;
+            }
+            volatile uint8_t* vk = (volatile uint8_t*)kbuf;
+            for (size_t zi = 0; zi < sizeof(kbuf); zi++) vk[zi] = 0;
             return (uint64_t)len;
         }
 

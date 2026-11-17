@@ -66,7 +66,11 @@ void aes128_init(struct aes128_ctx* ctx, const uint8_t key[16]) {
 
 void aes128_wipe_ctx(struct aes128_ctx* ctx) {
     if (ctx) {
-        memset(ctx, 0, sizeof(*ctx));
+        volatile uint8_t* p = (volatile uint8_t*)ctx;
+        size_t n = sizeof(*ctx);
+        while (n--) {
+            *p++ = 0;
+        }
     }
 }
 
@@ -147,6 +151,8 @@ void aes128_encrypt_block(const struct aes128_ctx* ctx, const uint8_t in[16], ui
             out[i * 4 + j] = state[j][i];
         }
     }
+    volatile uint8_t* sp = (volatile uint8_t*)state;
+    for (size_t k = 0; k < sizeof(state); k++) sp[k] = 0;
 }
 
 void aes128_ctr_crypt(const uint8_t key[16], uint64_t nonce, uint32_t counter_start,
@@ -166,6 +172,7 @@ void aes128_ctr_crypt(const uint8_t key[16], uint64_t nonce, uint32_t counter_st
 
     uint32_t ctr = counter_start;
     size_t offset = 0;
+    uint8_t keystream[16] = {0};
 
     while (offset < len) {
         ctr_block[12] = (uint8_t)(ctr >> 24);
@@ -174,7 +181,6 @@ void aes128_ctr_crypt(const uint8_t key[16], uint64_t nonce, uint32_t counter_st
         ctr_block[15] = (uint8_t)(ctr & 0xFF);
         ctr++;
 
-        uint8_t keystream[16];
         aes128_encrypt_block(&ctx, ctr_block, keystream);
 
         size_t chunk = (len - offset < 16) ? (len - offset) : 16;
@@ -184,6 +190,10 @@ void aes128_ctr_crypt(const uint8_t key[16], uint64_t nonce, uint32_t counter_st
         offset += chunk;
     }
 
+    volatile uint8_t* kp = (volatile uint8_t*)keystream;
+    for (size_t i = 0; i < sizeof(keystream); i++) kp[i] = 0;
+    volatile uint8_t* cp = (volatile uint8_t*)ctr_block;
+    for (size_t i = 0; i < sizeof(ctr_block); i++) cp[i] = 0;
     aes128_wipe_ctx(&ctx);
 }
 

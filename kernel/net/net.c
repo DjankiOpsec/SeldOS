@@ -585,8 +585,10 @@ static void net_handle_icmp(const uint8_t* frame, size_t frame_len, const struct
     s_stats.rx_icmp++;
 
     if (icmp->type == ICMP_TYPE_ECHO_REQUEST && icmp->code == 0) {
-        // OpSec Stealth Mode Invariant: Completely silent to external probes - drop ICMP Echo Request
-        if (s_net_airgap_mode == NET_AIRGAP_STEALTH) {
+        // Drop broadcast ICMP Echo Request (Smurf defense) and all Echo Requests in Stealth mode
+        if (ip_hdr->dest_ip == 0xFFFFFFFFU ||
+            (s_config.netmask != 0 && (ip_hdr->dest_ip & ~s_config.netmask) == ~s_config.netmask) ||
+            s_net_airgap_mode == NET_AIRGAP_STEALTH) {
             s_stats.rx_dropped++;
             return;
         }
@@ -752,7 +754,7 @@ uint32_t net_get_synthetic_tsval(struct tcp_socket* s) {
 }
 
 static int net_send_tcp_packet_sock_ex(struct tcp_socket* s, uint8_t flags, const void* payload, size_t payload_len, uint8_t ttl, int is_fake) {
-    if (!s) return -1;
+    if (!s || payload_len > 1460) return -1;
     uint8_t tcp_buf[sizeof(struct tcp_header) + 64 + 1460];
     struct tcp_header* tcp = (struct tcp_header*)tcp_buf;
 
@@ -878,6 +880,12 @@ static void net_handle_tcp(const uint8_t* frame, size_t frame_len, const struct 
         return;
     }
 
+    if (ip_hdr->dest_ip == 0xFFFFFFFFU ||
+        (s_config.netmask != 0 && (ip_hdr->dest_ip & ~s_config.netmask) == ~s_config.netmask)) {
+        s_stats.rx_dropped++;
+        return;
+    }
+
     uint16_t dest_port = ntohs(tcp->dest_port);
     uint16_t src_port = ntohs(tcp->src_port);
 
@@ -933,8 +941,8 @@ static void net_handle_tcp(const uint8_t* frame, size_t frame_len, const struct 
 
     if (s->state == TCP_STATE_ESTABLISHED) {
         if (tcp->flags & TCP_FLAG_RST) {
-            // RFC 5961 Blind TCP Reset defense: validate sequence number within receive window
-            if (seg_seq == s->rcv_nxt || (seg_seq >= s->rcv_nxt && seg_seq < s->rcv_nxt + 32768)) {
+            // RFC 5961 Blind TCP Reset defense: modular sequence window check handles 32-bit wraparound
+            if ((uint32_t)(seg_seq - s->rcv_nxt) < 32768U) {
                 s->state = TCP_STATE_CLOSED;
             } else {
                 serial_puts("[!] OpSec: Dropped out-of-window TCP RST\n");
@@ -1028,6 +1036,10 @@ static void net_handle_udp(const uint8_t* frame, size_t frame_len, const struct 
 
         if (id == s_dns_tracker.query_id && !s_dns_tracker.answered) {
             uint16_t flags = ntohs(dns->flags);
+            if (!(flags & 0x8000)) {
+                s_stats.rx_dropped++;
+                return;
+            }
             uint8_t rcode = (uint8_t)(flags & 0x000F);
 
             // Check RCODE: 0 = NoError
@@ -1076,7 +1088,9 @@ static void net_handle_udp(const uint8_t* frame, size_t frame_len, const struct 
                             p = dns_skip_name(p, end);
                             if (p + 10 > end) break;
                             uint16_t rdlen = (uint16_t)((p[8] << 8) | p[9]);
-                            p += 10 + rdlen;
+                            p += 10;
+                            if ((size_t)(end - p) < rdlen) break;
+                            p += rdlen;
                         }
 
                         uint16_t arcount = ntohs(dns->arcount);
@@ -1917,17 +1931,28 @@ int net_tcp_socket_send(int sock_id, const void* data, size_t len) {
             pit_sleep_ms(2); // Ensure separate network frames reaching DPI
 
             size_t seg2_len = len - seg1_len;
-            int err2 = net_send_tcp_packet_sock(s, TCP_FLAG_ACK | TCP_FLAG_PSH, p + seg1_len, seg2_len);
-            if (err2 != 0) return (int)seg1_len;
-
             s_desync_splits++;
             serial_puts("[+] OpSec Anti-DPI: In-Kernel TCP Desync split applied to TLS ClientHello (64B / ");
             serial_print_dec((uint64_t)seg2_len);
             serial_puts("B)\n");
+            size_t sent_desync = seg1_len;
+            p += seg1_len;
+            size_t rem_desync = seg2_len;
+            while (rem_desync > 0) {
+                size_t chunk = (rem_desync > 1460) ? 1460 : rem_desync;
+                if (net_send_tcp_packet_sock(s, TCP_FLAG_ACK | TCP_FLAG_PSH, p, chunk) != 0) {
+                    return (int)sent_desync;
+                }
+                p += chunk;
+                sent_desync += chunk;
+                rem_desync -= chunk;
+                if (rem_desync > 0) pit_sleep_ms(1);
+            }
             return (int)len;
         } else if (is_http) {
             // Search for "Host:" or "host:" header to split across segments
             size_t split_pos = 32;
+            if (split_pos > len) split_pos = len;
             for (size_t i = 0; i + 6 < len && i < 256; i++) {
                 if ((p[i] == 'H' || p[i] == 'h') &&
                     (p[i+1] == 'o' || p[i+1] == 'O') &&
@@ -1944,11 +1969,21 @@ int net_tcp_socket_send(int sock_id, const void* data, size_t len) {
 
             pit_sleep_ms(2);
 
-            int err2 = net_send_tcp_packet_sock(s, TCP_FLAG_ACK | TCP_FLAG_PSH, p + split_pos, len - split_pos);
-            if (err2 != 0) return (int)split_pos;
-
             s_desync_splits++;
             serial_puts("[+] OpSec Anti-DPI: In-Kernel TCP Desync split applied to HTTP Host header\n");
+            size_t sent_desync = split_pos;
+            p += split_pos;
+            size_t rem_desync = len - split_pos;
+            while (rem_desync > 0) {
+                size_t chunk = (rem_desync > 1460) ? 1460 : rem_desync;
+                if (net_send_tcp_packet_sock(s, TCP_FLAG_ACK | TCP_FLAG_PSH, p, chunk) != 0) {
+                    return (int)sent_desync;
+                }
+                p += chunk;
+                sent_desync += chunk;
+                rem_desync -= chunk;
+                if (rem_desync > 0) pit_sleep_ms(1);
+            }
             return (int)len;
         }
     }

@@ -15,6 +15,7 @@
 
 void rng_init(void);
 int rng_has_rdrand(void);
+void rng_mix_entropy(uint64_t sample);
 uint64_t rng_get_u64(void);
 void rng_get_bytes(void* dest, size_t len);
 

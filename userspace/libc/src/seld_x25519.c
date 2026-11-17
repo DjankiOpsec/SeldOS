@@ -21,8 +21,15 @@ static void car25519(gf o) {
     }
 }
 
+static void x25519_bzero(void* ptr, size_t len) {
+    volatile uint8_t* p = (volatile uint8_t*)ptr;
+    while (len--) {
+        *p++ = 0;
+    }
+}
+
 static void sel25519(gf p, gf q, int b) {
-    int64_t t, c = ~(b - 1);
+    int64_t t, c = -(int64_t)(b & 1);
     for (int i = 0; i < 16; ++i) {
         t = c & (p[i] ^ q[i]);
         p[i] ^= t;
@@ -53,6 +60,8 @@ static void pack25519(uint8_t *o, const gf n) {
         o[2 * i] = t[i] & 0xff;
         o[2 * i + 1] = t[i] >> 8;
     }
+    x25519_bzero(m, sizeof(m));
+    x25519_bzero(t, sizeof(t));
 }
 
 static void unpack25519(gf o, const uint8_t *n) {
@@ -80,6 +89,7 @@ static void M(gf o, const gf a, const gf b) {
     for (int i = 0; i < 16; ++i) o[i] = t[i];
     car25519(o);
     car25519(o);
+    x25519_bzero(t, sizeof(t));
 }
 
 static void S(gf o, const gf a) {
@@ -94,6 +104,7 @@ static void inv25519(gf o, const gf i) {
         if (a != 2 && a != 4) M(c, c, i);
     }
     for (int a = 0; a < 16; ++a) o[a] = c[a];
+    x25519_bzero(c, sizeof(c));
 }
 
 void seld_x25519(uint8_t out[32], const uint8_t scalar[32], const uint8_t u_point[32]) {
@@ -136,6 +147,15 @@ void seld_x25519(uint8_t out[32], const uint8_t scalar[32], const uint8_t u_poin
     inv25519(c, c);
     M(a, a, c);
     pack25519(out, a);
+
+    x25519_bzero(z, sizeof(z));
+    x25519_bzero(a, sizeof(a));
+    x25519_bzero(b, sizeof(b));
+    x25519_bzero(c, sizeof(c));
+    x25519_bzero(d, sizeof(d));
+    x25519_bzero(e, sizeof(e));
+    x25519_bzero(f, sizeof(f));
+    x25519_bzero(x1, sizeof(x1));
 }
 
 void seld_x25519_base(uint8_t out[32], const uint8_t scalar[32]) {

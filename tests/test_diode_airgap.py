@@ -372,7 +372,21 @@ class TestSeldAirGapDiode(unittest.TestCase):
 
         stub_c = "/tmp/seld_test_stubs.c"
         with open(stub_c, "w") as sf:
-            sf.write('#include <stdint.h>\nuint64_t seld_uptime(void){return 54321;}\nint seld_getpid(void){return 777;}\n')
+            sf.write(
+                '#include <stdint.h>\n'
+                '#include <stdio.h>\n'
+                '#include <stdlib.h>\n'
+                'uint64_t seld_uptime(void){return 54321;}\n'
+                'int seld_getpid(void){return 777;}\n'
+                'void seld_exit(int code){exit(code);}\n'
+                'int seld_getrandom(void* buf, size_t len){\n'
+                '  FILE* f = fopen("/dev/urandom", "rb");\n'
+                '  if (!f) return -1;\n'
+                '  size_t r = fread(buf, 1, len, f);\n'
+                '  fclose(f);\n'
+                '  return (r == len) ? (int)len : -1;\n'
+                '}\n'
+            )
 
         cmd = f"gcc -shared -fPIC -O2 '{c_src}' '{sha_src}' '{hkdf_src}' '{aes_src}' '{stub_c}' -I'{inc1}' -I'{inc2}' -o '{so_path}'"
         self.assertEqual(os.system(cmd), 0, "Compilation of C diode_crypto failed")

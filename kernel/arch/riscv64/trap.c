@@ -84,22 +84,24 @@ void riscv_trap_handler(struct trap_frame* tf) {
         return;
     }
 
-    if (ex == 12 || ex == 13 || ex == 15) { // Instruction / Load / Store Page Fault
+    if (ex == 13 || ex == 15) { // Load / Store Page Fault only (never instruction fetch ex == 12)
         uint64_t fault_addr = tf->stval;
         uint64_t pml4_phys = vmm_get_active_root();
         if (pml4_phys != vmm_get_kernel_pml4() &&
             fault_addr >= USER_STACK_BOTTOM && fault_addr < USER_STACK_PAGE) {
             uint64_t page_va = fault_addr & ~0xFFFULL;
-            void* frame_phys = pmm_alloc_frame();
-            if (frame_phys) {
-                memset(phys_to_virt((uint64_t)frame_phys), 0, PAGE_SIZE);
-                uint64_t* pml4_virt = (uint64_t*)phys_to_virt(pml4_phys);
-                if (vmm_map_page(pml4_virt, page_va, (uint64_t)frame_phys,
-                                 VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE | VMM_FLAG_USER | VMM_FLAG_NO_EXECUTE) == 0) {
-                    __asm__ volatile ("sfence.vma %0, x0" : : "r"(page_va) : "memory");
-                    return;
-                } else {
-                    pmm_free_frame(frame_phys);
+            uint64_t* pml4_virt = (uint64_t*)phys_to_virt(pml4_phys);
+            if (!vmm_get_page_entry(pml4_virt, page_va)) {
+                void* frame_phys = pmm_alloc_frame();
+                if (frame_phys) {
+                    memset(phys_to_virt((uint64_t)frame_phys), 0, PAGE_SIZE);
+                    if (vmm_map_page(pml4_virt, page_va, (uint64_t)frame_phys,
+                                     VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE | VMM_FLAG_USER | VMM_FLAG_NO_EXECUTE) == 0) {
+                        __asm__ volatile ("sfence.vma %0, x0" : : "r"(page_va) : "memory");
+                        return;
+                    } else {
+                        pmm_free_frame(frame_phys);
+                    }
                 }
             }
         }

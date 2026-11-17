@@ -33,8 +33,8 @@ int validate_user_buffer(const void* user_ptr, size_t size, int write) {
         uint64_t start_page = uptr & ~0xFFFULL;
         uint64_t end_page = (uptr + (uint64_t)size - 1) & ~0xFFFULL;
         for (uint64_t va = start_page; va <= end_page; va += PAGE_SIZE) {
-            uint64_t pa = vmm_get_mapping(user_pml4, va);
-            if (!pa) {
+            uint64_t pte = vmm_get_page_entry(user_pml4, va);
+            if (!pte) {
                 // If page is within user stack boundaries, dynamically allocate and map it on demand
                 if (va >= USER_STACK_BOTTOM && va < USER_STACK_PAGE) {
                     void* frame = pmm_alloc_frame();
@@ -52,7 +52,7 @@ int validate_user_buffer(const void* user_ptr, size_t size, int write) {
                 return 0;
             }
 
-            // Verify write permission on page when write access requested
+            // Verify user bit across all levels & write permission when write access requested
             if (!vmm_check_access(user_pml4, va, write)) {
                 return 0;
             }

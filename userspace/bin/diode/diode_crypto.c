@@ -14,18 +14,6 @@
 #include <stdlib.h>
 #include <stdio.h>
 
-static inline uint64_t diode_rdtsc(void) {
-#if defined(__riscv)
-    uint64_t val;
-    __asm__ volatile ("rdtime %0" : "=r"(val));
-    return val;
-#else
-    uint32_t lo, hi;
-    __asm__ volatile ("rdtsc" : "=a"(lo), "=d"(hi));
-    return ((uint64_t)hi << 32) | lo;
-#endif
-}
-
 void diode_secure_zero(void* ptr, size_t len) {
     if (!ptr || len == 0) return;
     volatile uint8_t* p = (volatile uint8_t*)ptr;
@@ -35,29 +23,14 @@ void diode_secure_zero(void* ptr, size_t len) {
 }
 
 void diode_random_bytes(uint8_t* out, size_t len) {
-    static uint64_t seed = 0x5E1DCAFE5E1D1337ULL;
-    static uint8_t pool[32] = {0};
-    static size_t pool_idx = 32;
-
-    for (size_t i = 0; i < len; i++) {
-        if (pool_idx >= 32) {
-            uint64_t t = diode_rdtsc();
-            seed = seed * 6364136223846793005ULL + 1442695040888963407ULL + t;
-            
-            struct sha256_ctx ctx;
-            sha256_init(&ctx);
-            sha256_update(&ctx, &seed, sizeof(seed));
-            sha256_update(&ctx, &t, sizeof(t));
-            uint64_t uptime = seld_uptime();
-            sha256_update(&ctx, &uptime, sizeof(uptime));
-            int pid = seld_getpid();
-            sha256_update(&ctx, &pid, sizeof(pid));
-            sha256_update(&ctx, pool, sizeof(pool));
-            sha256_final(&ctx, pool);
-            pool_idx = 0;
-        }
-        out[i] = pool[pool_idx++];
+    if (!out || len == 0) return;
+    int got = seld_getrandom(out, len);
+    if (got == (int)len) {
+        return;
     }
+    /* Fail closed on CSPRNG error: zero output and abort process */
+    diode_secure_zero(out, len);
+    seld_exit(1);
 }
 
 static const char HEX_CHARS[] = "0123456789ABCDEF";

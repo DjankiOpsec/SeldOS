@@ -76,6 +76,19 @@ static uint64_t splitmix64(uint64_t* state) {
     return z ^ (z >> 31);
 }
 
+static void rng_bzero(void* ptr, size_t len) {
+    volatile uint8_t* p = (volatile uint8_t*)ptr;
+    while (len--) {
+        *p++ = 0;
+    }
+}
+
+void rng_mix_entropy(uint64_t sample) {
+    uint64_t t = rdtsc();
+    fallback_state ^= (sample * 0x9E3779B97F4A7C15ULL) ^ t;
+    fallback_state = (fallback_state << 13) | (fallback_state >> 51);
+}
+
 uint64_t rng_get_u64(void) {
 #if defined(__riscv)
     uint64_t sstatus;
@@ -106,15 +119,14 @@ uint64_t rng_get_u64(void) {
                 break;
             }
         }
+        val = 0;
     }
 #endif
 
     /*
      * Zero-Trust Entropy Whitening Sponge:
-     * Never trust CPU RDRAND directly! Even if on-die hardware contains
-     * proprietary backdoors or NSA/vendor trapdoors, we sponge-mix the raw
-     * feed with cycle counters, memory layout jitter, SplitMix64 state,
-     * and previous digest, then pass through cryptographic SHA-256.
+     * Mix CPU RDRAND (if present) with cycle counters, memory layout jitter,
+     * SplitMix64 state, and previous digest via SHA-256.
      */
     struct {
         uint8_t   prev_pool[SHA256_DIGEST_SIZE];
@@ -134,9 +146,18 @@ uint64_t rng_get_u64(void) {
     mix_input.stack_entropy = (uintptr_t)&mix_input;
 
     sha256_hash(&mix_input, sizeof(mix_input), s_entropy_pool);
+    rng_bzero(&mix_input, sizeof(mix_input));
+    raw_cpu_rdrand = 0;
 
     uint64_t result;
     memcpy(&result, s_entropy_pool, sizeof(uint64_t));
+
+    /* Advance pool immediately (backtracking resistance) */
+    uint8_t reseed[SHA256_DIGEST_SIZE + sizeof(uint64_t)];
+    memcpy(reseed, s_entropy_pool, SHA256_DIGEST_SIZE);
+    memcpy(reseed + SHA256_DIGEST_SIZE, &s_entropy_counter, sizeof(uint64_t));
+    sha256_hash(reseed, sizeof(reseed), s_entropy_pool);
+    rng_bzero(reseed, sizeof(reseed));
 
 #if defined(__riscv)
     if (sstatus & 2) {
@@ -152,10 +173,12 @@ uint64_t rng_get_u64(void) {
 }
 
 void rng_get_bytes(void* dest, size_t len) {
+    if (!dest || len == 0) return;
     uint8_t* p = (uint8_t*)dest;
     while (len >= 8) {
         uint64_t r = rng_get_u64();
-        *(uint64_t*)p = r;
+        memcpy(p, &r, 8);
+        rng_bzero(&r, sizeof(r));
         p += 8;
         len -= 8;
     }
@@ -164,5 +187,6 @@ void rng_get_bytes(void* dest, size_t len) {
         for (size_t i = 0; i < len; i++) {
             p[i] = (uint8_t)(r >> (i * 8));
         }
+        rng_bzero(&r, sizeof(r));
     }
 }

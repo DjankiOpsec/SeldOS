@@ -282,10 +282,13 @@ void seldfs_init(void) {
                     strcmp(b, "doom1.wad") == 0 || strcmp(b, "cctv.bin") == 0 || strcmp(b, "pcmode") == 0) {
                     continue;
                 }
-                strncpy(s_sealed_table[s_sealed_count].filename, sb.inodes[i].filename, SELDFS_MAX_FILENAME - 1);
-                memcpy(s_sealed_table[s_sealed_count].sha256, sb.inodes[i].sha256, 32);
-                s_sealed_table[s_sealed_count].sealed = 1;
-                s_sealed_count++;
+                if (s_sealed_count < SELDFS_MAX_FILES) {
+                    strncpy(s_sealed_table[s_sealed_count].filename, sb.inodes[i].filename, SELDFS_MAX_FILENAME - 1);
+                    s_sealed_table[s_sealed_count].filename[SELDFS_MAX_FILENAME - 1] = '\0';
+                    memcpy(s_sealed_table[s_sealed_count].sha256, sb.inodes[i].sha256, 32);
+                    s_sealed_table[s_sealed_count].sealed = 1;
+                    s_sealed_count++;
+                }
             }
         }
         serial_puts("[+] SeldFS Gatekeeper: Sealed Root of Trust with ");
@@ -309,7 +312,10 @@ int seldfs_is_encrypted(void) {
 }
 
 void seldfs_clear_encryption_key(void) {
-    memset(s_seldfs_key, 0, 16);
+    volatile uint8_t* vk = (volatile uint8_t*)s_seldfs_key;
+    for (size_t i = 0; i < 16; i++) {
+        vk[i] = 0;
+    }
     s_key_set = 0;
     s_seldfs_encrypted = 0;
 }
@@ -437,9 +443,10 @@ int seldfs_read_file(const char* filename, void* buf, size_t max_len, size_t* ou
                 uint8_t read_hash[32];
                 sha256_hash(buf, to_read, read_hash);
                 if (memcmp(read_hash, sb.inodes[i].sha256, 32) != 0) {
-                    serial_puts("[-] SeldFS: Integrity verification warning: file '");
+                    serial_puts("[-] SeldFS: Integrity verification failed: file '");
                     serial_puts(filename);
                     serial_puts("' SHA-256 hash mismatch!\n");
+                    return -2;
                 }
             }
 
@@ -460,10 +467,8 @@ int seldfs_read_file_offset(const char* filename, uint32_t offset, void* buf, si
                 return 0; // EOF
             }
 
-            uint32_t to_read = (uint32_t)len;
-            if (offset + to_read > fsize) {
-                to_read = fsize - offset;
-            }
+            uint32_t max_avail = fsize - offset;
+            uint32_t to_read = (len > (size_t)max_avail) ? max_avail : (uint32_t)len;
 
             uint8_t sector_buf[SELDFS_BLOCK_SIZE];
             uint8_t* dest = (uint8_t*)buf;

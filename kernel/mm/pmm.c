@@ -121,23 +121,27 @@ void pmm_init(uint64_t mb_magic, uint64_t mb_info_addr) {
         uint8_t* tag_ptr = (uint8_t*)(mb_info_addr + 8);
         while (1) {
             struct multiboot2_tag* tag = (struct multiboot2_tag*)tag_ptr;
-            if (tag->type == 0) {
-                break; // End tag
+            if (tag->type == 0 || tag->size < 8) {
+                break; // End tag or malformed zero/undersized tag
             }
-            if (tag->type == 6) { // Memory map tag
+            if (tag->type == 6 && tag->size >= sizeof(struct multiboot2_tag_mmap)) { // Memory map tag
                 struct multiboot2_tag_mmap* mmap_tag = (struct multiboot2_tag_mmap*)tag;
-                uint8_t* entry_ptr = tag_ptr + sizeof(struct multiboot2_tag_mmap);
-                uint8_t* end_ptr = tag_ptr + mmap_tag->size;
+                if (mmap_tag->entry_size >= sizeof(struct multiboot2_mmap_entry)) {
+                    uint8_t* entry_ptr = tag_ptr + sizeof(struct multiboot2_tag_mmap);
+                    uint8_t* end_ptr = tag_ptr + mmap_tag->size;
 
-                while (entry_ptr < end_ptr) {
-                    struct multiboot2_mmap_entry* entry = (struct multiboot2_mmap_entry*)entry_ptr;
-                    if (entry->type == 1) { // Available RAM
-                        uint64_t top = entry->addr + entry->len;
-                        if (top > highest_addr) {
-                            highest_addr = top;
+                    while (entry_ptr + sizeof(struct multiboot2_mmap_entry) <= end_ptr) {
+                        struct multiboot2_mmap_entry* entry = (struct multiboot2_mmap_entry*)entry_ptr;
+                        if (entry->type == 1 && entry->len > 0) { // Available RAM
+                            uint64_t top = (entry->len > (~0ULL - entry->addr))
+                                           ? ~0ULL
+                                           : (entry->addr + entry->len);
+                            if (top > highest_addr) {
+                                highest_addr = top;
+                            }
                         }
+                        entry_ptr += mmap_tag->entry_size;
                     }
-                    entry_ptr += mmap_tag->entry_size;
                 }
             }
             tag_ptr += ((tag->size + 7) & ~7);
@@ -148,10 +152,15 @@ void pmm_init(uint64_t mb_magic, uint64_t mb_info_addr) {
         if (mb1->flags & (1 << 6)) { // mmap valid
             uint8_t* mmap_ptr = (uint8_t*)((uint64_t)mb1->mmap_addr + 0xFFFF800000000000ULL);
             uint8_t* end_ptr = mmap_ptr + mb1->mmap_length;
-            while (mmap_ptr < end_ptr) {
+            while (mmap_ptr + sizeof(uint32_t) < end_ptr) {
                 struct multiboot1_mmap_entry* entry = (struct multiboot1_mmap_entry*)mmap_ptr;
-                if (entry->type == 1) {
-                    uint64_t top = entry->addr + entry->len;
+                if (entry->size < 20) {
+                    break;
+                }
+                if (entry->type == 1 && entry->len > 0) {
+                    uint64_t top = (entry->len > (~0ULL - entry->addr))
+                                   ? ~0ULL
+                                   : (entry->addr + entry->len);
                     if (top > highest_addr) {
                         highest_addr = top;
                     }
@@ -275,6 +284,7 @@ void pmm_init(uint64_t mb_magic, uint64_t mb_info_addr) {
         for (size_t i = rd_start_frame; i < rd_end_frame && i < total_frames; i++) {
             if (!bitmap_test(i)) {
                 bitmap_set(i);
+                used_frames++;
             }
         }
     }
@@ -352,6 +362,9 @@ void* pmm_alloc_frames(size_t count) {
 
 void pmm_free_frame(void* ptr) {
     uint64_t addr = (uint64_t)ptr;
+    if ((addr & (PAGE_SIZE - 1)) != 0) {
+        return;
+    }
 #if defined(__riscv)
     if (addr < 0x80700000ULL || addr >= 0x88000000ULL) {
         return; // Guard physical RAM boundaries & kernel region
